@@ -11,13 +11,16 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SafeMeLink usa la posizione per includere le coordinate nel messaggio SOS."
+        "NSLocationWhenInUseUsageDescription": "SafeMeLink usa la posizione per includere le coordinate nel messaggio SOS.",
+        "NSMicrophoneUsageDescription": "SafeMeLink usa il microfono solo quando la modalita ascolto della parola d'ordine e attiva.",
+        "NSSpeechRecognitionUsageDescription": "SafeMeLink usa il riconoscimento vocale per attivare la parola d'ordine configurata."
       }
     },
     "android": {
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -35,6 +38,13 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "SafeMeLink usa il microfono solo quando la modalita ascolto della parola d'ordine e attiva.",
+          "speechRecognitionPermission": "SafeMeLink usa il riconoscimento vocale per attivare la parola d'ordine configurata."
+        }
+      ],
       [
         "expo-splash-screen",
         {
