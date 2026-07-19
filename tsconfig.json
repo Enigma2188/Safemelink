@@ -2,9 +2,13 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "npm:@supabase/supabase-js@2.109.0": [
+        "./node_modules/@supabase/supabase-js"
       ]
     }
   },

@@ -1,4 +1,5 @@
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
+import { SOSPushService } from '@/backend/functions/SOSPushService';
 import { LocationService, type SOSLocation } from '@/services/LocationService';
 import { sendSosAlert, shareSosAlert } from '@/services/SOSAlertService';
 import { SOSStorage } from '@/storage/SOSStorage';
@@ -44,6 +45,9 @@ export const SOSService = {
     };
 
     const events = await SOSStorage.saveEvent(event);
+    await SOSPushService.send(event).catch((error: unknown) => {
+      console.warn('Invio notifica SOS remota non riuscito.', error);
+    });
     await sendSosAlert(event, contacts);
 
     return {

@@ -1,0 +1,1 @@
+-- Intentionally empty. Never add real phone numbers or user data to seed files.
