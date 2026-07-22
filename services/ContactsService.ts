@@ -1,5 +1,7 @@
 import { ContactsStorage } from '@/storage/ContactsStorage';
+import { TrustedContactsRepository } from '@/backend/repositories/TrustedContactsRepository';
 import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
+import { TrustedLinksService } from '@/services/TrustedLinksService';
 
 export type TrustedContact = SafeMeLinkContact;
 
@@ -8,26 +10,22 @@ export type TrustedContactInput = {
   phone: string;
 };
 
-const MAX_TRUSTED_CONTACTS = 3;
-
 const normalizeContactInput = (input: TrustedContactInput) => ({
   name: input.name.trim(),
   phone: input.phone.trim(),
 });
 
 export const ContactsService = {
-  maxContacts: MAX_TRUSTED_CONTACTS,
-
   async list() {
-    return ContactsStorage.getContacts();
+    try {
+      return await TrustedLinksService.syncLocalContacts();
+    } catch {
+      return ContactsStorage.getContacts();
+    }
   },
 
   async add(input: TrustedContactInput) {
     const contacts = await ContactsStorage.getContacts();
-
-    if (contacts.length >= MAX_TRUSTED_CONTACTS) {
-      throw new Error('Puoi salvare al massimo 3 contatti fidati.');
-    }
 
     const normalized = normalizeContactInput(input);
 
@@ -51,12 +49,24 @@ export const ContactsService = {
 
   async update(id: string, input: TrustedContactInput) {
     const normalized = normalizeContactInput(input);
+    const contacts = await ContactsStorage.getContacts();
+    const existing = contacts.find((contact) => contact.id === id);
 
-    if (!normalized.name || !normalized.phone) {
+    if (!existing) {
+      throw new Error('Contatto non trovato.');
+    }
+
+    if (!normalized.name || (!normalized.phone && !existing.userId)) {
       throw new Error('Inserisci nome e numero di telefono.');
     }
 
-    const contacts = await ContactsStorage.getContacts();
+    if (existing.remoteId) {
+      await TrustedContactsRepository.update(existing.remoteId, {
+        name: normalized.name,
+        phone: normalized.phone || null,
+      });
+    }
+
     const nextContacts = contacts.map((contact) =>
       contact.id === id ? { ...contact, ...normalized } : contact
     );
@@ -67,6 +77,12 @@ export const ContactsService = {
 
   async remove(id: string) {
     const contacts = await ContactsStorage.getContacts();
+    const existing = contacts.find((contact) => contact.id === id);
+
+    if (existing?.remoteId) {
+      await TrustedContactsRepository.remove(existing.remoteId);
+    }
+
     const nextContacts = contacts.filter((contact) => contact.id !== id);
 
     await ContactsStorage.saveContacts(nextContacts);

@@ -8,6 +8,7 @@ const LEGACY_CONTACTS_STORAGE_KEY = 'safemelink.trustedContacts';
 
 type StoredContact = {
   id?: string;
+  remoteId?: string;
   name: string;
   number?: string;
   phone?: string;
@@ -21,14 +22,14 @@ const normalizeContacts = (contacts: StoredContact[]) =>
   contacts
     .map((contact) => ({
       id: contact.id ?? `${contact.name}-${contact.phone ?? contact.number ?? Date.now()}`,
+      ...(contact.remoteId ? { remoteId: contact.remoteId } : {}),
       name: contact.name,
       phone: contact.phone ?? contact.number ?? '',
       hasApp: contact.hasApp ?? false,
       ...(contact.userId ? { userId: contact.userId } : {}),
       preferredChannel: contact.preferredChannel ?? 'sms',
     }))
-    .filter((contact) => contact.name && contact.phone)
-    .slice(0, 3)
+    .filter((contact) => contact.name && (contact.phone || contact.userId))
 
 export const ContactsStorage = {
   async getContacts(): Promise<TrustedContact[]> {
@@ -47,6 +48,6 @@ export const ContactsStorage = {
   },
 
   async saveContacts(contacts: TrustedContact[]) {
-    await AsyncStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts.slice(0, 3)));
+    await AsyncStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
   },
 };

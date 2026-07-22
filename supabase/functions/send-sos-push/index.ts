@@ -3,10 +3,13 @@ import { createClient } from 'npm:@supabase/supabase-js@2.109.0';
 import { getActiveRecipientTokens } from '../_shared/pushRecipients.ts';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const SOS_CHANNEL_ID = 'safemelink-sos';
+const SOS_CHANNEL_ID = 'sos-alerts';
 
 type SOSPushRequest = {
   sosId: string;
+  senderUserId: string;
+  latitude: number;
+  longitude: number;
 };
 
 type SOSRecord = {
@@ -38,7 +41,22 @@ const isSOSPushRequest = (value: unknown): value is SOSPushRequest => {
 
   const body = value as Partial<SOSPushRequest>;
 
-  return typeof body.sosId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.sosId);
+  const isUuid = (input: unknown): input is string =>
+    typeof input === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input);
+
+  return (
+    isUuid(body.sosId) &&
+    isUuid(body.senderUserId) &&
+    typeof body.latitude === 'number' &&
+    Number.isFinite(body.latitude) &&
+    body.latitude >= -90 &&
+    body.latitude <= 90 &&
+    typeof body.longitude === 'number' &&
+    Number.isFinite(body.longitude) &&
+    body.longitude >= -180 &&
+    body.longitude <= 180
+  );
 };
 
 Deno.serve(async (request) => {
@@ -84,6 +102,10 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: 'Invalid SOS payload.' }, 400);
   }
 
+  if (body.senderUserId !== user.id) {
+    return jsonResponse({ error: 'Sender does not match authenticated user.' }, 403);
+  }
+
   try {
     const { data: sosData, error: sosError } = await adminClient
       .from('sos')
@@ -102,10 +124,30 @@ Deno.serve(async (request) => {
     }
 
     const sos = sosData as SOSRecord;
-    const tokens = await getActiveRecipientTokens(adminClient, user.id);
+    const coordinatesMatch =
+      Math.abs(sos.latitude - body.latitude) < 0.0000001 &&
+      Math.abs(sos.longitude - body.longitude) < 0.0000001;
+
+    if (!coordinatesMatch) {
+      return jsonResponse({ error: 'SOS coordinates do not match stored event.' }, 400);
+    }
+
+    const { recipientIds, tokens } = await getActiveRecipientTokens(adminClient, user.id);
+
+    console.log('[send-sos-push] Destinatari risolti.', {
+      sosId: sos.id,
+      senderUserId: user.id,
+      recipientCount: recipientIds.length,
+      tokenCount: tokens.length,
+    });
 
     if (tokens.length === 0) {
-      return jsonResponse({ sent: 0, failed: 0, reason: 'no_active_recipients' });
+      return jsonResponse({
+        sent: 0,
+        failed: 0,
+        reason: 'no_active_recipients',
+        recipientCount: recipientIds.length,
+      });
     }
 
     const createdAt = sos.device_time ?? sos.created_at;
@@ -144,6 +186,12 @@ Deno.serve(async (request) => {
 
     const result = (await expoResponse.json()) as { data?: ExpoPushTicket[] };
     const tickets = Array.isArray(result.data) ? result.data : [];
+
+    console.log('[send-sos-push] Risposta Expo Push API.', result);
+    console.log('[send-sos-push] Ticket Expo.', {
+      ok: tickets.filter((ticket) => ticket.status === 'ok').length,
+      errors: tickets.filter((ticket) => ticket.status === 'error'),
+    });
     const invalidTokens = tickets.reduce<string[]>((items, ticket, index) => {
       if (ticket.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') {
         return [...items, tokens[index]];
@@ -153,6 +201,9 @@ Deno.serve(async (request) => {
     }, []);
 
     if (invalidTokens.length > 0) {
+      console.warn('[send-sos-push] Token DeviceNotRegistered rilevati.', {
+        count: invalidTokens.length,
+      });
       await adminClient
         .from('device_push_tokens')
         .update({ active: false })
@@ -162,6 +213,8 @@ Deno.serve(async (request) => {
     return jsonResponse({
       sent: tickets.filter((ticket) => ticket.status === 'ok').length,
       failed: tickets.filter((ticket) => ticket.status === 'error').length,
+      recipientCount: recipientIds.length,
+      tokenCount: tokens.length,
     });
   } catch (error) {
     console.error('send-sos-push failed', error);

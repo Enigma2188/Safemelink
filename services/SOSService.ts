@@ -46,7 +46,7 @@ export const SOSService = {
 
     const events = await SOSStorage.saveEvent(event);
     await SOSPushService.send(event).catch((error: unknown) => {
-      console.warn('Invio notifica SOS remota non riuscito.', error);
+      console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', error);
     });
     await sendSosAlert(event, contacts);
 

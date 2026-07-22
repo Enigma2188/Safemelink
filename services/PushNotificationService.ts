@@ -5,7 +5,12 @@ import { Platform } from 'react-native';
 
 import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository';
 
-const SOS_NOTIFICATION_CHANNEL_ID = 'safemelink-sos';
+export const SOS_NOTIFICATION_CHANNEL_ID = 'sos-alerts';
+
+const isExpoPushToken = (token: string) =>
+  /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token);
+
+const tokenLabel = (token: string) => `...${token.slice(-10)}`;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -19,6 +24,7 @@ Notifications.setNotificationHandler({
 export const PushNotificationService = {
   async registerDeviceForUser(userId: string) {
     if (!Device.isDevice || (Platform.OS !== 'android' && Platform.OS !== 'ios')) {
+      console.log('[SafeMeLink Push] Registrazione ignorata: serve un dispositivo fisico mobile.');
       return null;
     }
 
@@ -28,6 +34,11 @@ export const PushNotificationService = {
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#DC2626',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
+      });
+      console.log('[SafeMeLink Push] Canale Android SOS pronto.', {
+        channelId: SOS_NOTIFICATION_CHANNEL_ID,
       });
     }
 
@@ -37,6 +48,10 @@ export const PushNotificationService = {
       : await Notifications.requestPermissionsAsync();
 
     if (!finalPermissions.granted) {
+      console.warn('[SafeMeLink Push] Permesso notifiche non concesso.', {
+        userId,
+        status: finalPermissions.status,
+      });
       return null;
     }
 
@@ -47,7 +62,18 @@ export const PushNotificationService = {
     }
 
     const { data: expoPushToken } = await Notifications.getExpoPushTokenAsync({ projectId });
+
+    if (!isExpoPushToken(expoPushToken)) {
+      throw new Error('Il dispositivo ha restituito un Expo Push Token non valido.');
+    }
+
     const platform = Platform.OS;
+
+    console.log('[SafeMeLink Push] Expo Push Token ottenuto.', {
+      userId,
+      token: tokenLabel(expoPushToken),
+      platform,
+    });
 
     await PushTokenRepository.upsertForUser({
       user_id: userId,
@@ -55,6 +81,11 @@ export const PushNotificationService = {
       platform,
       device_name: Device.modelName,
       active: true,
+    });
+
+    console.log('[SafeMeLink Push] Token associato all’utente.', {
+      userId,
+      token: tokenLabel(expoPushToken),
     });
 
     return expoPushToken;

@@ -3,7 +3,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.109.0';
 export async function getActiveRecipientTokens(
   adminClient: SupabaseClient,
   senderUserId: string,
-): Promise<string[]> {
+): Promise<{ recipientIds: string[]; tokens: string[] }> {
   const { data: contacts, error: contactsError } = await adminClient
     .from('trusted_contacts')
     .select('linked_profile_id')
@@ -19,12 +19,12 @@ export async function getActiveRecipientTokens(
     ...new Set(
       contactRows
         .map((contact) => contact.linked_profile_id)
-        .filter((id): id is string => typeof id === 'string'),
+        .filter((id): id is string => typeof id === 'string' && id !== senderUserId),
     ),
   ];
 
   if (recipientIds.length === 0) {
-    return [];
+    return { recipientIds, tokens: [] };
   }
 
   const { data: tokenRows, error: tokensError } = await adminClient
@@ -39,11 +39,17 @@ export async function getActiveRecipientTokens(
 
   const pushTokenRows = (tokenRows ?? []) as { expo_push_token: string }[];
 
-  return [
+  const tokens = [
     ...new Set(
       pushTokenRows
         .map((row) => row.expo_push_token)
-        .filter((token): token is string => typeof token === 'string' && token.length > 0),
+        .filter(
+          (token): token is string =>
+            typeof token === 'string' &&
+            /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token),
+        ),
     ),
   ];
+
+  return { recipientIds, tokens };
 }
