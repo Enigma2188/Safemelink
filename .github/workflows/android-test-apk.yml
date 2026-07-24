@@ -1,0 +1,153 @@
+name: Build SafeMeLink Android test APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch or commit SHA to build
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: safemelink-android-test-apk
+  cancel-in-progress: false
+
+jobs:
+  build-android-test-apk:
+    name: Validate and build standalone test APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CI: "true"
+
+    steps:
+      - name: Validate requested source ref
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [ -z "${SOURCE_REF//[[:space:]]/}" ]; then
+            echo "::error::source_ref is required and cannot be blank."
+            exit 1
+          fi
+
+      - name: Checkout requested source ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.1
+          cache: npm
+
+      - name: Set up Java and Gradle cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate required build configuration
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ]; then
+            echo "::error::Required secret EXPO_PUBLIC_SUPABASE_URL is not configured."
+            exit 1
+          fi
+          if [ -z "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Required secret EXPO_PUBLIC_SUPABASE_ANON_KEY is not configured."
+            exit 1
+          fi
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "::error::Required secret ANDROID_GOOGLE_SERVICES_JSON_BASE64 is not configured."
+            exit 1
+          fi
+
+      - name: Reconstruct google-services.json
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -o pipefail
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > google-services.json
+          chmod 600 google-services.json
+          node -e "const f=require('./google-services.json'); const p=f.client?.some(c=>c.client_info?.android_client_info?.package_name==='com.tiziano.safemelink'); if(!p) throw new Error('google-services.json non contiene il package Android SafeMeLink.');"
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npx eslint app backend components hooks screens services storage supabase/functions scripts --ext .ts,.tsx,.cjs
+
+      - name: Static security and configuration checks
+        run: |
+          node scripts/audit-static-checks.cjs
+          node scripts/validate-android-ci.cjs
+
+      - name: Generate the ephemeral Android project
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -o pipefail
+          npx expo prebuild --platform android --clean --no-install 2>&1 | tee expo-prebuild.log
+
+      - name: Validate generated Android configuration
+        run: node scripts/validate-generated-android.cjs
+
+      - name: Build standalone test APK
+        working-directory: android
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee ../gradle-build.log
+
+      - name: Prepare named APK artifact
+        run: |
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk artifacts/safemelink-test.apk
+
+      - name: Remove ephemeral Firebase configuration
+        if: always()
+        run: rm -f google-services.json android/app/google-services.json
+
+      - name: Upload SafeMeLink test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: safemelink-android-test-apk
+          path: artifacts/safemelink-test.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safemelink-android-build-logs
+          path: |
+            expo-prebuild.log
+            gradle-build.log
+            android/app/build/reports
+          if-no-files-found: ignore
+          retention-days: 14
