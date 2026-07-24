@@ -47,12 +47,11 @@ jobs:
           node-version: 20.20.1
           cache: npm
 
-      - name: Set up Java and Gradle cache
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
