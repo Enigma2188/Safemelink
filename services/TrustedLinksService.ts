@@ -11,14 +11,15 @@ export type TrustedLinkRequest = Awaited<
 const maskCode = (code: string) => `${code.slice(0, 4)}••••${code.slice(-2)}`;
 
 export const TrustedLinksService = {
-  async syncLocalContacts() {
-    const localContacts = await ContactsStorage.getContacts();
+  async syncLocalContacts(expectedUserId?: string) {
     const session = await AuthService.getSession();
 
-    if (!session) {
-      return localContacts;
+    if (!session || (expectedUserId && session.user.id !== expectedUserId)) {
+      return [];
     }
 
+    const userId = session.user.id;
+    const localContacts = await ContactsStorage.getContacts(userId);
     console.log('[TrustedLinks] sincronizzazione avviata');
 
     try {
@@ -45,7 +46,13 @@ export const TrustedLinksService = {
         });
       const nextContacts = [...localOnlyContacts, ...linkedContacts];
 
-      await ContactsStorage.saveContacts(nextContacts);
+      const currentSession = await AuthService.getSession();
+
+      if (currentSession?.user.id !== userId) {
+        return [];
+      }
+
+      await ContactsStorage.saveContacts(userId, nextContacts);
       console.log('[TrustedLinks] sincronizzazione locale completata', {
         linkedContacts: linkedContacts.length,
       });
@@ -64,14 +71,14 @@ export const TrustedLinksService = {
       return {
         publicCode: null,
         requests: [] as TrustedLinkRequest[],
-        contacts: await ContactsStorage.getContacts(),
+        contacts: [] as TrustedContact[],
       };
     }
 
     const [publicCode, requests, contacts] = await Promise.all([
       TrustedLinksRepository.getMyPublicCode(),
       TrustedLinksRepository.listRequests(),
-      TrustedLinksService.syncLocalContacts(),
+      TrustedLinksService.syncLocalContacts(session.user.id),
     ]);
 
     console.log('[TrustedLinks] codice profilo disponibile', {
@@ -99,6 +106,13 @@ export const TrustedLinksService = {
   },
 
   async respond(requestId: string, accept: boolean) {
+    const session = await AuthService.getSession();
+
+    if (!session) {
+      throw new Error('Accedi per rispondere alla richiesta SafeMeLink.');
+    }
+
+    const userId = session.user.id;
     console.log('[TrustedLinks] sincronizzazione avviata');
 
     try {
@@ -107,7 +121,7 @@ export const TrustedLinksService = {
       if (accept) {
         console.log('[TrustedLinks] richiesta accettata');
         console.log('[TrustedLinks] trusted_contacts creati');
-        await TrustedLinksService.syncLocalContacts();
+        await TrustedLinksService.syncLocalContacts(userId);
       }
     } catch (error) {
       console.error('[TrustedLinks] errore collegamento', error);

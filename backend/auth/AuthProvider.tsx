@@ -2,6 +2,8 @@ import type { Session } from '@supabase/supabase-js';
 import { createContext, type PropsWithChildren, useContext, useEffect, useMemo, useState } from 'react';
 
 import { AuthService } from '@/backend/auth/AuthService';
+import { PushNotificationService } from '@/services/PushNotificationService';
+import { RadarService } from '@/services/RadarService';
 
 type AuthContextValue = {
   session: Session | null;
@@ -80,6 +82,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setError(null);
 
         try {
+          if (session) {
+            const cleanupResults = await Promise.allSettled([
+              RadarService.deactivatePresence(),
+              PushNotificationService.unregisterDeviceForUser(session.user.id),
+            ]);
+
+            cleanupResults.forEach((result) => {
+              if (result.status === 'rejected') {
+                console.warn('[SafeMeLink Auth] Pulizia pre-logout non riuscita.', result.reason);
+              }
+            });
+          }
+
           await AuthService.signOut();
           setSession(null);
         } catch (logoutError: unknown) {

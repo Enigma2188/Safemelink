@@ -28,6 +28,11 @@ type ExpoPushTicket = {
   details?: { error?: string };
 };
 
+type ExpoPushError = {
+  code?: string;
+  message: string;
+};
+
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -133,6 +138,20 @@ Deno.serve(async (request) => {
     }
 
     const { recipientIds, tokens } = await getActiveRecipientTokens(adminClient, user.id);
+    const { data: senderProfile, error: senderProfileError } = await adminClient
+      .from('profiles')
+      .select('nickname')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (senderProfileError) {
+      console.warn('[send-sos-push] Profilo mittente non disponibile.', senderProfileError);
+    }
+
+    const senderDisplayName =
+      typeof senderProfile?.nickname === 'string' && senderProfile.nickname.trim()
+        ? senderProfile.nickname.trim()
+        : 'Un contatto fidato';
 
     console.log('[send-sos-push] Destinatari risolti.', {
       sosId: sos.id,
@@ -151,54 +170,73 @@ Deno.serve(async (request) => {
     }
 
     const createdAt = sos.device_time ?? sos.created_at;
-    const mapsUrl = `https://maps.google.com/?q=${sos.latitude},${sos.longitude}`;
     const messages = tokens.map((token) => ({
       to: token,
       title: 'SOS SafeMeLink',
-      body: 'Un tuo contatto fidato ha attivato un SOS.',
+      body: `${senderDisplayName} ha attivato un SOS e potrebbe aver bisogno di aiuto.`,
       sound: 'default',
       priority: 'high',
       channelId: SOS_CHANNEL_ID,
       data: {
-        type: 'sos',
-        senderUserId: user.id,
+        type: 'sos_alert',
         sosId: sos.id,
         createdAt,
-        latitude: sos.latitude,
-        longitude: sos.longitude,
-        mapsUrl,
       },
     }));
     const expoAccessToken = Deno.env.get('EXPO_ACCESS_TOKEN');
-    const expoResponse = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...(expoAccessToken ? { authorization: `Bearer ${expoAccessToken}` } : {}),
-      },
-      body: JSON.stringify(messages),
-    });
+    const ticketsWithTokens: { ticket: ExpoPushTicket; token: string }[] = [];
+    const expoErrors: ExpoPushError[] = [];
 
-    if (!expoResponse.ok) {
-      throw new Error(`Expo Push API returned HTTP ${expoResponse.status}.`);
+    for (let start = 0; start < messages.length; start += 100) {
+      const messageBatch = messages.slice(start, start + 100);
+      const tokenBatch = tokens.slice(start, start + 100);
+      const expoResponse = await fetch(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          ...(expoAccessToken ? { authorization: `Bearer ${expoAccessToken}` } : {}),
+        },
+        body: JSON.stringify(messageBatch),
+      });
+
+      if (!expoResponse.ok) {
+        expoErrors.push({
+          code: `HTTP_${expoResponse.status}`,
+          message: `Expo Push API ha restituito HTTP ${expoResponse.status}.`,
+        });
+        continue;
+      }
+
+      const result = (await expoResponse.json()) as {
+        data?: ExpoPushTicket[];
+        errors?: ExpoPushError[];
+      };
+      const batchTickets = Array.isArray(result.data) ? result.data : [];
+
+      console.log('[send-sos-push] Risposta Expo Push API.', {
+        batch: start / 100 + 1,
+        response: result,
+      });
+      expoErrors.push(...(result.errors ?? []));
+      batchTickets.forEach((ticket, index) => {
+        if (tokenBatch[index]) {
+          ticketsWithTokens.push({ ticket, token: tokenBatch[index] });
+        }
+      });
     }
 
-    const result = (await expoResponse.json()) as { data?: ExpoPushTicket[] };
-    const tickets = Array.isArray(result.data) ? result.data : [];
-
-    console.log('[send-sos-push] Risposta Expo Push API.', result);
+    const tickets = ticketsWithTokens.map((item) => item.ticket);
     console.log('[send-sos-push] Ticket Expo.', {
       ok: tickets.filter((ticket) => ticket.status === 'ok').length,
       errors: tickets.filter((ticket) => ticket.status === 'error'),
     });
-    const invalidTokens = tickets.reduce<string[]>((items, ticket, index) => {
-      if (ticket.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') {
-        return [...items, tokens[index]];
-      }
-
-      return items;
-    }, []);
+    const invalidTokens = ticketsWithTokens
+      .filter(
+        ({ ticket }) =>
+          ticket.status === 'error' && ticket.details?.error === 'DeviceNotRegistered',
+      )
+      .map(({ token }) => token);
 
     if (invalidTokens.length > 0) {
       console.warn('[send-sos-push] Token DeviceNotRegistered rilevati.', {
@@ -210,11 +248,21 @@ Deno.serve(async (request) => {
         .in('expo_push_token', invalidTokens);
     }
 
+    const ticketErrors = tickets
+      .filter((ticket) => ticket.status === 'error')
+      .map((ticket) => ({
+        code: ticket.details?.error,
+        message: ticket.message ?? 'Expo non ha accettato la notifica.',
+      }));
+    const unprocessedCount = tokens.length - tickets.length;
+
     return jsonResponse({
       sent: tickets.filter((ticket) => ticket.status === 'ok').length,
-      failed: tickets.filter((ticket) => ticket.status === 'error').length,
+      failed:
+        tickets.filter((ticket) => ticket.status === 'error').length + unprocessedCount,
       recipientCount: recipientIds.length,
       tokenCount: tokens.length,
+      errors: [...expoErrors, ...ticketErrors],
     });
   } catch (error) {
     console.error('send-sos-push failed', error);

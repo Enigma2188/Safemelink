@@ -178,6 +178,101 @@ export type Database = {
         Update: { status?: NearbyAlertStatus };
         Relationships: [];
       };
+      radar_presence: {
+        Row: {
+          user_id: string;
+          latitude: number;
+          longitude: number;
+          accuracy: number | null;
+          is_active: boolean;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          latitude: number;
+          longitude: number;
+          accuracy?: number | null;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          latitude?: number;
+          longitude?: number;
+          accuracy?: number | null;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      radar_preferences: {
+        Row: {
+          user_id: string;
+          radar_enabled: boolean;
+          visible_to_nearby: boolean;
+          show_nickname: boolean;
+          public_nickname: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          radar_enabled?: boolean;
+          visible_to_nearby?: boolean;
+          show_nickname?: boolean;
+          public_nickname?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          radar_enabled?: boolean;
+          visible_to_nearby?: boolean;
+          show_nickname?: boolean;
+          public_nickname?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      emergency_profiles: {
+        Row: {
+          user_id: string;
+          declared_blood_group: string | null;
+          severe_allergies: string | null;
+          important_conditions: string | null;
+          relevant_medications: string | null;
+          lifesaving_medications: string | null;
+          ice_contact: string | null;
+          emergency_notes: string | null;
+          share_medical_data_during_sos: boolean;
+          share_ice_contact_during_sos: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          declared_blood_group?: string | null;
+          severe_allergies?: string | null;
+          important_conditions?: string | null;
+          relevant_medications?: string | null;
+          lifesaving_medications?: string | null;
+          ice_contact?: string | null;
+          emergency_notes?: string | null;
+          share_medical_data_during_sos?: boolean;
+          share_ice_contact_during_sos?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          declared_blood_group?: string | null;
+          severe_allergies?: string | null;
+          important_conditions?: string | null;
+          relevant_medications?: string | null;
+          lifesaving_medications?: string | null;
+          ice_contact?: string | null;
+          emergency_notes?: string | null;
+          share_medical_data_during_sos?: boolean;
+          share_ice_contact_during_sos?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -208,6 +303,147 @@ export type Database = {
       cancel_trusted_contact_request: {
         Args: { target_request_id: string };
         Returns: undefined;
+      };
+      get_received_sos: {
+        Args: { target_sos_id: string };
+        Returns: {
+          sos_id: string;
+          sender_display_name: string;
+          sos_status: SosStatus;
+          latitude: number;
+          longitude: number;
+          accuracy: number | null;
+          event_time: string;
+        }[];
+      };
+      get_sos_status: {
+        Args: { target_sos_id: string };
+        Returns: {
+          sos_id: string;
+          sos_status: SosStatus;
+          is_owner: boolean;
+          accepted_by_me: boolean;
+          sos_updated_at: string;
+          sos_closed_at: string | null;
+        }[];
+      };
+      accept_sos: {
+        Args: { target_sos_id: string };
+        Returns: Database['public']['Functions']['get_sos_status']['Returns'];
+      };
+      close_my_sos: {
+        Args: { target_sos_id: string };
+        Returns: Database['public']['Functions']['get_sos_status']['Returns'];
+      };
+      cancel_my_sos: {
+        Args: { target_sos_id: string };
+        Returns: Database['public']['Functions']['get_sos_status']['Returns'];
+      };
+      update_my_radar_presence: {
+        Args: {
+          position_latitude: number;
+          position_longitude: number;
+          position_accuracy?: number | null;
+        };
+        Returns: string;
+      };
+      deactivate_my_radar_presence: {
+        Args: Record<string, never>;
+        Returns: undefined;
+      };
+      find_nearby_users: {
+        Args: {
+          search_radius_meters?: number;
+          result_limit?: number;
+        };
+        Returns: {
+          anonymous_id: string;
+          public_nickname: string | null;
+          distance_meters: number;
+          category: 'user' | 'guardian';
+          recently_active: boolean;
+        }[];
+      };
+      get_my_radar_preferences: {
+        Args: Record<string, never>;
+        Returns: {
+          radar_enabled: boolean;
+          visible_to_nearby: boolean;
+          show_nickname: boolean;
+          public_nickname: string | null;
+          preferences_updated_at: string;
+        }[];
+      };
+      update_my_radar_preferences: {
+        Args: {
+          next_radar_enabled: boolean;
+          next_visible_to_nearby: boolean;
+          next_show_nickname: boolean;
+          next_public_nickname?: string | null;
+        };
+        Returns: {
+          radar_enabled: boolean;
+          visible_to_nearby: boolean;
+          show_nickname: boolean;
+          public_nickname: string | null;
+          preferences_updated_at: string;
+        }[];
+      };
+      get_my_emergency_profile: {
+        Args: Record<string, never>;
+        Returns: {
+          declared_blood_group: string | null;
+          severe_allergies: string | null;
+          important_conditions: string | null;
+          relevant_medications: string | null;
+          lifesaving_medications: string | null;
+          ice_contact: string | null;
+          emergency_notes: string | null;
+          share_medical_data_during_sos: boolean;
+          share_ice_contact_during_sos: boolean;
+          profile_updated_at: string;
+        }[];
+      };
+      update_my_emergency_profile: {
+        Args: {
+          next_declared_blood_group: string | null;
+          next_severe_allergies: string | null;
+          next_important_conditions: string | null;
+          next_relevant_medications: string | null;
+          next_lifesaving_medications: string | null;
+          next_ice_contact: string | null;
+          next_emergency_notes: string | null;
+          next_share_medical_data_during_sos: boolean;
+          next_share_ice_contact_during_sos: boolean;
+        };
+        Returns: {
+          declared_blood_group: string | null;
+          severe_allergies: string | null;
+          important_conditions: string | null;
+          relevant_medications: string | null;
+          lifesaving_medications: string | null;
+          ice_contact: string | null;
+          emergency_notes: string | null;
+          share_medical_data_during_sos: boolean;
+          share_ice_contact_during_sos: boolean;
+          profile_updated_at: string;
+        }[];
+      };
+      get_received_sos_emergency_profile: {
+        Args: { target_sos_id: string };
+        Returns: {
+          sos_id: string;
+          declared_blood_group: string | null;
+          severe_allergies: string | null;
+          important_conditions: string | null;
+          relevant_medications: string | null;
+          lifesaving_medications: string | null;
+          ice_contact: string | null;
+          emergency_notes: string | null;
+          medical_data_shared: boolean;
+          ice_contact_shared: boolean;
+          declared_by_user: boolean;
+        }[];
       };
     };
     Enums: {

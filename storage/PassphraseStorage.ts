@@ -1,4 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getAccountStorageItem,
+  setAccountStorageItem,
+} from '@/storage/AccountScopedStorage';
 
 const PASSPHRASE_STORAGE_KEY = 'safemelink.passphrase.value';
 
@@ -18,8 +21,12 @@ export const normalizePassphrase = (value: string) =>
     .trim();
 
 export const PassphraseStorage = {
-  async get(): Promise<SavedPassphrase | null> {
-    const storedPassphrase = await AsyncStorage.getItem(PASSPHRASE_STORAGE_KEY);
+  async get(userId: string): Promise<SavedPassphrase | null> {
+    const storedPassphrase = await getAccountStorageItem(
+      userId,
+      'passphrase',
+      [PASSPHRASE_STORAGE_KEY],
+    );
 
     if (!storedPassphrase) {
       return null;
@@ -28,14 +35,19 @@ export const PassphraseStorage = {
     return JSON.parse(storedPassphrase) as SavedPassphrase;
   },
 
-  async save(text: string) {
+  async save(userId: string, text: string) {
     const savedPassphrase: SavedPassphrase = {
       text: text.trim(),
       normalizedText: normalizePassphrase(text),
       savedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(PASSPHRASE_STORAGE_KEY, JSON.stringify(savedPassphrase));
+    await setAccountStorageItem(
+      userId,
+      'passphrase',
+      JSON.stringify(savedPassphrase),
+      [PASSPHRASE_STORAGE_KEY],
+    );
     return savedPassphrase;
   },
 };

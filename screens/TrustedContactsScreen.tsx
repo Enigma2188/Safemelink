@@ -1,8 +1,9 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
+import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import {
   TrustedLinksService,
@@ -20,6 +21,8 @@ const emptyForm: ContactForm = {
 };
 
 export function TrustedContactsScreen() {
+  const { session, isInitializing } = useAuth();
+  const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [form, setForm] = useState<ContactForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -28,22 +31,62 @@ export function TrustedContactsScreen() {
   const [requests, setRequests] = useState<TrustedLinkRequest[]>([]);
   const [showQr, setShowQr] = useState(false);
   const [linkActionPending, setLinkActionPending] = useState(false);
+  const activeUserIdRef = useRef<string | null>(userId);
+  const loadGenerationRef = useRef(0);
+  activeUserIdRef.current = userId;
 
   const loadContacts = useCallback(async () => {
+    const loadUserId = userId;
+    const loadGeneration = loadGenerationRef.current + 1;
+    loadGenerationRef.current = loadGeneration;
+
+    if (isInitializing || !loadUserId) {
+      return;
+    }
+
     try {
       const overview = await TrustedLinksService.loadOverview();
+
+      if (
+        activeUserIdRef.current !== loadUserId ||
+        loadGenerationRef.current !== loadGeneration
+      ) {
+        return;
+      }
+
       setContacts(overview.contacts);
       setPublicCode(overview.publicCode);
       setRequests(overview.requests);
     } catch {
-      Alert.alert('Contatti fidati', 'Non riesco a caricare i contatti salvati.');
+      if (
+        activeUserIdRef.current === loadUserId &&
+        loadGenerationRef.current === loadGeneration
+      ) {
+        Alert.alert('Contatti fidati', 'Non riesco a caricare i contatti salvati.');
+      }
     }
-  }, []);
+  }, [isInitializing, userId]);
+
+  useEffect(() => {
+    loadGenerationRef.current += 1;
+    setContacts([]);
+    setForm(emptyForm);
+    setEditingId(null);
+    setPublicCode(null);
+    setLinkCode('');
+    setRequests([]);
+    setShowQr(false);
+    setLinkActionPending(false);
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      loadContacts();
-    }, [loadContacts])
+      void loadContacts();
+
+      return () => {
+        loadGenerationRef.current += 1;
+      };
+    }, [loadContacts]),
   );
 
   const resetForm = () => {
@@ -52,13 +95,22 @@ export function TrustedContactsScreen() {
   };
 
   const saveContact = async () => {
+    const actionUserId = userId;
+
+    if (!actionUserId) {
+      Alert.alert('Contatti fidati', 'Accedi per gestire i contatti salvati.');
+      return;
+    }
+
     try {
       const nextContacts = editingId
         ? await ContactsService.update(editingId, form)
         : await ContactsService.add(form);
 
-      setContacts(nextContacts);
-      resetForm();
+      if (activeUserIdRef.current === actionUserId) {
+        setContacts(nextContacts);
+        resetForm();
+      }
     } catch (error) {
       Alert.alert('Contatti fidati', error instanceof Error ? error.message : 'Errore inatteso.');
     }
@@ -82,10 +134,20 @@ export function TrustedContactsScreen() {
         text: 'Elimina',
         style: 'destructive',
         onPress: async () => {
+          const actionUserId = userId;
+
+          if (!actionUserId) {
+            return;
+          }
+
           try {
-            setContacts(await ContactsService.remove(contact.id));
-            if (editingId === contact.id) {
-              resetForm();
+            const nextContacts = await ContactsService.remove(contact.id);
+
+            if (activeUserIdRef.current === actionUserId) {
+              setContacts(nextContacts);
+              if (editingId === contact.id) {
+                resetForm();
+              }
             }
           } catch {
             Alert.alert('Contatti fidati', 'Non riesco a eliminare il contatto.');
@@ -101,10 +163,21 @@ export function TrustedContactsScreen() {
       return;
     }
 
+    const actionUserId = userId;
+
+    if (!actionUserId) {
+      return;
+    }
+
     setLinkActionPending(true);
 
     try {
       await TrustedLinksService.sendRequest(linkCode);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       setLinkCode('');
       await loadContacts();
       Alert.alert('Collegamento SafeMeLink', 'Richiesta inviata.');
@@ -114,15 +187,28 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile inviare la richiesta.',
       );
     } finally {
-      setLinkActionPending(false);
+      if (activeUserIdRef.current === actionUserId) {
+        setLinkActionPending(false);
+      }
     }
   };
 
   const respondToRequest = async (requestId: string, accept: boolean) => {
+    const actionUserId = userId;
+
+    if (!actionUserId) {
+      return;
+    }
+
     setLinkActionPending(true);
 
     try {
       await TrustedLinksService.respond(requestId, accept);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       await loadContacts();
       Alert.alert(
         'Collegamento SafeMeLink',
@@ -134,15 +220,28 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile aggiornare la richiesta.',
       );
     } finally {
-      setLinkActionPending(false);
+      if (activeUserIdRef.current === actionUserId) {
+        setLinkActionPending(false);
+      }
     }
   };
 
   const cancelRequest = async (requestId: string) => {
+    const actionUserId = userId;
+
+    if (!actionUserId) {
+      return;
+    }
+
     setLinkActionPending(true);
 
     try {
       await TrustedLinksService.cancel(requestId);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       await loadContacts();
     } catch (error) {
       Alert.alert(
@@ -150,7 +249,9 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile annullare la richiesta.',
       );
     } finally {
-      setLinkActionPending(false);
+      if (activeUserIdRef.current === actionUserId) {
+        setLinkActionPending(false);
+      }
     }
   };
 

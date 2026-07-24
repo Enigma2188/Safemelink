@@ -1,4 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getAccountStorageItem,
+  setAccountStorageItem,
+} from '@/storage/AccountScopedStorage';
 
 const CHECKPOINT_EVENTS_STORAGE_KEY = 'safemelink.checkpoint.events';
 const MAX_STORED_EVENTS = 20;
@@ -11,8 +14,12 @@ export type CheckpointEvent = {
 };
 
 export const CheckpointStorage = {
-  async listEvents(): Promise<CheckpointEvent[]> {
-    const storedEvents = await AsyncStorage.getItem(CHECKPOINT_EVENTS_STORAGE_KEY);
+  async listEvents(userId: string): Promise<CheckpointEvent[]> {
+    const storedEvents = await getAccountStorageItem(
+      userId,
+      'checkpoint-events',
+      [CHECKPOINT_EVENTS_STORAGE_KEY],
+    );
 
     if (!storedEvents) {
       return [];
@@ -21,8 +28,8 @@ export const CheckpointStorage = {
     return JSON.parse(storedEvents) as CheckpointEvent[];
   },
 
-  async saveCompleted(durationMinutes: number) {
-    const events = await CheckpointStorage.listEvents();
+  async saveCompleted(userId: string, durationMinutes: number) {
+    const events = await CheckpointStorage.listEvents(userId);
     const event: CheckpointEvent = {
       id: `${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -31,7 +38,12 @@ export const CheckpointStorage = {
     };
     const nextEvents = [event, ...events].slice(0, MAX_STORED_EVENTS);
 
-    await AsyncStorage.setItem(CHECKPOINT_EVENTS_STORAGE_KEY, JSON.stringify(nextEvents));
+    await setAccountStorageItem(
+      userId,
+      'checkpoint-events',
+      JSON.stringify(nextEvents),
+      [CHECKPOINT_EVENTS_STORAGE_KEY],
+    );
     return nextEvents;
   },
 };

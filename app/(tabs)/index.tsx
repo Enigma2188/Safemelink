@@ -1,12 +1,19 @@
-import { Link, useFocusEffect } from 'expo-router';
+import { type Href, Link, useFocusEffect } from 'expo-router';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import { LocationService } from '@/services/LocationService';
-import { SOSService, type SOSEvent } from '@/services/SOSService';
+import { SOSLifecycleService } from '@/services/SOSLifecycleService';
+import {
+  SOSService,
+  type ActiveSOSEvent,
+  type SOSEvent,
+  type SOSTerminalStatus,
+} from '@/services/SOSService';
 import { CheckpointStorage } from '@/storage/CheckpointStorage';
 import { GoHomeStorage, type GoHomeSession, type HomeLocation } from '@/storage/GoHomeStorage';
 import { normalizePassphrase, PassphraseStorage, type SavedPassphrase } from '@/storage/PassphraseStorage';
@@ -57,9 +64,12 @@ const estimateWalkingMinutes = (distanceKm: number) =>
   Math.max(1, Math.round((distanceKm / WALKING_SPEED_KM_H) * 60 * GO_HOME_SAFETY_MARGIN));
 
 export default function HomeScreen() {
+  const { session, isInitializing } = useAuth();
+  const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
-  const [activeEvent, setActiveEvent] = useState<SOSEvent | null>(null);
+  const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
+  const [isEndingSOS, setIsEndingSOS] = useState(false);
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
   const [checkpointStatus, setCheckpointStatus] = useState<CheckpointStatus>('idle');
@@ -81,36 +91,15 @@ export default function HomeScreen() {
   const passphraseModeRef = useRef<PassphraseMode>('idle');
   const savedPassphraseRef = useRef<SavedPassphrase | null>(null);
   const passphraseCooldownUntilRef = useRef(0);
+  const activeUserIdRef = useRef<string | null>(userId);
+  const loadGenerationRef = useRef(0);
   const nebulaPulse = useRef(new Animated.Value(0)).current;
   const logoGlowPulse = useRef(new Animated.Value(0)).current;
   const sosGlowPulse = useRef(new Animated.Value(0)).current;
 
   const latestEvent = useMemo(() => lastEvents[0], [lastEvents]);
   const passphraseIsConfigured = Boolean(savedPassphrase);
-
-  const loadSOSData = useCallback(async () => {
-    try {
-      const [storedContacts, storedEvents, storedHomeLocation, storedPassphrase] = await Promise.all([
-        ContactsService.list(),
-        SOSStorage.listEvents(),
-        GoHomeStorage.getHomeLocation(),
-        PassphraseStorage.get(),
-      ]);
-
-      setContacts(storedContacts);
-      setLastEvents(storedEvents);
-      setHomeLocation(storedHomeLocation);
-      setSavedPassphrase(storedPassphrase);
-    } catch {
-      Alert.alert('Modulo SOS', 'Non riesco a caricare i dati salvati.');
-    }
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadSOSData();
-    }, [loadSOSData])
-  );
+  activeUserIdRef.current = userId;
 
   useEffect(() => {
     const nebulaAnimation = Animated.loop(
@@ -333,6 +322,128 @@ export default function HomeScreen() {
 
   useEffect(() => () => stopPassphraseRecognition(), [stopPassphraseRecognition]);
 
+  const resetSensitiveState = useCallback(() => {
+    stopPassphraseRecognition();
+    setContacts([]);
+    setLastEvents([]);
+    setActiveEvent(null);
+    setIsEndingSOS(false);
+    setStatus('idle');
+    setRemainingSeconds(SAFETY_TIMER_SECONDS);
+    setCheckpointStatus('idle');
+    setCheckpointRemainingSeconds(0);
+    setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    setHomeLocation(null);
+    setGoHomeStatus('idle');
+    setGoHomeSession(null);
+    setGoHomeRemainingSeconds(0);
+    setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+    setSavedPassphrase(null);
+    setPassphraseDraft('');
+    setLastRecognizedPassphraseText('');
+    setPassphraseError('');
+    passphraseCooldownUntilRef.current = 0;
+  }, [stopPassphraseRecognition]);
+
+  const loadSOSData = useCallback(async () => {
+    const loadUserId = userId;
+    const loadGeneration = loadGenerationRef.current + 1;
+    loadGenerationRef.current = loadGeneration;
+
+    if (isInitializing || !loadUserId) {
+      return;
+    }
+
+    try {
+      const [storedContacts, storedEvents, storedHomeLocation, storedPassphrase] =
+        await Promise.all([
+          ContactsService.list(),
+          SOSStorage.listEvents(loadUserId),
+          GoHomeStorage.getHomeLocation(loadUserId),
+          PassphraseStorage.get(loadUserId),
+        ]);
+      let nextEvents = storedEvents;
+      let restoredActiveEvent: ActiveSOSEvent | null = null;
+      const latestStoredEvent = storedEvents[0];
+
+      if (
+        latestStoredEvent?.remoteSosId &&
+        latestStoredEvent.location &&
+        latestStoredEvent.message
+      ) {
+        try {
+          const remoteState = await SOSLifecycleService.getStatus(
+            latestStoredEvent.remoteSosId,
+          );
+
+          if (
+            remoteState.sos_status === 'open' ||
+            remoteState.sos_status === 'accepted'
+          ) {
+            restoredActiveEvent = {
+              ...latestStoredEvent,
+              location: latestStoredEvent.location,
+              message: latestStoredEvent.message,
+              remoteStatus: remoteState.sos_status,
+            };
+          } else {
+            nextEvents = await SOSStorage.finalizeEvent(
+              loadUserId,
+              latestStoredEvent.id,
+              remoteState.sos_status,
+            );
+          }
+        } catch (statusError: unknown) {
+          console.warn(
+            '[SafeMeLink SOS] Stato remoto temporaneamente non disponibile.',
+            statusError,
+          );
+        }
+      }
+
+      if (
+        activeUserIdRef.current !== loadUserId ||
+        loadGenerationRef.current !== loadGeneration
+      ) {
+        return;
+      }
+
+      setContacts(storedContacts);
+      setLastEvents(nextEvents);
+      setHomeLocation(storedHomeLocation);
+      setSavedPassphrase(storedPassphrase);
+      setActiveEvent(restoredActiveEvent);
+      setStatus(restoredActiveEvent ? 'active' : 'idle');
+    } catch (loadError: unknown) {
+      if (
+        activeUserIdRef.current === loadUserId &&
+        loadGenerationRef.current === loadGeneration
+      ) {
+        Alert.alert(
+          'Modulo SOS',
+          loadError instanceof Error
+            ? loadError.message
+            : 'Non riesco a caricare i dati salvati.',
+        );
+      }
+    }
+  }, [isInitializing, userId]);
+
+  useEffect(() => {
+    loadGenerationRef.current += 1;
+    resetSensitiveState();
+  }, [resetSensitiveState, userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadSOSData();
+
+      return () => {
+        loadGenerationRef.current += 1;
+      };
+    }, [loadSOSData]),
+  );
+
   const confirmPassphraseDraft = async () => {
     const normalizedDraft = normalizePassphrase(passphraseDraft);
 
@@ -341,8 +452,19 @@ export default function HomeScreen() {
       return;
     }
 
+    if (!userId) {
+      Alert.alert('Parola d’ordine', 'Accedi prima di salvare una parola d’ordine.');
+      return;
+    }
+
     try {
-      const storedPassphrase = await PassphraseStorage.save(passphraseDraft);
+      const actionUserId = userId;
+      const storedPassphrase = await PassphraseStorage.save(actionUserId, passphraseDraft);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       setSavedPassphrase(storedPassphrase);
       setPassphraseDraft('');
       setLastRecognizedPassphraseText('');
@@ -376,8 +498,14 @@ export default function HomeScreen() {
   };
 
   const confirmCheckpoint = async () => {
+    if (!userId) {
+      Alert.alert('Checkpoint', 'Accedi prima di salvare un Checkpoint.');
+      cancelCheckpoint();
+      return;
+    }
+
     try {
-      await CheckpointStorage.saveCompleted(checkpointMinutes);
+      await CheckpointStorage.saveCompleted(userId, checkpointMinutes);
     } catch {
       Alert.alert('Checkpoint', 'Checkpoint completato, ma non riesco a salvarlo sul dispositivo.');
     }
@@ -386,9 +514,20 @@ export default function HomeScreen() {
   };
 
   const saveCurrentLocationAsHome = async () => {
+    if (!userId) {
+      Alert.alert('Torno a casa', 'Accedi prima di salvare la posizione Casa.');
+      return;
+    }
+
     try {
+      const actionUserId = userId;
       const location = await LocationService.getCurrentLocation();
-      const savedLocation = await GoHomeStorage.saveHomeLocation(location);
+      const savedLocation = await GoHomeStorage.saveHomeLocation(actionUserId, location);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       setHomeLocation(savedLocation);
       Alert.alert('Torno a casa', 'Posizione Casa salvata su questo dispositivo.');
     } catch (error) {
@@ -404,6 +543,11 @@ export default function HomeScreen() {
   };
 
   const startGoHome = async () => {
+    if (!userId) {
+      Alert.alert('Torno a casa', 'Accedi prima di avviare Torno a casa.');
+      return;
+    }
+
     if (status !== 'idle') {
       Alert.alert('Torno a casa', 'Puoi avviare Torno a casa solo quando non ci sono SOS attivi.');
       return;
@@ -417,7 +561,12 @@ export default function HomeScreen() {
     setGoHomeStatus('estimating');
 
     try {
-      const savedHomeLocation = await GoHomeStorage.getHomeLocation();
+      const actionUserId = userId;
+      const savedHomeLocation = await GoHomeStorage.getHomeLocation(actionUserId);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
 
       if (!savedHomeLocation) {
         setGoHomeStatus('idle');
@@ -426,6 +575,11 @@ export default function HomeScreen() {
       }
 
       const startLocation = await LocationService.getCurrentLocation();
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       const distanceKm = calculateDistanceKm(startLocation, savedHomeLocation);
       const estimatedMinutes = estimateWalkingMinutes(distanceKm);
       const session: GoHomeSession = {
@@ -469,8 +623,13 @@ export default function HomeScreen() {
       return;
     }
 
+    if (!userId) {
+      cancelGoHome();
+      return;
+    }
+
     try {
-      await GoHomeStorage.saveCompleted(goHomeSession);
+      await GoHomeStorage.saveCompleted(userId, goHomeSession);
     } catch {
       Alert.alert('Torno a casa', 'Arrivo confermato, ma non riesco a salvarlo sul dispositivo.');
     }
@@ -479,18 +638,102 @@ export default function HomeScreen() {
   };
 
   const completeSOS = useCallback(async () => {
+    if (!userId) {
+      setStatus('idle');
+      Alert.alert('SOS', 'Accedi prima di attivare un SOS.');
+      return;
+    }
+
+    const actionUserId = userId;
     setStatus('sending');
 
     try {
-      const result = await SOSService.completeSOS();
+      const result = await SOSService.completeSOS(actionUserId);
+
+      if (activeUserIdRef.current !== actionUserId) {
+        return;
+      }
+
       setActiveEvent(result.event);
       setLastEvents(result.events);
       setStatus('active');
     } catch (error) {
-      setStatus('idle');
-      Alert.alert('SOS non inviato', error instanceof Error ? error.message : 'Errore inatteso.');
+      if (activeUserIdRef.current === actionUserId) {
+        setStatus('idle');
+        Alert.alert(
+          'SOS non inviato',
+          error instanceof Error ? error.message : 'Errore inatteso.',
+        );
+      }
     }
-  }, [contacts]);
+  }, [userId]);
+
+  useEffect(() => {
+    const trackedEvent = activeEvent;
+    const trackedUserId = userId;
+
+    if (!trackedEvent?.remoteSosId || !trackedUserId || status !== 'active') {
+      return;
+    }
+
+    let isCurrent = true;
+    let requestInFlight = false;
+
+    const refreshRemoteStatus = async () => {
+      if (requestInFlight) {
+        return;
+      }
+
+      requestInFlight = true;
+
+      try {
+        const remoteState = await SOSLifecycleService.getStatus(trackedEvent.remoteSosId!);
+
+        if (!isCurrent || activeUserIdRef.current !== trackedUserId) {
+          return;
+        }
+
+        if (
+          remoteState.sos_status === 'open' ||
+          remoteState.sos_status === 'accepted'
+        ) {
+          setActiveEvent((current) =>
+            current?.id === trackedEvent.id
+              ? current.remoteStatus === remoteState.sos_status
+                ? current
+                : { ...current, remoteStatus: remoteState.sos_status }
+              : current,
+          );
+          return;
+        }
+
+        const nextEvents = await SOSStorage.finalizeEvent(
+          trackedUserId,
+          trackedEvent.id,
+          remoteState.sos_status,
+        );
+
+        if (isCurrent && activeUserIdRef.current === trackedUserId) {
+          setLastEvents(nextEvents);
+          setActiveEvent(null);
+          setRemainingSeconds(SAFETY_TIMER_SECONDS);
+          setStatus('idle');
+        }
+      } catch (refreshError: unknown) {
+        console.warn('[SafeMeLink SOS] Aggiornamento stato remoto non riuscito.', refreshError);
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    void refreshRemoteStatus();
+    const refreshInterval = setInterval(() => void refreshRemoteStatus(), 15_000);
+
+    return () => {
+      isCurrent = false;
+      clearInterval(refreshInterval);
+    };
+  }, [activeEvent, status, userId]);
 
   useEffect(() => {
     if (status !== 'countdown') {
@@ -583,10 +826,100 @@ export default function HomeScreen() {
     return () => clearTimeout(timeoutId);
   }, [goHomeConfirmSeconds, goHomeStatus, startSOSCountdown]);
 
+  const finishSOS = async (terminalStatus: SOSTerminalStatus) => {
+    if (isEndingSOS || !activeEvent) {
+      return;
+    }
+
+    const eventToFinish = activeEvent;
+    const actionUserId = userId;
+
+    if (!actionUserId) {
+      Alert.alert('SOS', 'Sessione non disponibile. Accedi e riprova.');
+      return;
+    }
+
+    setIsEndingSOS(true);
+
+    try {
+      if (eventToFinish.remoteSosId) {
+        const remoteState =
+          terminalStatus === 'closed'
+            ? await SOSLifecycleService.close(eventToFinish.remoteSosId)
+            : await SOSLifecycleService.cancel(eventToFinish.remoteSosId);
+
+        if (remoteState.sos_status !== terminalStatus) {
+          throw new Error('Il backend non ha confermato la conclusione dell’SOS.');
+        }
+      }
+
+      let nextEvents: SOSEvent[];
+
+      try {
+        nextEvents = await SOSStorage.finalizeEvent(
+          actionUserId,
+          eventToFinish.id,
+          terminalStatus,
+        );
+      } catch (storageError: unknown) {
+        console.warn('[SafeMeLink SOS] Cronologia locale non aggiornata.', storageError);
+        nextEvents = lastEvents.map((event) =>
+          event.id === eventToFinish.id
+            ? {
+                ...event,
+                contactIds: [],
+                location: null,
+                message: null,
+                remoteStatus: terminalStatus,
+              }
+            : event,
+        );
+      }
+
+      if (
+        activeUserIdRef.current !== actionUserId ||
+        activeEvent?.id !== eventToFinish.id
+      ) {
+        return;
+      }
+
+      setLastEvents(nextEvents);
+      setActiveEvent(null);
+      setRemainingSeconds(SAFETY_TIMER_SECONDS);
+      setStatus('idle');
+    } catch (finishError: unknown) {
+      if (activeUserIdRef.current === actionUserId) {
+        Alert.alert(
+          'SOS ancora attivo',
+          finishError instanceof Error
+            ? finishError.message
+            : 'Il backend non ha confermato la conclusione dell’SOS.',
+        );
+      }
+    } finally {
+      if (activeUserIdRef.current === actionUserId) {
+        setIsEndingSOS(false);
+      }
+    }
+  };
+
   const deactivateSOS = () => {
-    setActiveEvent(null);
-    setRemainingSeconds(SAFETY_TIMER_SECONDS);
-    setStatus('idle');
+    if (isEndingSOS) {
+      return;
+    }
+
+    Alert.alert('Disattiva SOS', 'Come vuoi concludere questo SOS?', [
+      { text: 'Indietro', style: 'cancel' },
+      {
+        text: 'Annulla SOS',
+        style: 'destructive',
+        onPress: () => void finishSOS('cancelled'),
+      },
+      {
+        text: 'Emergenza conclusa',
+        onPress: () => void finishSOS('closed'),
+      },
+    ]);
   };
 
   const shareActiveSOS = async () => {
@@ -730,7 +1063,9 @@ export default function HomeScreen() {
 
       {status === 'active' && activeEvent && (
         <View style={styles.emergencyPanel}>
-          <Text style={styles.emergencyLabel}>SOS ATTIVO</Text>
+          <Text style={styles.emergencyLabel}>
+            {activeEvent.remoteStatus === 'accepted' ? 'SOS PRESO IN CARICO' : 'SOS ATTIVO'}
+          </Text>
           <Text style={styles.emergencyText}>Messaggio preparato e evento salvato.</Text>
           <Text style={styles.coordinates}>
             {activeEvent.location.latitude}, {activeEvent.location.longitude}
@@ -738,8 +1073,13 @@ export default function HomeScreen() {
           <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
             <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
           </Pressable>
-          <Pressable style={styles.stopButton} onPress={deactivateSOS}>
-            <Text style={styles.stopButtonText}>Disattiva SOS</Text>
+          <Pressable
+            disabled={isEndingSOS}
+            style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
+            onPress={deactivateSOS}>
+            <Text style={styles.stopButtonText}>
+              {isEndingSOS ? 'Aggiornamento SOS…' : 'Disattiva SOS'}
+            </Text>
           </Pressable>
         </View>
       )}
@@ -838,17 +1178,25 @@ export default function HomeScreen() {
 
       {activePanel === 'passphrase' && (
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Parola d'ordine</Text>
+        <Text style={styles.sectionTitle}>Parola d’ordine</Text>
         <Text style={styles.passphraseStatus}>
           {passphraseIsConfigured ? 'Frase configurata' : 'Nessuna parola salvata'}
         </Text>
-        {savedPassphrase && <Text style={styles.passphraseSavedText}>Salvata: "{savedPassphrase.text}"</Text>}
+        {savedPassphrase && (
+          <Text style={styles.passphraseSavedText}>
+            {`Salvata: “${savedPassphrase.text}”`}
+          </Text>
+        )}
         <Text style={styles.goHomeNote}>Il microfono viene usato solo mentre la modalita ascolto e attiva.</Text>
 
         {lastRecognizedPassphraseText ? (
-          <Text style={styles.passphraseTranscript}>Riconosciuto: "{lastRecognizedPassphraseText}"</Text>
+          <Text style={styles.passphraseTranscript}>
+            {`Riconosciuto: “${lastRecognizedPassphraseText}”`}
+          </Text>
         ) : null}
-        {passphraseDraft ? <Text style={styles.passphraseTranscript}>Da salvare: "{passphraseDraft}"</Text> : null}
+        {passphraseDraft ? (
+          <Text style={styles.passphraseTranscript}>{`Da salvare: “${passphraseDraft}”`}</Text>
+        ) : null}
         {passphraseError ? <Text style={styles.passphraseError}>{passphraseError}</Text> : null}
 
         <View style={styles.passphraseActions}>
@@ -857,7 +1205,7 @@ export default function HomeScreen() {
             style={[styles.secondaryActionButton, passphraseMode === 'listening' && styles.disabledButton]}
             onPress={() => startPassphraseRecognition('recording')}>
             <Text style={styles.secondaryActionText}>
-              {passphraseMode === 'recording' ? 'Sto ascoltando...' : "Registra parola d'ordine"}
+              {passphraseMode === 'recording' ? 'Sto ascoltando...' : 'Registra parola d’ordine'}
             </Text>
           </Pressable>
 
@@ -898,9 +1246,15 @@ export default function HomeScreen() {
         ) : (
           <View style={styles.eventRow}>
             <Text style={styles.eventDate}>{new Date(latestEvent.createdAt).toLocaleString()}</Text>
-            <Text style={styles.eventCoords}>
-              {latestEvent.location.latitude}, {latestEvent.location.longitude}
-            </Text>
+            {latestEvent.location ? (
+              <Text style={styles.eventCoords}>
+                {latestEvent.location.latitude}, {latestEvent.location.longitude}
+              </Text>
+            ) : (
+              <Text style={styles.eventCoords}>
+                {latestEvent.remoteStatus === 'cancelled' ? 'SOS annullato' : 'SOS concluso'}
+              </Text>
+            )}
           </View>
         )}
       </View>
@@ -926,6 +1280,11 @@ export default function HomeScreen() {
                 <Text style={styles.drawerItemText}>Contatti fidati</Text>
               </Pressable>
             </Link>
+            <Link href={'/emergency-profile' as unknown as Href} asChild>
+              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Text style={styles.drawerItemText}>Profilo di Emergenza</Text>
+              </Pressable>
+            </Link>
 
             <Text style={styles.drawerSectionLabel}>SICUREZZA PREVENTIVA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('checkpoint')}>
@@ -935,14 +1294,15 @@ export default function HomeScreen() {
               <Text style={styles.drawerItemText}>Torno a casa</Text>
             </Pressable>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('passphrase')}>
-              <Text style={styles.drawerItemText}>Parola d'ordine</Text>
+              <Text style={styles.drawerItemText}>Parola d’ordine</Text>
             </Pressable>
 
             <Text style={styles.drawerSectionLabel}>COMMUNITY</Text>
-            <View style={styles.drawerItemDisabled}>
-              <Text style={styles.drawerItemDisabledText}>Radar</Text>
-              <Text style={styles.drawerBadge}>In arrivo</Text>
-            </View>
+            <Link href={'/radar' as unknown as Href} asChild>
+              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Text style={styles.drawerItemText}>Radar</Text>
+              </Pressable>
+            </Link>
             <View style={styles.drawerItemDisabled}>
               <Text style={styles.drawerItemDisabledText}>Guardian</Text>
               <Text style={styles.drawerBadge}>In arrivo</Text>

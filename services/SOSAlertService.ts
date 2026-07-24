@@ -1,7 +1,7 @@
 import { Alert, Linking, Share } from 'react-native';
 
 import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
-import type { SOSEvent } from '@/services/SOSService';
+import type { ActiveSOSEvent } from '@/services/SOSService';
 
 const normalizePhoneNumber = (phone: string) => {
   const trimmed = phone.trim();
@@ -32,7 +32,7 @@ const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) =>
     ];
   }, []);
 
-const createSmsUrls = (event: SOSEvent, contact?: SafeMeLinkContact) => {
+const createSmsUrls = (event: ActiveSOSEvent, contact?: SafeMeLinkContact) => {
   const message = encodeURIComponent(event.message);
   const phone = contact?.phone;
 
@@ -43,7 +43,7 @@ const createSmsUrls = (event: SOSEvent, contact?: SafeMeLinkContact) => {
   ];
 };
 
-const createWhatsAppUrls = (event: SOSEvent, contact: SafeMeLinkContact) => {
+const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
   const message = encodeURIComponent(event.message);
   const phone = contact.phone.replace(/[^\d]/g, '');
 
@@ -71,7 +71,7 @@ const openUrlWithDiagnostics = async (url: string) => {
   }
 };
 
-export const shareSosAlert = async (event: SOSEvent, contacts: SafeMeLinkContact[]) => {
+export const shareSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkContact[]) => {
   const recipients = contacts.map((contact) => `${contact.name} (${contact.phone})`).join(', ');
 
   await Share.share({
@@ -79,7 +79,7 @@ export const shareSosAlert = async (event: SOSEvent, contacts: SafeMeLinkContact
   });
 };
 
-export const sendSosAlert = async (event: SOSEvent, contacts: SafeMeLinkContact[]) => {
+export const sendSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkContact[]) => {
   const contactsWithValidPhones = getContactsWithValidPhones(contacts);
   const smsContact = contactsWithValidPhones[0];
 

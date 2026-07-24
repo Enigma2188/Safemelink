@@ -1,15 +1,29 @@
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
-import { SOSPushService } from '@/backend/functions/SOSPushService';
+import type { SosStatus } from '@/backend/database.types';
+import { AuthService } from '@/backend/auth/AuthService';
+import {
+  SOSPushService,
+  type SOSDeliveryResult,
+} from '@/backend/functions/SOSPushService';
 import { LocationService, type SOSLocation } from '@/services/LocationService';
 import { sendSosAlert, shareSosAlert } from '@/services/SOSAlertService';
 import { SOSStorage } from '@/storage/SOSStorage';
 
+export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
+
 export type SOSEvent = {
   id: string;
   createdAt: string;
+  location: SOSLocation | null;
+  message: string | null;
+  contactIds: string[];
+  remoteSosId?: string;
+  remoteStatus?: SosStatus;
+};
+
+export type ActiveSOSEvent = SOSEvent & {
   location: SOSLocation;
   message: string;
-  contactIds: string[];
 };
 
 const createMapsLink = (location: SOSLocation) =>
@@ -26,17 +40,35 @@ export const SOSService = {
     ].join('\n');
   },
 
-  async completeSOS() {
-    const location = await LocationService.getCurrentLocation();
-    const createdAt = new Date().toISOString();
-    const message = SOSService.createMessage(location, createdAt);
-    const contacts = await ContactsService.list();
+  async completeSOS(expectedUserId: string) {
+    const initialSession = await AuthService.getSession();
 
-    if (contacts.length === 0) {
-      throw new Error('Salva almeno un contatto fidato prima di usare SOS.');
+    if (initialSession?.user.id !== expectedUserId) {
+      throw new Error('Sessione cambiata: riavvia l’SOS con l’account attivo.');
     }
 
-    const event: SOSEvent = {
+    const location = await LocationService.getCurrentLocation();
+    const currentSession = await AuthService.getSession();
+
+    if (currentSession?.user.id !== expectedUserId) {
+      throw new Error('Sessione cambiata durante l’SOS. Nessun evento remoto è stato creato.');
+    }
+
+    const createdAt = new Date().toISOString();
+    const message = SOSService.createMessage(location, createdAt);
+    let contacts: TrustedContact[] = [];
+
+    try {
+      contacts = await ContactsService.list(expectedUserId);
+    } catch (error) {
+      console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', error);
+    }
+
+    if ((await AuthService.getSession())?.user.id !== expectedUserId) {
+      throw new Error('Sessione cambiata durante l’SOS. Nessun evento remoto è stato creato.');
+    }
+
+    const event: ActiveSOSEvent = {
       id: `${Date.now()}`,
       createdAt,
       location,
@@ -44,23 +76,50 @@ export const SOSService = {
       contactIds: contacts.map((contact) => contact.id),
     };
 
-    const events = await SOSStorage.saveEvent(event);
-    await SOSPushService.send(event).catch((error: unknown) => {
+    const pushResult: SOSDeliveryResult = await SOSPushService.send(
+      event,
+      expectedUserId,
+    ).catch((error: unknown) => {
       console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', error);
+      return {
+        sosCreated: false,
+        sosId: null,
+        recipientCount: 0,
+        tokenCount: 0,
+        notificationsSent: 0,
+        notificationsFailed: 0,
+        errors: [error instanceof Error ? error.message : 'Errore push inatteso.'],
+      };
     });
-    await sendSosAlert(event, contacts);
+
+    if (pushResult.reason === 'not_authenticated') {
+      throw new Error('Sessione cambiata durante l’SOS. Riprova con l’account attivo.');
+    }
+
+    const completedEvent: ActiveSOSEvent = {
+      ...event,
+      ...(pushResult.sosId
+        ? {
+            remoteSosId: pushResult.sosId,
+            remoteStatus: 'open' as const,
+          }
+        : {}),
+    };
+    const events = await SOSStorage.saveEvent(expectedUserId, completedEvent);
+    await sendSosAlert(completedEvent, contacts);
 
     return {
-      event,
+      event: completedEvent,
       events,
+      pushResult,
     };
   },
 
-  async sendSOS(event: SOSEvent, contacts: TrustedContact[]) {
+  async sendSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {
     await sendSosAlert(event, contacts);
   },
 
-  async shareSOS(event: SOSEvent, contacts: TrustedContact[]) {
+  async shareSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {
     await shareSosAlert(event, contacts);
   },
 };

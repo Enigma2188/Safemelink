@@ -1,4 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getAccountStorageItem,
+  setAccountStorageItem,
+} from '@/storage/AccountScopedStorage';
 
 const HOME_LOCATION_STORAGE_KEY = 'safemelink.gohome.homeLocation';
 const GO_HOME_EVENTS_STORAGE_KEY = 'safemelink.gohome.events';
@@ -30,8 +33,12 @@ export type GoHomeEvent = {
 };
 
 export const GoHomeStorage = {
-  async getHomeLocation(): Promise<HomeLocation | null> {
-    const storedLocation = await AsyncStorage.getItem(HOME_LOCATION_STORAGE_KEY);
+  async getHomeLocation(userId: string): Promise<HomeLocation | null> {
+    const storedLocation = await getAccountStorageItem(
+      userId,
+      'go-home-location',
+      [HOME_LOCATION_STORAGE_KEY],
+    );
 
     if (!storedLocation) {
       return null;
@@ -40,18 +47,30 @@ export const GoHomeStorage = {
     return JSON.parse(storedLocation) as HomeLocation;
   },
 
-  async saveHomeLocation(location: Pick<HomeLocation, 'latitude' | 'longitude'>) {
+  async saveHomeLocation(
+    userId: string,
+    location: Pick<HomeLocation, 'latitude' | 'longitude'>,
+  ) {
     const homeLocation: HomeLocation = {
       ...location,
       savedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(HOME_LOCATION_STORAGE_KEY, JSON.stringify(homeLocation));
+    await setAccountStorageItem(
+      userId,
+      'go-home-location',
+      JSON.stringify(homeLocation),
+      [HOME_LOCATION_STORAGE_KEY],
+    );
     return homeLocation;
   },
 
-  async listEvents(): Promise<GoHomeEvent[]> {
-    const storedEvents = await AsyncStorage.getItem(GO_HOME_EVENTS_STORAGE_KEY);
+  async listEvents(userId: string): Promise<GoHomeEvent[]> {
+    const storedEvents = await getAccountStorageItem(
+      userId,
+      'go-home-events',
+      [GO_HOME_EVENTS_STORAGE_KEY],
+    );
 
     if (!storedEvents) {
       return [];
@@ -60,8 +79,8 @@ export const GoHomeStorage = {
     return JSON.parse(storedEvents) as GoHomeEvent[];
   },
 
-  async saveCompleted(session: GoHomeSession) {
-    const events = await GoHomeStorage.listEvents();
+  async saveCompleted(userId: string, session: GoHomeSession) {
+    const events = await GoHomeStorage.listEvents(userId);
     const event: GoHomeEvent = {
       id: `${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -70,7 +89,12 @@ export const GoHomeStorage = {
     };
     const nextEvents = [event, ...events].slice(0, MAX_STORED_EVENTS);
 
-    await AsyncStorage.setItem(GO_HOME_EVENTS_STORAGE_KEY, JSON.stringify(nextEvents));
+    await setAccountStorageItem(
+      userId,
+      'go-home-events',
+      JSON.stringify(nextEvents),
+      [GO_HOME_EVENTS_STORAGE_KEY],
+    );
     return nextEvents;
   },
 };

@@ -1,17 +1,21 @@
 import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { PushNotificationService } from '@/services/PushNotificationService';
 
 export function PushTokenRegistrar() {
-  const { session } = useAuth();
+  const { session, isInitializing } = useAuth();
   const router = useRouter();
   const registrationInProgressForUser = useRef<string | null>(null);
   const handledNotificationIds = useRef(new Set<string>());
 
   useEffect(() => {
+    if (isInitializing) {
+      return;
+    }
+
     const handleResponse = (response: Notifications.NotificationResponse) => {
       const notificationId = response.notification.request.identifier;
 
@@ -27,8 +31,12 @@ export function PushTokenRegistrar() {
         sosId: data.sosId,
       });
 
-      if (data.type === 'sos' && typeof data.sosId === 'string') {
-        router.replace('/');
+      if (
+        (data.type === 'sos_alert' || data.type === 'sos') &&
+        typeof data.sosId === 'string'
+      ) {
+        const sosRoute = `/sos/${encodeURIComponent(data.sosId)}` as unknown as Href;
+        router.push(sosRoute);
       }
     };
 
@@ -57,7 +65,7 @@ export function PushTokenRegistrar() {
       responseSubscription.remove();
       receivedSubscription.remove();
     };
-  }, [router]);
+  }, [isInitializing, router]);
 
   useEffect(() => {
     const userId = session?.user.id;

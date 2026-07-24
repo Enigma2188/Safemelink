@@ -1,14 +1,29 @@
 import { AuthService } from '@/backend/auth/AuthService';
-import { BackendError } from '@/backend/errors/BackendError';
 import { SOSRepository } from '@/backend/repositories/SOSRepository';
 import { requireSupabaseClient } from '@/backend/supabaseClient';
-import type { SOSEvent } from '@/services/SOSService';
+import type { ActiveSOSEvent } from '@/services/SOSService';
 
-type SOSPushResult = {
+export type SOSDeliveryResult = {
+  sosCreated: boolean;
+  sosId: string | null;
+  recipientCount: number;
+  tokenCount: number;
+  notificationsSent: number;
+  notificationsFailed: number;
+  errors: string[];
+  reason?: 'not_authenticated' | 'no_active_recipients';
+};
+
+type SOSPushResponse = {
   sent: number;
   failed: number;
+  recipientCount?: number;
+  tokenCount?: number;
+  errors?: { code?: string; message: string }[];
   reason?: 'no_active_recipients';
 };
+
+const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
 
 async function getInvokeErrorDetails(error: unknown) {
   const details: Record<string, unknown> = {
@@ -34,18 +49,30 @@ async function getInvokeErrorDetails(error: unknown) {
   return details;
 }
 
-export const SOSPushService = {
-  async send(event: SOSEvent) {
+async function sendSOSPush(
+  event: ActiveSOSEvent,
+  expectedUserId: string,
+): Promise<SOSDeliveryResult> {
     const session = await AuthService.getSession();
 
-    if (!session) {
-      return { sent: 0, failed: 0 } satisfies SOSPushResult;
+    if (!session || session.user.id !== expectedUserId) {
+      return {
+        sosCreated: false,
+        sosId: null,
+        recipientCount: 0,
+        tokenCount: 0,
+        notificationsSent: 0,
+        notificationsFailed: 0,
+        errors: ['Utente non autenticato: invio push non eseguito.'],
+        reason: 'not_authenticated',
+      };
     }
 
     const sos = await SOSRepository.create({
       user_id: session.user.id,
       latitude: event.location.latitude,
       longitude: event.location.longitude,
+      accuracy: event.location.accuracy,
       device_time: event.createdAt,
     });
 
@@ -62,7 +89,7 @@ export const SOSPushService = {
       hasAccessToken: session.access_token.length > 0,
     });
 
-    const { data, error } = await client.functions.invoke<SOSPushResult>(
+    const { data, error } = await client.functions.invoke<SOSPushResponse>(
       'send-sos-push',
       {
         headers: {
@@ -78,11 +105,20 @@ export const SOSPushService = {
     );
 
     if (error) {
+      const errorDetails = await getInvokeErrorDetails(error);
       console.error(
         '[SafeMeLink Push] Errore chiamata Edge Function.',
-        await getInvokeErrorDetails(error),
+        errorDetails,
       );
-      throw new BackendError('Impossibile inviare la notifica SOS remota.', error);
+      return {
+        sosCreated: true,
+        sosId: sos.id,
+        recipientCount: 0,
+        tokenCount: 0,
+        notificationsSent: 0,
+        notificationsFailed: 0,
+        errors: [String(errorDetails.message ?? 'Errore Edge Function.')],
+      };
     }
 
     console.log('[SafeMeLink Push] Risposta Edge Function ricevuta.', {
@@ -90,6 +126,35 @@ export const SOSPushService = {
       result: data,
     });
 
-    return data;
+    return {
+      sosCreated: true,
+      sosId: sos.id,
+      recipientCount: data?.recipientCount ?? 0,
+      tokenCount: data?.tokenCount ?? 0,
+      notificationsSent: data?.sent ?? 0,
+      notificationsFailed: data?.failed ?? 0,
+      errors: data?.errors?.map((item) => item.message) ?? [],
+      ...(data?.reason ? { reason: data.reason } : {}),
+    };
+}
+
+export const SOSPushService = {
+  async send(event: ActiveSOSEvent, expectedUserId: string) {
+    const requestKey = `${expectedUserId}:${event.id}`;
+    const existingRequest = inFlightSOS.get(requestKey);
+
+    if (existingRequest) {
+      console.log('[SafeMeLink Push] Invocazione duplicata riutilizzata.', {
+        eventId: event.id,
+      });
+      return existingRequest;
+    }
+
+    const request = sendSOSPush(event, expectedUserId).finally(() => {
+      inFlightSOS.delete(requestKey);
+    });
+
+    inFlightSOS.set(requestKey, request);
+    return request;
   },
 };

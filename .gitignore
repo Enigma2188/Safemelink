@@ -36,6 +36,10 @@ yarn-error.*
 .env.*
 !.env.example
 
+# Firebase files are reconstructed from GitHub Secrets during CI.
+/google-services.json
+/android/app/google-services.json
+
 # typescript
 *.tsbuildinfo
 

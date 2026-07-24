@@ -48,7 +48,6 @@
   },
   "devDependencies": {
     "@babel/helper-define-polyfill-provider": "^0.6.8",
-    "@expo/cli": "^55.0.17",
     "@types/react": "~19.1.0",
     "brace-expansion": "^5.0.4",
     "es-abstract": "^1.24.2",

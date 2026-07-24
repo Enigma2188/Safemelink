@@ -1,7 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
 import type { TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
+import {
+  getAccountStorageItem,
+  setAccountStorageItem,
+} from '@/storage/AccountScopedStorage';
 
 const CONTACTS_STORAGE_KEY = 'safemelink.sos.trustedContacts';
 const LEGACY_CONTACTS_STORAGE_KEY = 'safemelink.trustedContacts';
@@ -32,22 +34,29 @@ const normalizeContacts = (contacts: StoredContact[]) =>
     .filter((contact) => contact.name && (contact.phone || contact.userId))
 
 export const ContactsStorage = {
-  async getContacts(): Promise<TrustedContact[]> {
-    const storedContacts =
-      (await AsyncStorage.getItem(CONTACTS_STORAGE_KEY)) ??
-      (await AsyncStorage.getItem(LEGACY_CONTACTS_STORAGE_KEY));
+  async getContacts(userId: string): Promise<TrustedContact[]> {
+    const storedContacts = await getAccountStorageItem(
+      userId,
+      'trusted-contacts',
+      [CONTACTS_STORAGE_KEY, LEGACY_CONTACTS_STORAGE_KEY],
+    );
 
     if (!storedContacts) {
       return [];
     }
 
     const contacts = normalizeContacts(JSON.parse(storedContacts) as StoredContact[]);
-    await ContactsStorage.saveContacts(contacts);
+    await ContactsStorage.saveContacts(userId, contacts);
 
     return contacts;
   },
 
-  async saveContacts(contacts: TrustedContact[]) {
-    await AsyncStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+  async saveContacts(userId: string, contacts: TrustedContact[]) {
+    await setAccountStorageItem(
+      userId,
+      'trusted-contacts',
+      JSON.stringify(contacts),
+      [CONTACTS_STORAGE_KEY, LEGACY_CONTACTS_STORAGE_KEY],
+    );
   },
 };

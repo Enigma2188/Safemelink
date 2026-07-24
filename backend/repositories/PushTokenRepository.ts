@@ -26,4 +26,21 @@ export const PushTokenRepository = {
       platform: input.platform,
     });
   },
+
+  async deactivateForUserAndToken(userId: string, expoPushToken: string) {
+    const { error } = await requireSupabaseClient()
+      .from('device_push_tokens')
+      .update({
+        active: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('expo_push_token', expoPushToken);
+
+    if (error) {
+      throw new BackendError('Impossibile disattivare il token push del dispositivo.', error);
+    }
+
+    console.log('[SafeMeLink Push] Token disattivato per il logout.', { userId });
+  },
 };
