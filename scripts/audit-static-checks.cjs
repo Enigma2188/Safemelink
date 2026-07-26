@@ -88,7 +88,7 @@ check('Push recipients are trusted, unique, active, and exclude sender', () => {
 
 check('Notification data contains no sender UUID or coordinates', () => {
   const dataBlock = pushFunction.match(
-    /channelId: SOS_CHANNEL_ID,\s*data:\s*\{([\s\S]*?)\n\s*\},\n\s*\}\)\);/,
+    /channelId: SOS_CHANNEL_ID,\s*data:\s*\{([\s\S]*?)\r?\n\s*\},\r?\n\s*\}\)\);/,
   )?.[1];
   assert.ok(dataBlock, 'Notification data block not found.');
   assert.match(dataBlock, /type: 'sos_alert'/);
