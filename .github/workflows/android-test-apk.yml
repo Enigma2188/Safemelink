@@ -2,12 +2,6 @@ name: Build SafeMeLink Android test APK
 
 on:
   workflow_dispatch:
-    inputs:
-      source_ref:
-        description: Branch or commit SHA to build
-        required: true
-        default: main
-        type: string
 
 permissions:
   contents: read
@@ -25,21 +19,27 @@ jobs:
       CI: "true"
 
     steps:
-      - name: Validate requested source ref
-        env:
-          SOURCE_REF: ${{ inputs.source_ref }}
-        run: |
-          if [ -z "${SOURCE_REF//[[:space:]]/}" ]; then
-            echo "::error::source_ref is required and cannot be blank."
-            exit 1
-          fi
-
-      - name: Checkout requested source ref
+      - name: Checkout SafeMeLink test candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: test/android-apk
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify checked out source
+        run: |
+          git rev-parse HEAD
+          git branch --show-current
+          git log -1 --oneline
+          git status --short --branch
+
+          checked_out_sha="$(git rev-parse HEAD)"
+          test_branch_sha="$(git rev-parse refs/remotes/origin/test/android-apk)"
+
+          if [ "$checked_out_sha" != "$test_branch_sha" ]; then
+            echo "::error::Wrong Git revision checked out: expected origin/test/android-apk."
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -89,6 +89,9 @@ jobs:
           printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > google-services.json
           chmod 600 google-services.json
           node -e "const f=require('./google-services.json'); const p=f.client?.some(c=>c.client_info?.android_client_info?.package_name==='com.tiziano.safemelink'); if(!p) throw new Error('google-services.json non contiene il package Android SafeMeLink.');"
+
+      - name: Verify test candidate index.tsx
+        run: node scripts/verify-android-test-candidate.cjs
 
       - name: TypeScript
         run: npx tsc --noEmit
