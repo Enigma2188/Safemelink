@@ -1,9 +1,13 @@
 import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import { type Href, useRouter } from 'expo-router';
+import { Alert, Linking } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
-import { PushNotificationService } from '@/services/PushNotificationService';
+import {
+  NotificationPermissionError,
+  PushNotificationService,
+} from '@/services/PushNotificationService';
 
 export function PushTokenRegistrar() {
   const { session, isInitializing } = useAuth();
@@ -80,6 +84,27 @@ export function PushTokenRegistrar() {
 
     void PushNotificationService.registerDeviceForUser(userId)
       .catch((error: unknown) => {
+        if (error instanceof NotificationPermissionError) {
+          Alert.alert(
+            'Notifiche non autorizzate',
+            error.message,
+            [
+              { text: 'Non ora', style: 'cancel' },
+              {
+                text: 'Apri impostazioni',
+                onPress: () => {
+                  void Linking.openSettings().catch((settingsError: unknown) => {
+                    console.warn(
+                      '[SafeMeLink Push] Apertura impostazioni non riuscita.',
+                      settingsError,
+                    );
+                  });
+                },
+              },
+            ],
+          );
+        }
+
         console.warn('Registrazione Expo Push non riuscita.', error);
       })
       .finally(() => {

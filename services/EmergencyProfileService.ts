@@ -27,7 +27,7 @@ export type EmergencyProfileDraft = {
 };
 
 export type EmergencyProfile = EmergencyProfileDraft & {
-  updatedAt: string;
+  updatedAt: string | null;
 };
 
 export type EmergencyProfileValidation =
@@ -103,18 +103,24 @@ export function validateEmergencyProfile(
 
 const mapStoredProfile = (
   row: Awaited<ReturnType<typeof EmergencyProfileRepository.getCurrent>>,
-): EmergencyProfile => ({
-  declaredBloodGroup: row.declared_blood_group ?? '',
-  severeAllergies: row.severe_allergies ?? '',
-  importantConditions: row.important_conditions ?? '',
-  relevantMedications: row.relevant_medications ?? '',
-  lifesavingMedications: row.lifesaving_medications ?? '',
-  iceContact: row.ice_contact ?? '',
-  emergencyNotes: row.emergency_notes ?? '',
-  shareMedicalDataDuringSOS: row.share_medical_data_during_sos,
-  shareICEContactDuringSOS: row.share_ice_contact_during_sos,
-  updatedAt: row.profile_updated_at,
-});
+): EmergencyProfile =>
+  row
+    ? {
+        declaredBloodGroup: row.declared_blood_group ?? '',
+        severeAllergies: row.severe_allergies ?? '',
+        importantConditions: row.important_conditions ?? '',
+        relevantMedications: row.relevant_medications ?? '',
+        lifesavingMedications: row.lifesaving_medications ?? '',
+        iceContact: row.ice_contact ?? '',
+        emergencyNotes: row.emergency_notes ?? '',
+        shareMedicalDataDuringSOS: row.share_medical_data_during_sos,
+        shareICEContactDuringSOS: row.share_ice_contact_during_sos,
+        updatedAt: row.profile_updated_at,
+      }
+    : {
+        ...EMPTY_EMERGENCY_PROFILE,
+        updatedAt: null,
+      };
 
 export const EmergencyProfileService = {
   async getCurrent() {

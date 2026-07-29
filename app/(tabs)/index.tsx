@@ -93,6 +93,7 @@ export default function HomeScreen() {
   const passphraseCooldownUntilRef = useRef(0);
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
+  const sosCompletionInFlightRef = useRef(false);
   const nebulaPulse = useRef(new Animated.Value(0)).current;
   const logoGlowPulse = useRef(new Animated.Value(0)).current;
   const sosGlowPulse = useRef(new Animated.Value(0)).current;
@@ -638,6 +639,10 @@ export default function HomeScreen() {
   };
 
   const completeSOS = useCallback(async () => {
+    if (sosCompletionInFlightRef.current) {
+      return;
+    }
+
     if (!userId) {
       setStatus('idle');
       Alert.alert('SOS', 'Accedi prima di attivare un SOS.');
@@ -645,6 +650,7 @@ export default function HomeScreen() {
     }
 
     const actionUserId = userId;
+    sosCompletionInFlightRef.current = true;
     setStatus('sending');
 
     try {
@@ -663,8 +669,21 @@ export default function HomeScreen() {
         Alert.alert(
           'SOS non inviato',
           error instanceof Error ? error.message : 'Errore inatteso.',
+          [
+            { text: 'Annulla', style: 'cancel' },
+            {
+              text: 'Riprova',
+              onPress: () => {
+                if (activeUserIdRef.current === actionUserId) {
+                  void completeSOS();
+                }
+              },
+            },
+          ],
         );
       }
+    } finally {
+      sosCompletionInFlightRef.current = false;
     }
   }, [userId]);
 
@@ -1048,6 +1067,9 @@ export default function HomeScreen() {
           <Text style={styles.countdownLabel}>SOS tra</Text>
           <Text style={styles.countdownValue}>{remainingSeconds}</Text>
           <Text style={styles.countdownText}>Annulla se non vuoi inviare il messaggio.</Text>
+          <Pressable style={styles.sendNowButton} onPress={() => void completeSOS()}>
+            <Text style={styles.sendNowButtonText}>Invia subito</Text>
+          </Pressable>
           <Pressable style={styles.cancelButton} onPress={cancelSOS}>
             <Text style={styles.cancelButtonText}>Annulla SOS</Text>
           </Pressable>
@@ -1687,9 +1709,21 @@ const styles = StyleSheet.create({
   cancelButton: {
     backgroundColor: '#7a3d00',
     borderRadius: 6,
+    marginTop: 10,
     padding: 14,
   },
   cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  sendNowButton: {
+    backgroundColor: '#b71c1c',
+    borderRadius: 6,
+    padding: 14,
+  },
+  sendNowButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '800',

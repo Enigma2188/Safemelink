@@ -11,6 +11,8 @@ const check = (name, callback) => {
 };
 
 const radarService = read('services/RadarService.ts');
+const radarRepository = read('backend/repositories/RadarRepository.ts');
+const radarProvider = read('components/RadarProvider.tsx');
 const radarPresenceMigration = read(
   'supabase/migrations/20260722130000_radar_presence.sql',
 );
@@ -18,9 +20,16 @@ const radarMigration = read(
   'supabase/migrations/20260722140000_radar_preferences_and_nickname.sql',
 );
 const emergencyService = read('services/EmergencyProfileService.ts');
+const emergencyRepository = read(
+  'backend/repositories/EmergencyProfileRepository.ts',
+);
+const emergencyHook = read('hooks/useEmergencyProfile.ts');
+const emergencyScreen = read('screens/EmergencyProfileScreen.tsx');
 const emergencyMigration = read(
   'supabase/migrations/20260723120000_emergency_profile.sql',
 );
+const backendErrors = read('backend/errors/BackendError.ts');
+const databaseTypes = read('backend/database.types.ts');
 const pushFunction = read('supabase/functions/send-sos-push/index.ts');
 const pushRecipients = read('supabase/functions/_shared/pushRecipients.ts');
 const receivedSOSMigration = read(
@@ -38,6 +47,37 @@ check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_RESULT_LIMIT = 25/);
 });
 
+check('Radar missing preferences are initialized with safe OFF defaults', () => {
+  assert.match(radarRepository, /\.rpc\('get_my_radar_preferences'\)[\s\S]*\.maybeSingle\(\)/);
+  assert.match(radarService, /DEFAULT_RADAR_PREFERENCES = \{[\s\S]*radarEnabled: false/);
+  assert.match(radarService, /visibleToNearby: true/);
+  assert.match(radarService, /showNickname: false/);
+  assert.match(
+    radarService,
+    /if \(storedPreferences\)[\s\S]*RadarRepository\.updatePreferences\(DEFAULT_RADAR_PREFERENCES\)/,
+  );
+  assert.match(
+    radarMigration,
+    /insert into public\.radar_preferences \(user_id\)[\s\S]*on conflict \(user_id\) do nothing/,
+  );
+});
+
+check('Radar OFF performs no location publication or nearby search', () => {
+  assert.match(radarService, /preferences\?\.radarEnabled && preferences\.visibleToNearby/);
+  assert.match(
+    radarProvider,
+    /!canParticipate[\s\S]*cycleInFlightRef\.current[\s\S]*return;/,
+  );
+  assert.match(
+    radarProvider,
+    /if \(!canParticipate \|\| interval\)[\s\S]*return;/,
+  );
+  assert.match(
+    radarProvider,
+    /if \(session && preferencesUserId === session\.user\.id && preferences\)[\s\S]*deactivate\(\)/,
+  );
+});
+
 check('Radar reciprocity is enforced for caller and candidates', () => {
   assert.match(
     radarMigration,
@@ -50,10 +90,61 @@ check('Radar reciprocity is enforced for caller and candidates', () => {
   assert.match(radarMigration, /candidate\.user_id <> current_user_id/);
 });
 
+check('Radar has no invisible mode and nickname remains optional', () => {
+  assert.match(radarService, /radarEnabled && preferences\.visibleToNearby/);
+  assert.match(radarService, /if \(!normalized\)[\s\S]*normalized: null/);
+  assert.match(
+    radarMigration,
+    /public_nickname is null[\s\S]*public_nickname ~ '\^\[A-Za-z0-9_-\]\{3,20\}\$'/,
+  );
+});
+
+check('Radar RPC exposes rounded distance but no precise coordinates', () => {
+  const returnSignature = radarMigration.match(
+    /create function public\.find_nearby_users\([\s\S]*?returns table \(([\s\S]*?)\)\r?\nlanguage plpgsql/,
+  )?.[1];
+  assert.ok(returnSignature, 'Radar return signature not found.');
+  assert.match(returnSignature, /distance_meters integer/);
+  assert.doesNotMatch(returnSignature, /latitude|longitude/);
+  assert.match(radarMigration, /greatest\(50, round\(candidate\.exact_distance_meters \/ 50\) \* 50\)/);
+});
+
 check('Radar technical limits and expiry are bounded', () => {
   assert.match(radarMigration, /search_radius_meters > 5000/);
   assert.match(radarMigration, /result_limit > 50/);
   assert.match(radarPresenceMigration, /interval '5 minutes'/);
+});
+
+check('Emergency missing record is treated as an empty editable profile', () => {
+  assert.match(emergencyRepository, /\.rpc\('get_my_emergency_profile'\)[\s\S]*\.maybeSingle\(\)/);
+  assert.match(
+    emergencyService,
+    /row[\s\S]*\? \{[\s\S]*: \{[\s\S]*\.\.\.EMPTY_EMERGENCY_PROFILE,[\s\S]*updatedAt: null/,
+  );
+  assert.match(
+    emergencyMigration,
+    /insert into public\.emergency_profiles \(user_id\)[\s\S]*on conflict \(user_id\) do nothing/,
+  );
+});
+
+check('Emergency load state gates editing and saving', () => {
+  assert.match(emergencyHook, /setHasLoadedProfile\(false\);[\s\S]*setStatus\('loading'\)/);
+  assert.match(
+    emergencyHook,
+    /setDraft\(profile\);[\s\S]*setHasLoadedProfile\(true\);[\s\S]*setStatus\('ready'\)/,
+  );
+  assert.match(
+    emergencyHook,
+    /\.catch\([\s\S]*setStatus\('error'\)[\s\S]*setError\(/,
+  );
+  assert.match(
+    emergencyScreen,
+    /const canEdit = hasLoadedProfile[\s\S]*status !== 'loading'/,
+  );
+  assert.match(
+    emergencyScreen,
+    /disabled=\{!canEdit \|\| isBusy \|\| !validation\.valid\}/,
+  );
 });
 
 check('Emergency blood group uses letter O, never number zero', () => {
@@ -63,6 +154,23 @@ check('Emergency blood group uses letter O, never number zero', () => {
   assert.doesNotMatch(emergencyMigration, /'0\+'|'0-'/);
 });
 
+check('Emergency medical and ICE consent remain separate', () => {
+  assert.match(emergencyService, /shareMedicalDataDuringSOS: boolean/);
+  assert.match(emergencyService, /shareICEContactDuringSOS: boolean/);
+  assert.match(
+    emergencyMigration,
+    /share_medical_data_during_sos boolean not null default false/,
+  );
+  assert.match(
+    emergencyMigration,
+    /share_ice_contact_during_sos boolean not null default false/,
+  );
+  assert.match(
+    emergencyMigration,
+    /case when emergency_profile\.share_medical_data_during_sos[\s\S]*case when emergency_profile\.share_ice_contact_during_sos/,
+  );
+});
+
 check('Emergency data requires active SOS, trusted access, and consent', () => {
   assert.match(emergencyMigration, /status in \('open', 'accepted'\)/);
   assert.match(emergencyMigration, /trusted_contact\.linked_profile_id = auth\.uid\(\)/);
@@ -70,6 +178,93 @@ check('Emergency data requires active SOS, trusted access, and consent', () => {
     emergencyMigration,
     /share_medical_data_during_sos = true[\s\S]*share_ice_contact_during_sos = true/,
   );
+});
+
+check('Health data is absent from Radar and push payloads', () => {
+  for (const source of [radarService, radarRepository, pushFunction]) {
+    assert.doesNotMatch(
+      source,
+      /declared_blood_group|severe_allergies|important_conditions|relevant_medications|lifesaving_medications|ice_contact|emergency_notes/,
+    );
+  }
+});
+
+check('Feature backend errors are safely categorized', () => {
+  assert.match(backendErrors, /PGRST202/);
+  assert.match(backendErrors, /PGRST205/);
+  assert.match(backendErrors, /42883/);
+  assert.match(backendErrors, /42P01/);
+  assert.match(backendErrors, /28000/);
+  assert.match(backendErrors, /42501/);
+  assert.match(backendErrors, /failed to fetch\|network request failed/);
+  assert.match(backendErrors, /console\.warn\(`\[SafeMeLink Backend\]/);
+  const diagnosticFields = backendErrors.match(
+    /console\.warn\(`\[SafeMeLink Backend\][\s\S]*?\{([\s\S]*?)\}\);/,
+  )?.[1];
+  assert.ok(diagnosticFields, 'Backend diagnostic log not found.');
+  assert.match(diagnosticFields, /category/);
+  assert.match(diagnosticFields, /code/);
+  assert.doesNotMatch(diagnosticFields, /cause|message/);
+});
+
+check('Radar and Emergency RPC types match client calls', () => {
+  for (const rpcName of [
+    'get_my_radar_preferences',
+    'update_my_radar_preferences',
+    'update_my_radar_presence',
+    'deactivate_my_radar_presence',
+    'find_nearby_users',
+    'get_my_emergency_profile',
+    'update_my_emergency_profile',
+    'get_received_sos_emergency_profile',
+  ]) {
+    assert.match(databaseTypes, new RegExp(`${rpcName}:`));
+  }
+});
+
+check('Radar and Emergency SQL access is scoped to authenticated RPCs', () => {
+  assert.match(radarPresenceMigration, /alter table public\.radar_presence enable row level security/);
+  assert.match(radarMigration, /alter table public\.radar_preferences enable row level security/);
+  assert.match(emergencyMigration, /alter table public\.emergency_profiles enable row level security/);
+
+  for (const [migration, functionNames] of [
+    [
+      radarPresenceMigration,
+      ['update_my_radar_presence', 'deactivate_my_radar_presence', 'find_nearby_users'],
+    ],
+    [
+      radarMigration,
+      ['get_my_radar_preferences', 'update_my_radar_preferences', 'find_nearby_users'],
+    ],
+    [
+      emergencyMigration,
+      [
+        'get_my_emergency_profile',
+        'update_my_emergency_profile',
+        'get_received_sos_emergency_profile',
+      ],
+    ],
+  ]) {
+    for (const functionName of functionNames) {
+      const functionStart =
+        migration.indexOf(`create or replace function public.${functionName}`) >= 0
+          ? migration.indexOf(`create or replace function public.${functionName}`)
+          : migration.indexOf(`create function public.${functionName}`);
+      assert.notEqual(functionStart, -1, `${functionName} missing`);
+      const functionEnd = migration.indexOf('$$;', functionStart);
+      const functionBody = migration.slice(functionStart, functionEnd);
+      assert.match(functionBody, /security definer/);
+      assert.match(functionBody, /set search_path = public, pg_temp/);
+      assert.match(functionBody, /auth\.uid\(\)/);
+    }
+  }
+
+  assert.match(radarPresenceMigration, /revoke all on table public\.radar_presence from anon, authenticated/);
+  assert.match(radarMigration, /revoke all on table public\.radar_preferences from anon, authenticated/);
+  assert.match(emergencyMigration, /revoke all on table public\.emergency_profiles from anon, authenticated/);
+  assert.match(radarPresenceMigration, /grant execute on function public\.update_my_radar_presence[\s\S]*to authenticated/);
+  assert.match(radarMigration, /grant execute on function public\.get_my_radar_preferences\(\) to authenticated/);
+  assert.match(emergencyMigration, /grant execute on function public\.get_my_emergency_profile\(\) to authenticated/);
 });
 
 check('Push function authenticates JWT and binds SOS to its owner', () => {

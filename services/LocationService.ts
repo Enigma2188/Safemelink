@@ -13,6 +13,13 @@ export class LocationPermissionError extends Error {
   }
 }
 
+export class LocationUnavailableError extends Error {
+  constructor() {
+    super('GPS non disponibile o disattivato. Attivalo e riprova.');
+    this.name = 'LocationUnavailableError';
+  }
+}
+
 export const LocationService = {
   async getCurrentLocation(): Promise<SOSLocation> {
     const permission = await Location.requestForegroundPermissionsAsync();
@@ -21,9 +28,22 @@ export const LocationService = {
       throw new LocationPermissionError();
     }
 
-    const position = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
-    });
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+
+    if (!servicesEnabled) {
+      throw new LocationUnavailableError();
+    }
+
+    let position: Location.LocationObject;
+
+    try {
+      position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+    } catch (error) {
+      console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', error);
+      throw new LocationUnavailableError();
+    }
 
     return {
       latitude: position.coords.latitude,

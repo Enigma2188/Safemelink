@@ -54,6 +54,13 @@ export type RadarNicknameValidation =
   | { valid: true; normalized: string | null }
   | { valid: false; message: string };
 
+export const DEFAULT_RADAR_PREFERENCES = {
+  radarEnabled: false,
+  visibleToNearby: true,
+  showNickname: false,
+  publicNickname: null,
+} as const;
+
 export function canParticipateInRadar(preferences: RadarPreferences | null) {
   return Boolean(preferences?.radarEnabled && preferences.visibleToNearby);
 }
@@ -145,7 +152,15 @@ const normalizeNearbyUsers = (rows: NearbyUserRow[]): NearbyUser[] => {
 
 export const RadarService = {
   async getPreferences() {
-    return normalizePreferences(await RadarRepository.getPreferences());
+    const storedPreferences = await RadarRepository.getPreferences();
+
+    if (storedPreferences) {
+      return normalizePreferences(storedPreferences);
+    }
+
+    return normalizePreferences(
+      await RadarRepository.updatePreferences(DEFAULT_RADAR_PREFERENCES),
+    );
   },
 
   async updatePreferences(changes: Omit<RadarPreferences, 'updatedAt'>) {

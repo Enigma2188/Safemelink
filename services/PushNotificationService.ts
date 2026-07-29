@@ -8,6 +8,15 @@ import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository'
 
 export const SOS_NOTIFICATION_CHANNEL_ID = 'sos-alerts';
 
+export class NotificationPermissionError extends Error {
+  constructor() {
+    super(
+      'Le notifiche non sono autorizzate. Abilitale nelle impostazioni del dispositivo per ricevere gli SOS SafeMeLink.',
+    );
+    this.name = 'NotificationPermissionError';
+  }
+}
+
 const isExpoPushToken = (token: string) =>
   /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token);
 
@@ -54,7 +63,7 @@ async function registerDevice(userId: string) {
       userId,
       status: finalPermissions.status,
     });
-    return null;
+    throw new NotificationPermissionError();
   }
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;

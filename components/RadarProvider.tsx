@@ -256,7 +256,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       clearRadarState(setUsers, setError);
       setStatus(session ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
 
-      if (session) {
+      if (session && preferencesUserId === session.user.id && preferences) {
         deactivate();
       } else {
         lastPublishedRef.current = null;
@@ -277,6 +277,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
   }, [
     deactivate,
     participationEnabled,
+    preferences,
     preferencesUserId,
     radarEnabled,
     session,

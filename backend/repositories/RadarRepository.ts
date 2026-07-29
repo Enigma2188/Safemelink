@@ -1,4 +1,4 @@
-import { BackendError } from '@/backend/errors/BackendError';
+import { createBackendError } from '@/backend/errors/BackendError';
 import { requireSupabaseClient } from '@/backend/supabaseClient';
 
 export type NearbyUserRow = {
@@ -24,13 +24,30 @@ export type RadarPreferencesUpdate = {
   publicNickname: string | null;
 };
 
+const radarErrorMessages = {
+  backendUnavailable:
+    'Il Radar non è ancora disponibile. È necessario aggiornare il servizio SafeMeLink.',
+  unauthenticated: 'Sessione scaduta. Accedi di nuovo.',
+  forbidden: 'Operazione Radar non autorizzata.',
+  network: 'Connessione non disponibile. Controlla la rete e riprova.',
+} as const;
+
 export const RadarRepository = {
-  async getPreferences(): Promise<RadarPreferencesRow> {
+  async getPreferences(): Promise<RadarPreferencesRow | null> {
     const client = requireSupabaseClient();
-    const { data, error } = await client.rpc('get_my_radar_preferences').single();
+    const { data, error } = await client
+      .rpc('get_my_radar_preferences')
+      .maybeSingle();
 
     if (error) {
-      throw new BackendError('Impossibile caricare le preferenze Radar.', error);
+      throw createBackendError(
+        'radar.load_preferences',
+        {
+          ...radarErrorMessages,
+          fallback: 'Impossibile caricare le preferenze Radar.',
+        },
+        error,
+      );
     }
 
     return data;
@@ -48,10 +65,15 @@ export const RadarRepository = {
       .single();
 
     if (error) {
-      const message = error.code === '23505'
-        ? 'Questo nickname pubblico è già utilizzato.'
-        : 'Impossibile salvare le preferenze Radar.';
-      throw new BackendError(message, error);
+      throw createBackendError(
+        'radar.save_preferences',
+        {
+          ...radarErrorMessages,
+          conflict: 'Questo nickname pubblico è già utilizzato.',
+          fallback: 'Impossibile salvare le preferenze Radar.',
+        },
+        error,
+      );
     }
 
     return data;
@@ -66,7 +88,14 @@ export const RadarRepository = {
     });
 
     if (error) {
-      throw new BackendError('Impossibile aggiornare la presenza Radar.', error);
+      throw createBackendError(
+        'radar.publish_presence',
+        {
+          ...radarErrorMessages,
+          fallback: 'Impossibile aggiornare la presenza Radar.',
+        },
+        error,
+      );
     }
 
     return data;
@@ -80,7 +109,14 @@ export const RadarRepository = {
     });
 
     if (error) {
-      throw new BackendError('Impossibile cercare utenti nelle vicinanze.', error);
+      throw createBackendError(
+        'radar.find_nearby',
+        {
+          ...radarErrorMessages,
+          fallback: 'Impossibile cercare utenti nelle vicinanze.',
+        },
+        error,
+      );
     }
 
     return data ?? [];
@@ -91,7 +127,14 @@ export const RadarRepository = {
     const { error } = await client.rpc('deactivate_my_radar_presence');
 
     if (error) {
-      throw new BackendError('Impossibile disattivare la presenza Radar.', error);
+      throw createBackendError(
+        'radar.deactivate_presence',
+        {
+          ...radarErrorMessages,
+          fallback: 'Impossibile disattivare la presenza Radar.',
+        },
+        error,
+      );
     }
   },
 };

@@ -9,7 +9,7 @@ const statusMessages: Record<Exclude<RadarViewStatus, 'ready'>, string> = {
   off: 'Radar disattivato.',
   visibility_required: 'Attiva “Mostrami agli utenti vicini” per entrare nella rete Radar.',
   searching: 'Ricerca utenti vicini...',
-  empty: 'Nessun utente recente nelle vicinanze.',
+  empty: 'Radar attivo: nessun utente recente nelle vicinanze.',
   permission_required: 'Autorizzazione alla posizione necessaria per usare il Radar.',
   position_unavailable: 'Posizione non disponibile.',
   accuracy_insufficient: 'Segnale GPS non abbastanza preciso. Riprova in uno spazio aperto.',

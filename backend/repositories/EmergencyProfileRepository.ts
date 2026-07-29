@@ -1,4 +1,4 @@
-import { BackendError } from '@/backend/errors/BackendError';
+import { createBackendError } from '@/backend/errors/BackendError';
 import { requireSupabaseClient } from '@/backend/supabaseClient';
 
 export type EmergencyProfileUpdate = {
@@ -13,14 +13,29 @@ export type EmergencyProfileUpdate = {
   shareICEContactDuringSOS: boolean;
 };
 
+const emergencyProfileErrorMessages = {
+  backendUnavailable:
+    'Il Profilo di Emergenza non è ancora disponibile. È necessario aggiornare il servizio SafeMeLink.',
+  unauthenticated: 'Sessione scaduta. Accedi di nuovo.',
+  forbidden: 'Accesso al Profilo di Emergenza non autorizzato.',
+  network: 'Connessione non disponibile. Controlla la rete e riprova.',
+} as const;
+
 export const EmergencyProfileRepository = {
   async getCurrent() {
     const { data, error } = await requireSupabaseClient()
       .rpc('get_my_emergency_profile')
-      .single();
+      .maybeSingle();
 
     if (error) {
-      throw new BackendError('Impossibile caricare il Profilo di Emergenza.', error);
+      throw createBackendError(
+        'emergency_profile.load',
+        {
+          ...emergencyProfileErrorMessages,
+          fallback: 'Impossibile caricare il Profilo di Emergenza.',
+        },
+        error,
+      );
     }
 
     return data;
@@ -42,7 +57,14 @@ export const EmergencyProfileRepository = {
       .single();
 
     if (error) {
-      throw new BackendError('Impossibile salvare il Profilo di Emergenza.', error);
+      throw createBackendError(
+        'emergency_profile.save',
+        {
+          ...emergencyProfileErrorMessages,
+          fallback: 'Impossibile salvare il Profilo di Emergenza.',
+        },
+        error,
+      );
     }
 
     return data;
@@ -54,7 +76,14 @@ export const EmergencyProfileRepository = {
       .maybeSingle();
 
     if (error) {
-      throw new BackendError('Impossibile caricare i dati di emergenza condivisi.', error);
+      throw createBackendError(
+        'emergency_profile.load_shared',
+        {
+          ...emergencyProfileErrorMessages,
+          fallback: 'Impossibile caricare i dati di emergenza condivisi.',
+        },
+        error,
+      );
     }
 
     return data;
