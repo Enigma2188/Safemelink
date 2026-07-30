@@ -7,7 +7,6 @@ import 'react-native-reanimated';
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { RadarProvider } from '@/components/RadarProvider';
-import { TestAuthPanel } from '@/components/TestAuthPanel';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -23,9 +22,9 @@ export default function RootLayout() {
         <PushTokenRegistrar />
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={styles.container}>
-            <TestAuthPanel />
             <Stack>
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="login" options={{ title: 'Login' }} />
               <Stack.Screen
                 name="emergency-profile"
                 options={{ title: 'Profilo di Emergenza' }}

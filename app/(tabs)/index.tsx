@@ -1,5 +1,6 @@
 import { type Href, Link, useFocusEffect } from 'expo-router';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Easing, Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -64,7 +65,7 @@ const estimateWalkingMinutes = (distanceKm: number) =>
   Math.max(1, Math.round((distanceKm / WALKING_SPEED_KM_H) * 60 * GO_HOME_SAFETY_MARGIN));
 
 export default function HomeScreen() {
-  const { session, isInitializing } = useAuth();
+  const { session, isInitializing, isSubmitting, logout } = useAuth();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
@@ -1024,7 +1025,7 @@ export default function HomeScreen() {
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <Pressable style={styles.iconButton} onPress={() => setDrawerVisible(true)}>
-          <Text style={styles.iconButtonText}>☰</Text>
+          <Ionicons color="#F7FAFF" name="menu-outline" size={25} />
         </Pressable>
         <View style={styles.topTitleWrap}>
           <Text style={styles.appName}>SafeMeLink</Text>
@@ -1107,9 +1108,11 @@ export default function HomeScreen() {
       )}
 
       {status === 'idle' && activePanel === 'home' && (
-        <View style={styles.sosPanel}>
+          <View style={styles.sosPanel}>
           <View style={styles.sosStage}>
             <Animated.View style={[styles.sosGlow, sosGlowAnimatedStyle]} />
+            <View style={styles.sosOuterRing} />
+            <View style={styles.sosInnerRing} />
             <Pressable style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={startSOSCountdown}>
               <Text style={styles.sosButtonText}>SOS</Text>
             </Pressable>
@@ -1287,56 +1290,112 @@ export default function HomeScreen() {
           <Pressable style={styles.drawerScrim} onPress={() => setDrawerVisible(false)} />
           <SafeAreaView style={styles.drawer}>
             <View style={styles.drawerHeader}>
-              <Text style={styles.drawerTitle}>SafeMeLink</Text>
+              <View style={styles.drawerBrand}>
+                <View style={styles.drawerBrandIcon}>
+                  <Ionicons color="#45B7FF" name="link-outline" size={22} />
+                </View>
+                <View style={styles.drawerBrandCopy}>
+                  <Text style={styles.drawerTitle}>SafeMeLink</Text>
+                  <View style={styles.drawerUserStatus}>
+                    <View
+                      style={[
+                        styles.drawerStatusDot,
+                        session ? styles.drawerStatusOnline : styles.drawerStatusOffline,
+                      ]}
+                    />
+                    <Text numberOfLines={1} style={styles.drawerUserText}>
+                      {session?.user.email ?? 'Utente non autenticato'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
               <Pressable style={styles.drawerClose} onPress={() => setDrawerVisible(false)}>
-                <Text style={styles.drawerCloseText}>x</Text>
+                <Ionicons color="#A8B5D1" name="close-outline" size={24} />
               </Pressable>
             </View>
 
             <Text style={styles.drawerSectionLabel}>EMERGENZA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('home')}>
+              <Ionicons color="#FF607A" name="alert-circle-outline" size={20} />
               <Text style={styles.drawerItemText}>SOS</Text>
             </Pressable>
             <Link href={"/(tabs)/contacts" as any} asChild>
               <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Ionicons color="#45B7FF" name="people-outline" size={20} />
                 <Text style={styles.drawerItemText}>Contatti fidati</Text>
               </Pressable>
             </Link>
             <Link href={'/emergency-profile' as unknown as Href} asChild>
               <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Text style={styles.drawerItemText}>Profilo di Emergenza</Text>
+                <Ionicons color="#A78BFA" name="medkit-outline" size={20} />
+                <Text style={styles.drawerItemText}>Profilo</Text>
               </Pressable>
             </Link>
 
+            <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>SICUREZZA PREVENTIVA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('checkpoint')}>
+              <Ionicons color="#45B7FF" name="checkmark-circle-outline" size={20} />
               <Text style={styles.drawerItemText}>Checkpoint</Text>
             </Pressable>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('goHome')}>
+              <Ionicons color="#7868FF" name="navigate-outline" size={20} />
               <Text style={styles.drawerItemText}>Torno a casa</Text>
             </Pressable>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('passphrase')}>
+              <Ionicons color="#A78BFA" name="key-outline" size={20} />
               <Text style={styles.drawerItemText}>Parola d’ordine</Text>
             </Pressable>
 
+            <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>COMMUNITY</Text>
             <Link href={'/radar' as unknown as Href} asChild>
               <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Ionicons color="#45B7FF" name="radio-outline" size={20} />
                 <Text style={styles.drawerItemText}>Radar</Text>
               </Pressable>
             </Link>
             <View style={styles.drawerItemDisabled}>
-              <Text style={styles.drawerItemDisabledText}>Guardian</Text>
+              <View style={styles.drawerDisabledCopy}>
+                <Ionicons color="#687898" name="shield-checkmark-outline" size={20} />
+                <Text style={styles.drawerItemDisabledText}>Guardian</Text>
+              </View>
               <Text style={styles.drawerBadge}>In arrivo</Text>
             </View>
             <View style={styles.drawerItemDisabled}>
-              <Text style={styles.drawerItemDisabledText}>Punti Safe</Text>
+              <View style={styles.drawerDisabledCopy}>
+                <Ionicons color="#687898" name="location-outline" size={20} />
+                <Text style={styles.drawerItemDisabledText}>Punti Safe</Text>
+              </View>
               <Text style={styles.drawerBadge}>In arrivo</Text>
             </View>
 
+            <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>IMPOSTAZIONI</Text>
+            {!session ? (
+              <Link href={'/login' as unknown as Href} asChild>
+                <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                  <Ionicons color="#45B7FF" name="log-in-outline" size={20} />
+                  <Text style={styles.drawerItemText}>Login</Text>
+                </Pressable>
+              </Link>
+            ) : (
+              <Pressable
+                disabled={isSubmitting}
+                style={styles.drawerItem}
+                onPress={() => {
+                  setDrawerVisible(false);
+                  void logout();
+                }}>
+                <Ionicons color="#A8B5D1" name="log-out-outline" size={20} />
+                <Text style={styles.drawerItemText}>Logout</Text>
+              </Pressable>
+            )}
             <View style={styles.drawerItemDisabled}>
-              <Text style={styles.drawerItemDisabledText}>Impostazioni</Text>
+              <View style={styles.drawerDisabledCopy}>
+                <Ionicons color="#687898" name="settings-outline" size={20} />
+                <Text style={styles.drawerItemDisabledText}>Impostazioni</Text>
+              </View>
               <Text style={styles.drawerBadge}>In arrivo</Text>
             </View>
           </SafeAreaView>
@@ -1478,15 +1537,24 @@ const styles = StyleSheet.create({
   },
   container: {
     flexGrow: 1,
-    padding: 20,
-    paddingBottom: 36,
-    paddingTop: 18,
+    padding: 18,
+    paddingBottom: 42,
+    paddingTop: 14,
   },
   header: {
     alignItems: 'center',
+    backgroundColor: 'rgba(12, 20, 48, 0.68)',
+    borderColor: 'rgba(124, 145, 255, 0.2)',
+    borderRadius: 20,
+    borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 20,
+    padding: 10,
+    shadowColor: '#7868FF',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
   },
   topTitleWrap: {
     alignItems: 'center',
@@ -1494,32 +1562,28 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+    backgroundColor: 'rgba(69, 183, 255, 0.12)',
+    borderColor: 'rgba(69, 183, 255, 0.25)',
     borderRadius: 14,
     borderWidth: 1,
     height: 44,
     justifyContent: 'center',
     width: 44,
   },
-  iconButtonText: {
-    color: '#eef6ff',
-    fontSize: 24,
-    fontWeight: '800',
-  },
   iconButtonGhost: {
     height: 44,
     width: 44,
   },
   appName: {
-    color: '#f7fbff',
-    fontSize: 28,
-    fontWeight: '800',
+    color: '#F7FAFF',
+    fontSize: 25,
+    fontWeight: '900',
+    letterSpacing: 0.2,
   },
   subtitle: {
-    color: '#9fb5d9',
-    fontSize: 14,
-    marginTop: 4,
+    color: '#A8B5D1',
+    fontSize: 12,
+    marginTop: 2,
   },
   homePanel: {
     alignItems: 'center',
@@ -1527,54 +1591,58 @@ const styles = StyleSheet.create({
   logoStage: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
+    marginBottom: 4,
     width: '100%',
   },
   logoGlow: {
-    backgroundColor: '#1d8bff',
+    backgroundColor: '#7868FF',
     borderRadius: 140,
-    height: 170,
+    height: 130,
     position: 'absolute',
-    width: 260,
+    width: 230,
   },
   logo: {
     alignSelf: 'center',
-    height: 210,
+    height: 166,
     maxWidth: 380,
     width: '100%',
   },
   contactsSummary: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.09)',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    borderRadius: 18,
+    backgroundColor: 'rgba(12, 20, 48, 0.72)',
+    borderColor: 'rgba(69, 183, 255, 0.2)',
+    borderRadius: 20,
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 22,
-    padding: 16,
+    marginBottom: 18,
+    padding: 17,
+    shadowColor: '#45B7FF',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
     width: '100%',
   },
   summaryLabel: {
-    color: '#9fb5d9',
+    color: '#A8B5D1',
     fontSize: 13,
   },
   summaryValue: {
-    color: '#f7fbff',
+    color: '#F7FAFF',
     fontSize: 18,
     fontWeight: '800',
     marginTop: 2,
   },
   manageContactsButton: {
-    backgroundColor: 'rgba(88, 166, 255, 0.16)',
-    borderColor: 'rgba(88, 166, 255, 0.28)',
+    backgroundColor: 'rgba(69, 183, 255, 0.14)',
+    borderColor: 'rgba(69, 183, 255, 0.32)',
     borderRadius: 12,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
   manageContactsText: {
-    color: '#a9d7ff',
+    color: '#45B7FF',
     fontWeight: '800',
   },
   sosPanel: {
@@ -1583,62 +1651,78 @@ const styles = StyleSheet.create({
   },
   sosStage: {
     alignItems: 'center',
-    height: 226,
+    height: 278,
     justifyContent: 'center',
-    width: 226,
+    width: 278,
   },
   sosGlow: {
-    backgroundColor: '#ff2d55',
-    borderColor: 'rgba(103, 69, 255, 0.55)',
-    borderRadius: 113,
-    borderWidth: 2,
-    height: 226,
+    backgroundColor: '#FF3B5C',
+    borderColor: 'rgba(167, 139, 250, 0.45)',
+    borderRadius: 139,
+    borderWidth: 1,
+    height: 278,
     position: 'absolute',
-    shadowColor: '#ff2d55',
+    shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.58,
-    shadowRadius: 30,
-    width: 226,
+    shadowOpacity: 0.5,
+    shadowRadius: 34,
+    width: 278,
+  },
+  sosOuterRing: {
+    borderColor: 'rgba(167, 139, 250, 0.55)',
+    borderRadius: 127,
+    borderWidth: 1,
+    height: 254,
+    position: 'absolute',
+    width: 254,
+  },
+  sosInnerRing: {
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 111,
+    borderWidth: 1,
+    height: 222,
+    position: 'absolute',
+    width: 222,
   },
   sosButton: {
     alignItems: 'center',
-    backgroundColor: '#e11d2e',
-    borderColor: 'rgba(255, 255, 255, 0.4)',
-    borderRadius: 94,
+    backgroundColor: '#FF3B5C',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 101,
     borderWidth: 2,
     elevation: 8,
-    height: 188,
+    height: 202,
     justifyContent: 'center',
-    shadowColor: '#ff354d',
+    shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.62,
-    shadowRadius: 24,
-    width: 188,
+    shadowRadius: 28,
+    width: 202,
   },
   sosButtonPressed: {
     transform: [{ scale: 0.98 }],
   },
   sosButtonText: {
-    color: '#fff',
-    fontSize: 34,
+    color: '#F7FAFF',
+    fontSize: 38,
     fontWeight: '900',
   },
   helperText: {
-    color: '#b8c9e8',
+    color: '#A8B5D1',
     fontSize: 14,
     lineHeight: 20,
-    marginTop: 18,
+    marginTop: 10,
     textAlign: 'center',
   },
   statusDock: {
-    backgroundColor: 'rgba(7, 16, 39, 0.66)',
-    borderColor: 'rgba(129, 190, 255, 0.2)',
-    borderRadius: 18,
+    backgroundColor: 'rgba(12, 20, 48, 0.7)',
+    borderColor: 'rgba(120, 104, 255, 0.22)',
+    borderRadius: 20,
     borderWidth: 1,
     gap: 9,
     marginTop: 22,
     padding: 16,
-    shadowColor: '#1d8bff',
+    shadowColor: '#7868FF',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.14,
     shadowRadius: 18,
@@ -1683,32 +1767,40 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   countdownPanel: {
-    backgroundColor: 'rgba(255, 243, 224, 0.94)',
-    borderRadius: 18,
+    backgroundColor: 'rgba(42, 10, 28, 0.9)',
+    borderColor: 'rgba(255, 59, 92, 0.55)',
+    borderRadius: 22,
+    borderWidth: 1,
     marginBottom: 28,
-    padding: 20,
+    padding: 24,
+    shadowColor: '#FF3B5C',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
   },
   countdownLabel: {
-    color: '#7a3d00',
+    color: '#F7FAFF',
     fontSize: 16,
     fontWeight: '800',
     textAlign: 'center',
   },
   countdownValue: {
-    color: '#c62828',
-    fontSize: 64,
+    color: '#FF607A',
+    fontSize: 76,
     fontWeight: '900',
     textAlign: 'center',
   },
   countdownText: {
-    color: '#7a3d00',
+    color: '#D8C7D2',
     fontSize: 14,
     marginBottom: 14,
     textAlign: 'center',
   },
   cancelButton: {
-    backgroundColor: '#7a3d00',
-    borderRadius: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 14,
+    borderWidth: 1,
     marginTop: 10,
     padding: 14,
   },
@@ -1719,8 +1811,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   sendNowButton: {
-    backgroundColor: '#b71c1c',
-    borderRadius: 6,
+    backgroundColor: '#FF3B5C',
+    borderRadius: 14,
     padding: 14,
   },
   sendNowButtonText: {
@@ -1751,14 +1843,20 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emergencyPanel: {
-    backgroundColor: '#b71c1c',
-    borderRadius: 18,
+    backgroundColor: 'rgba(82, 12, 32, 0.94)',
+    borderColor: '#FF3B5C',
+    borderRadius: 22,
+    borderWidth: 1,
     marginBottom: 28,
-    padding: 20,
+    padding: 24,
+    shadowColor: '#FF3B5C',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 26,
   },
   emergencyLabel: {
-    color: '#fff',
-    fontSize: 28,
+    color: '#F7FAFF',
+    fontSize: 30,
     fontWeight: '900',
     textAlign: 'center',
   },
@@ -1963,8 +2061,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   drawer: {
-    backgroundColor: '#091123',
-    borderRightColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(7, 12, 32, 0.98)',
+    borderRightColor: 'rgba(120, 104, 255, 0.28)',
     borderRightWidth: 1,
     bottom: 0,
     left: 0,
@@ -1977,12 +2075,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 14,
+  },
+  drawerBrand: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 11,
+  },
+  drawerBrandIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(69, 183, 255, 0.12)',
+    borderColor: 'rgba(69, 183, 255, 0.25)',
+    borderRadius: 15,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  drawerBrandCopy: {
+    flex: 1,
   },
   drawerTitle: {
-    color: '#f7fbff',
-    fontSize: 24,
+    color: '#F7FAFF',
+    fontSize: 22,
     fontWeight: '900',
+  },
+  drawerUserStatus: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 3,
+  },
+  drawerStatusDot: {
+    borderRadius: 4,
+    height: 7,
+    width: 7,
+  },
+  drawerStatusOnline: {
+    backgroundColor: '#45D6A5',
+  },
+  drawerStatusOffline: {
+    backgroundColor: '#7D8AA7',
+  },
+  drawerUserText: {
+    color: '#A8B5D1',
+    flex: 1,
+    fontSize: 11,
   },
   drawerClose: {
     alignItems: 'center',
@@ -1992,36 +2131,34 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 36,
   },
-  drawerCloseText: {
-    color: '#dce9ff',
-    fontSize: 18,
-    fontWeight: '900',
-  },
   drawerSectionLabel: {
-    color: '#7d8fb2',
+    color: '#8492B3',
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
     marginBottom: 8,
-    marginTop: 16,
+    marginTop: 8,
   },
   drawerItem: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(167, 139, 250, 0.12)',
     borderRadius: 14,
     borderWidth: 1,
+    flexDirection: 'row',
+    gap: 11,
     marginBottom: 8,
     paddingHorizontal: 14,
     paddingVertical: 13,
   },
   drawerItemText: {
-    color: '#f7fbff',
+    color: '#F7FAFF',
     fontSize: 15,
     fontWeight: '800',
   },
   drawerItemDisabled: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    backgroundColor: 'rgba(255, 255, 255, 0.025)',
     borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 14,
     borderWidth: 1,
@@ -2032,14 +2169,24 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
   drawerItemDisabledText: {
-    color: '#8ea1c5',
+    color: '#71809F',
     fontSize: 15,
     fontWeight: '700',
   },
   drawerBadge: {
-    color: '#b9c7e6',
+    color: '#7E8BA6',
     fontSize: 12,
     fontWeight: '800',
+  },
+  drawerDisabledCopy: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+  },
+  drawerSeparator: {
+    backgroundColor: 'rgba(167, 139, 250, 0.14)',
+    height: 1,
+    marginVertical: 5,
   },
   modalOverlay: {
     alignItems: 'center',

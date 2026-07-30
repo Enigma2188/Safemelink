@@ -1,5 +1,15 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import {
+  Animated,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { useNearbyUsers, type RadarViewStatus } from '@/hooks/useNearbyUsers';
 import { validateRadarNickname } from '@/services/RadarService';
@@ -34,6 +44,7 @@ export function RadarScreen() {
   const [nicknameDraft, setNicknameDraft] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
+  const radarPulse = useRef(new Animated.Value(0)).current;
   const nicknameValidation = validateRadarNickname(nicknameDraft);
 
   useEffect(() => {
@@ -41,10 +52,30 @@ export function RadarScreen() {
   }, [preferences?.publicNickname]);
 
   useEffect(
-    () => () => {
-      isMountedRef.current = false;
+    () => {
+      const pulseAnimation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(radarPulse, {
+            duration: 1800,
+            toValue: 1,
+            useNativeDriver: true,
+          }),
+          Animated.timing(radarPulse, {
+            duration: 1800,
+            toValue: 0,
+            useNativeDriver: true,
+          }),
+        ]),
+      );
+
+      pulseAnimation.start();
+
+      return () => {
+        isMountedRef.current = false;
+        pulseAnimation.stop();
+      };
     },
-    [],
+    [radarPulse],
   );
 
   const saveChanges = async (
@@ -62,165 +93,524 @@ export function RadarScreen() {
       }
     }
   };
+  const radarPulseStyle = {
+    opacity: radarPulse.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.35, 0.62],
+    }),
+    transform: [
+      {
+        scale: radarPulse.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.12],
+        }),
+      },
+    ],
+  };
+  const showNetwork = status === 'ready' || status === 'searching' || status === 'empty';
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Radar SafeMeLink</Text>
-      <Text style={styles.subtitle}>
-        Presenze anonime e recenti entro circa 1 km.
-      </Text>
-
-      <View style={styles.settingsCard}>
-        <Text style={styles.explanationText}>
-          Per vedere gli utenti vicini devi essere visibile anche tu.{`\n\n`}
-          La tua posizione precisa non verrà mai mostrata.
-        </Text>
-
-        <View style={styles.settingRow}>
-          <View style={styles.settingCopy}>
-            <Text style={styles.settingTitle}>
-              Radar {preferences?.radarEnabled ? 'ON' : 'OFF'}
-            </Text>
-            <Text style={styles.settingDescription}>Entra o esci dalla rete SafeMeLink.</Text>
-          </View>
-          <Switch
-            disabled={!preferences || isSavingPreferences}
-            onValueChange={(radarEnabled) => void saveChanges({ radarEnabled })}
-            value={preferences?.radarEnabled ?? false}
-          />
-        </View>
-
-        <View style={styles.settingRow}>
-          <View style={styles.settingCopy}>
-            <Text style={styles.settingTitle}>Mostrami agli utenti vicini</Text>
-            <Text style={styles.settingDescription}>Necessario per vedere gli altri utenti.</Text>
-          </View>
-          <Switch
-            disabled={!preferences || isSavingPreferences}
-            onValueChange={(visibleToNearby) => void saveChanges({ visibleToNearby })}
-            value={preferences?.visibleToNearby ?? true}
-          />
-        </View>
-
-        <View style={styles.settingRow}>
-          <View style={styles.settingCopy}>
-            <Text style={styles.settingTitle}>Mostra nickname</Text>
-            <Text style={styles.settingDescription}>Altrimenti apparirai come Utente SafeMeLink.</Text>
-          </View>
-          <Switch
-            disabled={!preferences || isSavingPreferences}
-            onValueChange={(showNickname) =>
-              void saveChanges({ showNickname, publicNickname: nicknameDraft })
-            }
-            value={preferences?.showNickname ?? false}
-          />
-        </View>
-
-        <Text style={styles.nicknameLabel}>Nickname pubblico opzionale</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={Boolean(preferences) && !isSavingPreferences}
-          maxLength={20}
-          onChangeText={setNicknameDraft}
-          placeholder="es. Luna_27"
-          placeholderTextColor="#687076"
-          style={styles.nicknameInput}
-          value={nicknameDraft}
-        />
-        <Text style={nicknameValidation.valid ? styles.nicknameHelp : styles.validationError}>
-          {nicknameValidation.valid
-            ? '3-20 caratteri: lettere, numeri, underscore o trattino.'
-            : nicknameValidation.message}
-        </Text>
-        <Pressable
-          disabled={!preferences || !nicknameValidation.valid || isSavingPreferences}
-          onPress={() => void saveChanges({ publicNickname: nicknameDraft })}
-          style={[
-            styles.saveButton,
-            (!preferences || !nicknameValidation.valid || isSavingPreferences) &&
-              styles.disabledButton,
-          ]}>
-          <Text style={styles.saveButtonText}>
-            {isSavingPreferences ? 'Salvataggio...' : 'Salva nickname'}
-          </Text>
-        </Pressable>
-        {actionError ? <Text style={styles.validationError}>{actionError}</Text> : null}
+    <View style={styles.screen}>
+      <View style={styles.background}>
+        <View style={[styles.backgroundGlow, styles.backgroundGlowBlue]} />
+        <View style={[styles.backgroundGlow, styles.backgroundGlowPurple]} />
+        <View style={[styles.backgroundPoint, styles.backgroundPointOne]} />
+        <View style={[styles.backgroundPoint, styles.backgroundPointTwo]} />
+        <View style={[styles.backgroundPoint, styles.backgroundPointThree]} />
       </View>
-
-      {status !== 'ready' ? (
-        <View style={styles.statusCard}>
-          <Text style={styles.statusText}>{statusMessages[status]}</Text>
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.heading}>
+          <View>
+            <Text style={styles.title}>Radar SafeMeLink</Text>
+            <Text style={styles.subtitle}>Presenze anonime e recenti entro circa 1 km.</Text>
+          </View>
+          <View style={styles.headingIcon}>
+            <Ionicons color="#45B7FF" name="radio-outline" size={24} />
+          </View>
         </View>
-      ) : null}
 
-      {status === 'ready' ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Utenti nelle vicinanze ({users.length})</Text>
-          {users.map((user) => (
-            <View key={user.anonymousId} style={styles.userRow}>
+        {showNetwork ? (
+          <View style={styles.networkCard}>
+            <View style={styles.networkHeader}>
               <View>
-                <Text style={styles.userLabel}>
-                  {user.publicNickname || 'Utente SafeMeLink'}
-                </Text>
-                <Text style={styles.presenceText}>
-                  {user.category === 'guardian' ? 'Guardian' : 'Community'} · Presenza recente
+                <Text style={styles.networkTitle}>Rete nelle vicinanze</Text>
+                <Text style={styles.networkSubtitle}>
+                  {status === 'ready'
+                    ? `${users.length} ${users.length === 1 ? 'presenza recente' : 'presenze recenti'}`
+                    : status === 'searching'
+                      ? 'Aggiornamento della rete...'
+                      : 'Nessuna presenza recente'}
                 </Text>
               </View>
-              <Text style={styles.distanceText}>{formatDistance(user.distanceMeters)}</Text>
+              <View style={styles.liveBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>RADAR ATTIVO</Text>
+              </View>
             </View>
-          ))}
-        </View>
-      ) : null}
 
-      <Text style={styles.privacyText}>
-        Il Radar non mostra identità, contatti, identificativi reali o coordinate degli altri utenti.
-      </Text>
-    </ScrollView>
+            <View style={styles.networkCanvas}>
+              <View style={[styles.networkRing, styles.networkRingOuter]} />
+              <View style={[styles.networkRing, styles.networkRingInner]} />
+              <View style={[styles.networkLine, styles.networkLineHorizontal]} />
+              <View style={[styles.networkLine, styles.networkLineAscending]} />
+              <View style={[styles.networkLine, styles.networkLineDescending]} />
+
+              <Animated.View style={[styles.centerPulse, radarPulseStyle]} />
+              <View style={styles.centerNode}>
+                <Ionicons color="#F7FAFF" name="person" size={24} />
+              </View>
+              <Text style={styles.centerLabel}>Tu</Text>
+
+              {RADAR_NODE_POSITIONS.map((positionStyle, index) => {
+                const user = users[index];
+
+                return (
+                  <View
+                    key={user?.anonymousId ?? `empty-node-${index}`}
+                    style={[styles.networkNodeWrap, positionStyle]}>
+                    <View
+                      style={[
+                        styles.networkNode,
+                        user ? styles.networkNodeActive : styles.networkNodeEmpty,
+                      ]}>
+                      <Text style={styles.networkNodeSymbol}>○</Text>
+                    </View>
+                    <Text numberOfLines={1} style={styles.networkNodeLabel}>
+                      {user
+                        ? user.publicNickname || 'SafeMeLink'
+                        : '—'}
+                    </Text>
+                    {user ? (
+                      <Text style={styles.networkNodeDistance}>
+                        {formatDistance(user.distanceMeters)}
+                      </Text>
+                    ) : null}
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {status !== 'ready' && status !== 'searching' && status !== 'empty' ? (
+          <View style={styles.statusCard}>
+            <Text style={styles.statusText}>{statusMessages[status]}</Text>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          </View>
+        ) : null}
+
+        <View style={styles.settingsCard}>
+          <Text style={styles.settingsTitle}>Preferenze Radar</Text>
+          <Text style={styles.explanationText}>
+            Per vedere gli utenti vicini devi essere visibile anche tu. La tua posizione precisa
+            non verrà mai mostrata.
+          </Text>
+
+          <View style={styles.settingRow}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.settingTitle}>
+                Radar {preferences?.radarEnabled ? 'ON' : 'OFF'}
+              </Text>
+              <Text style={styles.settingDescription}>Entra o esci dalla rete SafeMeLink.</Text>
+            </View>
+            <Switch
+              disabled={!preferences || isSavingPreferences}
+              onValueChange={(radarEnabled) => void saveChanges({ radarEnabled })}
+              thumbColor={preferences?.radarEnabled ? '#F7FAFF' : '#A8B5D1'}
+              trackColor={{ false: '#29324D', true: '#7868FF' }}
+              value={preferences?.radarEnabled ?? false}
+            />
+          </View>
+
+          <View style={styles.settingRow}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.settingTitle}>Mostrami agli utenti vicini</Text>
+              <Text style={styles.settingDescription}>Necessario per vedere gli altri utenti.</Text>
+            </View>
+            <Switch
+              disabled={!preferences || isSavingPreferences}
+              onValueChange={(visibleToNearby) => void saveChanges({ visibleToNearby })}
+              thumbColor={preferences?.visibleToNearby ? '#F7FAFF' : '#A8B5D1'}
+              trackColor={{ false: '#29324D', true: '#7868FF' }}
+              value={preferences?.visibleToNearby ?? true}
+            />
+          </View>
+
+          <View style={styles.settingRow}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.settingTitle}>Mostra nickname</Text>
+              <Text style={styles.settingDescription}>
+                Altrimenti apparirai come Utente SafeMeLink.
+              </Text>
+            </View>
+            <Switch
+              disabled={!preferences || isSavingPreferences}
+              onValueChange={(showNickname) =>
+                void saveChanges({ showNickname, publicNickname: nicknameDraft })
+              }
+              thumbColor={preferences?.showNickname ? '#F7FAFF' : '#A8B5D1'}
+              trackColor={{ false: '#29324D', true: '#7868FF' }}
+              value={preferences?.showNickname ?? false}
+            />
+          </View>
+
+          <Text style={styles.nicknameLabel}>Nickname pubblico opzionale</Text>
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={Boolean(preferences) && !isSavingPreferences}
+            maxLength={20}
+            onChangeText={setNicknameDraft}
+            placeholder="es. Luna_27"
+            placeholderTextColor="#71809F"
+            style={styles.nicknameInput}
+            value={nicknameDraft}
+          />
+          <Text style={nicknameValidation.valid ? styles.nicknameHelp : styles.validationError}>
+            {nicknameValidation.valid
+              ? '3-20 caratteri: lettere, numeri, underscore o trattino.'
+              : nicknameValidation.message}
+          </Text>
+          <Pressable
+            disabled={!preferences || !nicknameValidation.valid || isSavingPreferences}
+            onPress={() => void saveChanges({ publicNickname: nicknameDraft })}
+            style={[
+              styles.saveButton,
+              (!preferences || !nicknameValidation.valid || isSavingPreferences) &&
+                styles.disabledButton,
+            ]}>
+            <Text style={styles.saveButtonText}>
+              {isSavingPreferences ? 'Salvataggio...' : 'Salva nickname'}
+            </Text>
+          </Pressable>
+          {actionError ? <Text style={styles.validationError}>{actionError}</Text> : null}
+        </View>
+
+        <Text style={styles.privacyText}>
+          Il Radar non mostra identità, contatti, identificativi reali o coordinate degli altri
+          utenti.
+        </Text>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    backgroundColor: '#050816',
+    flex: 1,
+  },
+  background: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  backgroundGlow: {
+    borderRadius: 180,
+    height: 280,
+    opacity: 0.16,
+    position: 'absolute',
+    width: 280,
+  },
+  backgroundGlowBlue: {
+    backgroundColor: '#45B7FF',
+    right: -150,
+    top: 40,
+  },
+  backgroundGlowPurple: {
+    backgroundColor: '#7868FF',
+    bottom: 80,
+    left: -170,
+  },
+  backgroundPoint: {
+    backgroundColor: '#A78BFA',
+    borderRadius: 3,
+    height: 4,
+    opacity: 0.55,
+    position: 'absolute',
+    width: 4,
+  },
+  backgroundPointOne: {
+    left: '12%',
+    top: '16%',
+  },
+  backgroundPointTwo: {
+    right: '18%',
+    top: '34%',
+  },
+  backgroundPointThree: {
+    bottom: '18%',
+    left: '30%',
+  },
   container: {
-    backgroundColor: '#f7f9fb',
     flexGrow: 1,
     padding: 20,
-    paddingTop: 40,
+    paddingBottom: 44,
+    paddingTop: 32,
+  },
+  heading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
   },
   title: {
-    color: '#11181c',
+    color: '#F7FAFF',
     fontSize: 30,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   subtitle: {
-    color: '#52616b',
-    fontSize: 15,
-    lineHeight: 21,
-    marginBottom: 20,
-    marginTop: 6,
+    color: '#A8B5D1',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  headingIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(69, 183, 255, 0.12)',
+    borderColor: 'rgba(69, 183, 255, 0.28)',
+    borderRadius: 16,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  networkCard: {
+    backgroundColor: 'rgba(12, 20, 48, 0.76)',
+    borderColor: 'rgba(120, 104, 255, 0.28)',
+    borderRadius: 24,
+    borderWidth: 1,
+    marginBottom: 18,
+    overflow: 'hidden',
+    padding: 18,
+    shadowColor: '#7868FF',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 26,
+  },
+  networkHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  networkTitle: {
+    color: '#F7FAFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  networkSubtitle: {
+    color: '#A8B5D1',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  liveBadge: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(69, 214, 165, 0.1)',
+    borderColor: 'rgba(69, 214, 165, 0.22)',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  liveDot: {
+    backgroundColor: '#45D6A5',
+    borderRadius: 4,
+    height: 7,
+    width: 7,
+  },
+  liveText: {
+    color: '#72E2BB',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  networkCanvas: {
+    alignSelf: 'center',
+    height: 340,
+    marginTop: 12,
+    position: 'relative',
+    width: '100%',
+  },
+  networkRing: {
+    alignSelf: 'center',
+    borderColor: 'rgba(69, 183, 255, 0.13)',
+    borderRadius: 160,
+    borderWidth: 1,
+    position: 'absolute',
+    top: '50%',
+  },
+  networkRingOuter: {
+    height: 260,
+    marginTop: -130,
+    width: 260,
+  },
+  networkRingInner: {
+    borderColor: 'rgba(167, 139, 250, 0.18)',
+    height: 160,
+    marginTop: -80,
+    width: 160,
+  },
+  networkLine: {
+    backgroundColor: 'rgba(69, 183, 255, 0.12)',
+    height: 1,
+    left: '50%',
+    marginLeft: -135,
+    position: 'absolute',
+    top: '50%',
+    width: 270,
+  },
+  networkLineHorizontal: {
+    transform: [{ rotate: '0deg' }],
+  },
+  networkLineAscending: {
+    transform: [{ rotate: '58deg' }],
+  },
+  networkLineDescending: {
+    transform: [{ rotate: '-58deg' }],
+  },
+  centerPulse: {
+    backgroundColor: '#7868FF',
+    borderRadius: 42,
+    height: 84,
+    left: '50%',
+    marginLeft: -42,
+    marginTop: -42,
+    position: 'absolute',
+    top: '50%',
+    width: 84,
+  },
+  centerNode: {
+    alignItems: 'center',
+    backgroundColor: '#7868FF',
+    borderColor: 'rgba(255, 255, 255, 0.55)',
+    borderRadius: 31,
+    borderWidth: 2,
+    height: 62,
+    justifyContent: 'center',
+    left: '50%',
+    marginLeft: -31,
+    marginTop: -31,
+    position: 'absolute',
+    shadowColor: '#A78BFA',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 16,
+    top: '50%',
+    width: 62,
+  },
+  centerLabel: {
+    color: '#F7FAFF',
+    fontSize: 11,
+    fontWeight: '900',
+    left: '50%',
+    marginLeft: -30,
+    marginTop: 37,
+    position: 'absolute',
+    textAlign: 'center',
+    top: '50%',
+    width: 60,
+  },
+  networkNodeWrap: {
+    alignItems: 'center',
+    position: 'absolute',
+    width: 88,
+  },
+  networkNodeTop: {
+    left: '50%',
+    marginLeft: -44,
+    top: 4,
+  },
+  networkNodeUpperLeft: {
+    left: 0,
+    top: 92,
+  },
+  networkNodeUpperRight: {
+    right: 0,
+    top: 92,
+  },
+  networkNodeLowerLeft: {
+    bottom: 58,
+    left: 5,
+  },
+  networkNodeLowerRight: {
+    bottom: 58,
+    right: 5,
+  },
+  networkNodeBottom: {
+    bottom: 0,
+    left: '50%',
+    marginLeft: -44,
+  },
+  networkNode: {
+    alignItems: 'center',
+    borderRadius: 24,
+    borderWidth: 1,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
+  networkNodeActive: {
+    backgroundColor: 'rgba(69, 183, 255, 0.15)',
+    borderColor: '#45B7FF',
+    shadowColor: '#45B7FF',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+  },
+  networkNodeEmpty: {
+    backgroundColor: 'rgba(255, 255, 255, 0.025)',
+    borderColor: 'rgba(168, 181, 209, 0.22)',
+  },
+  networkNodeSymbol: {
+    color: '#A8E0FF',
+    fontSize: 25,
+    lineHeight: 28,
+  },
+  networkNodeLabel: {
+    color: '#F7FAFF',
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 4,
+    textAlign: 'center',
+    width: '100%',
+  },
+  networkNodeDistance: {
+    color: '#A8B5D1',
+    fontSize: 9,
+    marginTop: 1,
+    textAlign: 'center',
   },
   statusCard: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
+    backgroundColor: 'rgba(12, 20, 48, 0.76)',
+    borderColor: 'rgba(120, 104, 255, 0.25)',
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 18,
     padding: 18,
   },
   settingsCard: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
+    backgroundColor: 'rgba(12, 20, 48, 0.76)',
+    borderColor: 'rgba(120, 104, 255, 0.22)',
+    borderRadius: 22,
+    borderWidth: 1,
     marginBottom: 18,
-    padding: 16,
+    padding: 18,
+  },
+  settingsTitle: {
+    color: '#F7FAFF',
+    fontSize: 18,
+    fontWeight: '900',
   },
   explanationText: {
-    color: '#11181c',
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 21,
+    color: '#A8B5D1',
+    fontSize: 13,
+    lineHeight: 19,
     marginBottom: 14,
+    marginTop: 5,
   },
   settingRow: {
     alignItems: 'center',
-    borderTopColor: '#edf1f4',
+    borderTopColor: 'rgba(255, 255, 255, 0.09)',
     borderTopWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -231,47 +621,47 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   settingTitle: {
-    color: '#11181c',
+    color: '#F7FAFF',
     fontSize: 15,
     fontWeight: '800',
   },
   settingDescription: {
-    color: '#687076',
+    color: '#A8B5D1',
     fontSize: 13,
     lineHeight: 18,
     marginTop: 2,
   },
   nicknameLabel: {
-    color: '#11181c',
+    color: '#F7FAFF',
     fontSize: 15,
     fontWeight: '800',
     marginTop: 14,
   },
   nicknameInput: {
-    backgroundColor: '#f0f3f5',
-    borderColor: '#d7dee4',
-    borderRadius: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(69, 183, 255, 0.22)',
+    borderRadius: 14,
     borderWidth: 1,
-    color: '#11181c',
+    color: '#F7FAFF',
     fontSize: 16,
     marginTop: 8,
     padding: 12,
   },
   nicknameHelp: {
-    color: '#687076',
+    color: '#A8B5D1',
     fontSize: 12,
     lineHeight: 18,
     marginTop: 5,
   },
   validationError: {
-    color: '#b71c1c',
+    color: '#FF8096',
     fontSize: 13,
     lineHeight: 18,
     marginTop: 6,
   },
   saveButton: {
-    backgroundColor: '#0a7ea4',
-    borderRadius: 6,
+    backgroundColor: '#7868FF',
+    borderRadius: 14,
     marginTop: 12,
     padding: 12,
   },
@@ -285,55 +675,30 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   statusText: {
-    color: '#11181c',
+    color: '#F7FAFF',
     fontSize: 16,
     fontWeight: '700',
     lineHeight: 22,
   },
   errorText: {
-    color: '#b71c1c',
+    color: '#FF8096',
     fontSize: 14,
     lineHeight: 20,
     marginTop: 8,
   },
-  section: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 16,
-  },
-  sectionTitle: {
-    color: '#11181c',
-    fontSize: 18,
-    fontWeight: '800',
-    marginBottom: 8,
-  },
-  userRow: {
-    alignItems: 'center',
-    borderTopColor: '#edf1f4',
-    borderTopWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-  },
-  userLabel: {
-    color: '#11181c',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  presenceText: {
-    color: '#2e7d32',
-    fontSize: 13,
-    marginTop: 3,
-  },
-  distanceText: {
-    color: '#0a7ea4',
-    fontSize: 15,
-    fontWeight: '800',
-  },
   privacyText: {
-    color: '#687076',
+    color: '#8795B2',
     fontSize: 13,
     lineHeight: 19,
-    marginTop: 18,
+    textAlign: 'center',
   },
 });
+
+const RADAR_NODE_POSITIONS = [
+  styles.networkNodeTop,
+  styles.networkNodeUpperLeft,
+  styles.networkNodeUpperRight,
+  styles.networkNodeLowerLeft,
+  styles.networkNodeLowerRight,
+  styles.networkNodeBottom,
+];
