@@ -7,6 +7,7 @@ import 'react-native-reanimated';
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { RadarProvider } from '@/components/RadarProvider';
+import { VoiceProtectionLifecycle } from '@/components/VoiceProtectionLifecycle';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -20,6 +21,7 @@ export default function RootLayout() {
     <AuthProvider>
       <RadarProvider>
         <PushTokenRegistrar />
+        <VoiceProtectionLifecycle />
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={styles.container}>
             <Stack>
@@ -28,6 +30,14 @@ export default function RootLayout() {
               <Stack.Screen
                 name="emergency-profile"
                 options={{ title: 'Profilo di Emergenza' }}
+              />
+              <Stack.Screen
+                name="voice-protection"
+                options={{
+                  headerStyle: { backgroundColor: '#080D20' },
+                  headerTintColor: '#F7FAFF',
+                  title: 'Protezione Vocale',
+                }}
               />
             </Stack>
             <StatusBar style="auto" />

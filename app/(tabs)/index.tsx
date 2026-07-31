@@ -1351,10 +1351,12 @@ export default function HomeScreen() {
               <Ionicons color="#7868FF" name="navigate-outline" size={20} />
               <Text style={styles.drawerItemText}>Torno a casa</Text>
             </Pressable>
-            <Pressable style={styles.drawerItem} onPress={() => openPanel('passphrase')}>
-              <Ionicons color="#A78BFA" name="key-outline" size={20} />
-              <Text style={styles.drawerItemText}>Parola d’ordine</Text>
-            </Pressable>
+            <Link href={'/voice-protection' as unknown as Href} asChild>
+              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Ionicons color="#A78BFA" name="mic-outline" size={20} />
+                <Text style={styles.drawerItemText}>Protezione Vocale</Text>
+              </Pressable>
+            </Link>
 
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>COMMUNITY</Text>

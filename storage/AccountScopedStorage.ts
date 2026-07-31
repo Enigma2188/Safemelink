@@ -6,7 +6,8 @@ export type AccountStorageNamespace =
   | 'go-home-location'
   | 'passphrase'
   | 'sos-events'
-  | 'trusted-contacts';
+  | 'trusted-contacts'
+  | 'voice-protection';
 
 const STORAGE_PREFIX = 'safemelink:account';
 const LEGACY_OWNER_KEY = 'safemelink:storage-migration:v1:legacy-owner';

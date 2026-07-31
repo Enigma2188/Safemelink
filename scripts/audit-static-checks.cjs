@@ -41,6 +41,11 @@ const lifecycleMigration = read(
 const accountStorage = read('storage/AccountScopedStorage.ts');
 const homeScreen = read('app/(tabs)/index.tsx');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
+const voiceProtectionScreen = read('app/voice-protection.tsx');
+const voiceProtectionService = read('services/VoiceProtectionService.ts');
+const voiceProtectionPlugin = read(
+  'plugins/withVoiceProtectionForegroundService.cjs',
+);
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
@@ -364,6 +369,37 @@ check('Closed or cancelled SOS expose neither coordinates nor medical data', () 
   assert.match(emergencyMigration, /emergency_sos\.status in \('open', 'accepted'\)/);
   assert.match(homeScreen, /location: null/);
   assert.match(homeScreen, /message: null/);
+});
+
+check('Voice Protection recognition is local and does not invoke SOS', () => {
+  assert.match(voiceProtectionScreen, /requiresOnDeviceRecognition: true/);
+  assert.match(
+    voiceProtectionScreen,
+    /supportsOnDeviceRecognition\(\)/,
+  );
+  assert.doesNotMatch(voiceProtectionScreen, /SOSService|SOSLifecycleService|completeSOS/);
+  assert.doesNotMatch(voiceProtectionService, /supabase|functions\.invoke|fetch\(/);
+});
+
+check('Voice Protection foreground service is declared as microphone', () => {
+  assert.match(
+    voiceProtectionService,
+    /foregroundServiceType: \['microphone'\]/,
+  );
+  assert.match(
+    voiceProtectionPlugin,
+    /android\.permission\.FOREGROUND_SERVICE_MICROPHONE/,
+  );
+  assert.match(
+    voiceProtectionPlugin,
+    /android:foregroundServiceType'\] = 'microphone'/,
+  );
+});
+
+check('Voice Protection state remains local and account scoped', () => {
+  assert.match(accountStorage, /\| 'voice-protection'/);
+  assert.match(voiceProtectionScreen, /VoiceProtectionStorage\.save\(userId/);
+  assert.match(voiceProtectionService, /VoiceProtectionStorage\.save\(taskData\.userId/);
 });
 
 process.stdout.write('All static audit checks passed.\n');

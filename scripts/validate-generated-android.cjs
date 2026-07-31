@@ -41,6 +41,26 @@ assert.match(
 );
 
 for (const permission of [
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.RECORD_AUDIO',
+]) {
+  assert.match(
+    manifest,
+    new RegExp(
+      `<uses-permission\\b[^>]*android:name=["']${permission.replaceAll('.', '\\.')}["'][^>]*>`,
+    ),
+    `Permesso Protezione Vocale mancante: ${permission}.`,
+  );
+}
+
+assert.match(
+  manifest,
+  /<service\b[^>]*android:name=["']com\.asterinet\.react\.bgactions\.RNBackgroundActionsTask["'][^>]*android:foregroundServiceType=["']microphone["'][^>]*>/,
+  'Il foreground service Protezione Vocale deve dichiarare il tipo microphone.',
+);
+
+for (const permission of [
   'android.permission.READ_EXTERNAL_STORAGE',
   'android.permission.WRITE_EXTERNAL_STORAGE',
   'android.permission.SYSTEM_ALERT_WINDOW',
