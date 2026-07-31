@@ -1007,17 +1007,33 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.starField}>
+        <View style={styles.deepSpaceGlow} />
+        <View style={styles.networkHalo} />
         <View style={[styles.star, styles.starOne]} />
         <View style={[styles.star, styles.starTwo]} />
         <View style={[styles.star, styles.starThree]} />
         <View style={[styles.star, styles.starFour]} />
+        <View style={[styles.star, styles.starFive]} />
+        <View style={[styles.star, styles.starSix]} />
+        <View style={[styles.star, styles.starSeven]} />
+        <View style={[styles.star, styles.starEight]} />
         <View style={[styles.networkPoint, styles.networkPointOne]} />
         <View style={[styles.networkPoint, styles.networkPointTwo]} />
         <View style={[styles.networkPoint, styles.networkPointThree]} />
         <View style={[styles.networkPoint, styles.networkPointFour]} />
+        <View style={[styles.networkPoint, styles.networkPointFive]} />
+        <View style={[styles.networkPoint, styles.networkPointSix]} />
+        <View style={[styles.networkPoint, styles.networkPointSeven]} />
+        <View style={[styles.networkPoint, styles.networkPointEight]} />
+        <View style={[styles.networkPoint, styles.networkPointNine]} />
         <View style={[styles.networkLine, styles.networkLineOne]} />
         <View style={[styles.networkLine, styles.networkLineTwo]} />
         <View style={[styles.networkLine, styles.networkLineThree]} />
+        <View style={[styles.networkLine, styles.networkLineFour]} />
+        <View style={[styles.networkLine, styles.networkLineFive]} />
+        <View style={[styles.networkLine, styles.networkLineSix]} />
+        <View style={[styles.networkLine, styles.networkLineSeven]} />
+        <View style={[styles.networkLine, styles.networkLineEight]} />
         <Animated.View style={[styles.nebula, styles.nebulaOne, nebulaAnimatedStyle]} />
         <Animated.View style={[styles.nebula, styles.nebulaTwo, nebulaAnimatedStyle]} />
       </View>
@@ -1325,13 +1341,6 @@ export default function HomeScreen() {
                 <Text style={styles.drawerItemText}>Contatti fidati</Text>
               </Pressable>
             </Link>
-            <Link href={'/emergency-profile' as unknown as Href} asChild>
-              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Ionicons color="#A78BFA" name="medkit-outline" size={20} />
-                <Text style={styles.drawerItemText}>Profilo</Text>
-              </Pressable>
-            </Link>
-
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>SICUREZZA PREVENTIVA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('checkpoint')}>
@@ -1371,12 +1380,18 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.drawerSeparator} />
-            <Text style={styles.drawerSectionLabel}>IMPOSTAZIONI</Text>
+            <Text style={styles.drawerSectionLabel}>ACCOUNT</Text>
+            <Link href={'/emergency-profile' as unknown as Href} asChild>
+              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
+                <Ionicons color="#A78BFA" name="person-circle-outline" size={20} />
+                <Text style={styles.drawerItemText}>Profilo</Text>
+              </Pressable>
+            </Link>
             {!session ? (
               <Link href={'/login' as unknown as Href} asChild>
                 <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
                   <Ionicons color="#45B7FF" name="log-in-outline" size={20} />
-                  <Text style={styles.drawerItemText}>Login</Text>
+                  <Text style={styles.drawerItemText}>Accesso</Text>
                 </Pressable>
               </Link>
             ) : (
@@ -1387,8 +1402,8 @@ export default function HomeScreen() {
                   setDrawerVisible(false);
                   void logout();
                 }}>
-                <Ionicons color="#A8B5D1" name="log-out-outline" size={20} />
-                <Text style={styles.drawerItemText}>Logout</Text>
+                <Ionicons color="#FF8BA1" name="log-out-outline" size={20} />
+                <Text style={styles.drawerItemText}>Disconnessione</Text>
               </Pressable>
             )}
             <View style={styles.drawerItemDisabled}>
@@ -1437,8 +1452,29 @@ const styles = StyleSheet.create({
   },
   starField: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#050816',
+    backgroundColor: '#030518',
     overflow: 'hidden',
+  },
+  deepSpaceGlow: {
+    backgroundColor: 'rgba(41, 31, 126, 0.7)',
+    borderRadius: 260,
+    height: 480,
+    left: -210,
+    position: 'absolute',
+    top: 150,
+    transform: [{ rotate: '-18deg' }],
+    width: 520,
+  },
+  networkHalo: {
+    backgroundColor: 'rgba(20, 105, 255, 0.24)',
+    borderColor: 'rgba(69, 183, 255, 0.18)',
+    borderRadius: 260,
+    borderWidth: 1,
+    height: 520,
+    position: 'absolute',
+    right: -250,
+    top: -90,
+    width: 520,
   },
   star: {
     backgroundColor: '#dce9ff',
@@ -1470,13 +1506,44 @@ const styles = StyleSheet.create({
     right: '12%',
     width: 3,
   },
+  starFive: {
+    height: 3,
+    left: '48%',
+    top: '8%',
+    width: 3,
+  },
+  starSix: {
+    bottom: '39%',
+    height: 4,
+    right: '42%',
+    width: 4,
+  },
+  starSeven: {
+    bottom: '8%',
+    height: 3,
+    left: '44%',
+    width: 3,
+  },
+  starEight: {
+    height: 5,
+    right: '8%',
+    top: '52%',
+    width: 5,
+  },
   networkPoint: {
-    backgroundColor: '#55c7ff',
-    borderRadius: 4,
-    height: 6,
-    opacity: 0.5,
+    backgroundColor: '#79D5FF',
+    borderColor: 'rgba(224, 246, 255, 0.9)',
+    borderRadius: 7,
+    borderWidth: 1,
+    elevation: 5,
+    height: 10,
+    opacity: 0.92,
     position: 'absolute',
-    width: 6,
+    shadowColor: '#45B7FF',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 9,
+    width: 10,
   },
   networkPointOne: {
     left: '18%',
@@ -1494,10 +1561,34 @@ const styles = StyleSheet.create({
     bottom: '22%',
     right: '18%',
   },
+  networkPointFive: {
+    left: '8%',
+    top: '58%',
+  },
+  networkPointSix: {
+    right: '8%',
+    top: '62%',
+  },
+  networkPointSeven: {
+    left: '46%',
+    top: '20%',
+  },
+  networkPointEight: {
+    bottom: '8%',
+    left: '50%',
+  },
+  networkPointNine: {
+    right: '43%',
+    top: '48%',
+  },
   networkLine: {
-    backgroundColor: 'rgba(88, 166, 255, 0.22)',
-    height: 1,
+    backgroundColor: 'rgba(104, 190, 255, 0.42)',
+    height: 1.5,
     position: 'absolute',
+    shadowColor: '#45B7FF',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 4,
   },
   networkLineOne: {
     left: '20%',
@@ -1517,23 +1608,53 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '58deg' }],
     width: '38%',
   },
+  networkLineFour: {
+    left: '7%',
+    top: '57%',
+    transform: [{ rotate: '-28deg' }],
+    width: '49%',
+  },
+  networkLineFive: {
+    right: '7%',
+    top: '57%',
+    transform: [{ rotate: '27deg' }],
+    width: '48%',
+  },
+  networkLineSix: {
+    left: '45%',
+    top: '33%',
+    transform: [{ rotate: '88deg' }],
+    width: '31%',
+  },
+  networkLineSeven: {
+    bottom: '16%',
+    left: '22%',
+    transform: [{ rotate: '24deg' }],
+    width: '54%',
+  },
+  networkLineEight: {
+    right: '15%',
+    top: '44%',
+    transform: [{ rotate: '-68deg' }],
+    width: '34%',
+  },
   nebula: {
     borderRadius: 240,
     position: 'absolute',
   },
   nebulaOne: {
-    backgroundColor: '#1455ff',
-    height: 320,
-    right: -118,
-    top: 42,
-    width: 320,
+    backgroundColor: '#1468FF',
+    height: 380,
+    right: -148,
+    top: 18,
+    width: 380,
   },
   nebulaTwo: {
-    backgroundColor: '#8b3dff',
-    bottom: 36,
-    height: 280,
-    left: -128,
-    width: 280,
+    backgroundColor: '#9D3CFF',
+    bottom: -16,
+    height: 350,
+    left: -158,
+    width: 350,
   },
   container: {
     flexGrow: 1,
@@ -1651,61 +1772,63 @@ const styles = StyleSheet.create({
   },
   sosStage: {
     alignItems: 'center',
-    height: 278,
+    height: 304,
     justifyContent: 'center',
-    width: 278,
+    width: 304,
   },
   sosGlow: {
     backgroundColor: '#FF3B5C',
-    borderColor: 'rgba(167, 139, 250, 0.45)',
-    borderRadius: 139,
-    borderWidth: 1,
-    height: 278,
+    borderColor: 'rgba(255, 143, 179, 0.7)',
+    borderRadius: 152,
+    borderWidth: 2,
+    elevation: 12,
+    height: 304,
     position: 'absolute',
     shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 34,
-    width: 278,
+    shadowOpacity: 0.82,
+    shadowRadius: 42,
+    width: 304,
   },
   sosOuterRing: {
-    borderColor: 'rgba(167, 139, 250, 0.55)',
-    borderRadius: 127,
-    borderWidth: 1,
-    height: 254,
+    borderColor: 'rgba(255, 113, 145, 0.78)',
+    borderRadius: 140,
+    borderWidth: 2,
+    height: 280,
     position: 'absolute',
-    width: 254,
+    width: 280,
   },
   sosInnerRing: {
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 111,
-    borderWidth: 1,
-    height: 222,
+    borderColor: 'rgba(255, 255, 255, 0.62)',
+    borderRadius: 120,
+    borderWidth: 2,
+    height: 240,
     position: 'absolute',
-    width: 222,
+    width: 240,
   },
   sosButton: {
     alignItems: 'center',
-    backgroundColor: '#FF3B5C',
-    borderColor: 'rgba(255, 255, 255, 0.5)',
-    borderRadius: 101,
-    borderWidth: 2,
-    elevation: 8,
-    height: 202,
+    backgroundColor: '#FF244D',
+    borderColor: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: 108,
+    borderWidth: 3,
+    elevation: 18,
+    height: 216,
     justifyContent: 'center',
     shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.62,
-    shadowRadius: 28,
-    width: 202,
+    shadowOpacity: 0.9,
+    shadowRadius: 36,
+    width: 216,
   },
   sosButtonPressed: {
     transform: [{ scale: 0.98 }],
   },
   sosButtonText: {
     color: '#F7FAFF',
-    fontSize: 38,
+    fontSize: 42,
     fontWeight: '900',
+    letterSpacing: 2,
   },
   helperText: {
     color: '#A8B5D1',
