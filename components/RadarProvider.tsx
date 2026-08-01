@@ -3,7 +3,12 @@ import { AppState, type AppStateStatus } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { BackendError } from '@/backend/errors/BackendError';
-import { LocationPermissionError, LocationService } from '@/services/LocationService';
+import {
+  LocationPermissionError,
+  LocationService,
+  type LocationWatchSubscription,
+  type SOSLocation,
+} from '@/services/LocationService';
 import {
   RADAR_REFRESH_INTERVAL_MS,
   RadarService,
@@ -135,6 +140,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
     let isCurrent = true;
     let appState: AppStateStatus = AppState.currentState;
     let interval: ReturnType<typeof setInterval> | null = null;
+    let locationSubscription: LocationWatchSubscription | null = null;
+    let locationWatchStarting = false;
     const canParticipate = Boolean(
       session &&
         preferencesUserId === session.user.id &&
@@ -148,7 +155,13 @@ export function RadarProvider({ children }: PropsWithChildren) {
       }
     };
 
-    const runCycle = async () => {
+    const stopLocationWatch = () => {
+      locationSubscription?.remove();
+      locationSubscription = null;
+      locationWatchStarting = false;
+    };
+
+    const runCycle = async (observedLocation?: SOSLocation) => {
       if (
         !isCurrent ||
         appState !== 'active' ||
@@ -163,7 +176,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       setError(null);
 
       try {
-        const location = await LocationService.getCurrentLocation();
+        const location = observedLocation ?? (await LocationService.getCurrentLocation());
 
         if (!isCurrent || appState !== 'active') {
           deactivate();
@@ -188,6 +201,10 @@ export function RadarProvider({ children }: PropsWithChildren) {
           }
 
           lastPublishedRef.current = { location, publishedAt: now };
+          console.log('[SafeMeLink Radar] Presenza aggiornata automaticamente.', {
+            accuracy: location.accuracy,
+            source: observedLocation ? 'watch' : 'periodic',
+          });
         }
 
         const nearbyUsers = await RadarService.findNearbyUsers();
@@ -227,6 +244,48 @@ export function RadarProvider({ children }: PropsWithChildren) {
       }
     };
 
+    const startLocationWatch = () => {
+      if (!canParticipate || locationSubscription || locationWatchStarting) {
+        return;
+      }
+
+      locationWatchStarting = true;
+      void LocationService.watchRadarLocation(
+        (location) => {
+          if (isCurrent && appState === 'active') {
+            void runCycle(location);
+          }
+        },
+        (watchError) => {
+          if (!isCurrent || appState !== 'active') {
+            return;
+          }
+
+          setStatus('position_unavailable');
+          setError(watchError.message);
+        },
+      )
+        .then((subscription) => {
+          locationWatchStarting = false;
+
+          if (!isCurrent || appState !== 'active' || !canParticipate) {
+            subscription.remove();
+            return;
+          }
+
+          locationSubscription = subscription;
+        })
+        .catch((watchError: unknown) => {
+          locationWatchStarting = false;
+
+          if (!isCurrent) {
+            return;
+          }
+
+          console.warn('[SafeMeLink Radar] Avvio monitoraggio GPS non riuscito.', watchError);
+        });
+    };
+
     const startInterval = () => {
       if (!canParticipate || interval) {
         return;
@@ -234,6 +293,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
 
       void runCycle();
       interval = setInterval(() => void runCycle(), RADAR_REFRESH_INTERVAL_MS);
+      startLocationWatch();
     };
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
@@ -244,6 +304,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
         startInterval();
       } else if (wasActive) {
         stopInterval();
+        stopLocationWatch();
         deactivate();
       }
     });
@@ -268,6 +329,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
     return () => {
       isCurrent = false;
       stopInterval();
+      stopLocationWatch();
       appStateSubscription.remove();
 
       if (canParticipate) {

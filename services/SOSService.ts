@@ -92,6 +92,17 @@ export const SOSService = {
       };
     });
 
+    console.log('[SafeMeLink Push] Esito completo consegna SOS.', {
+      sosId: pushResult.sosId,
+      sosCreated: pushResult.sosCreated,
+      recipientCount: pushResult.recipientCount,
+      tokenCount: pushResult.tokenCount,
+      notificationsSent: pushResult.notificationsSent,
+      notificationsFailed: pushResult.notificationsFailed,
+      reason: pushResult.reason,
+      errors: pushResult.errors,
+    });
+
     if (pushResult.reason === 'not_authenticated') {
       throw new Error('Sessione cambiata durante l’SOS. Riprova con l’account attivo.');
     }

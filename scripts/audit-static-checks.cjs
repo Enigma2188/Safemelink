@@ -46,6 +46,9 @@ const voiceProtectionService = read('services/VoiceProtectionService.ts');
 const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
+const pushTokenRegistrar = read('components/PushTokenRegistrar.tsx');
+const pushTokenRepository = read('backend/repositories/PushTokenRepository.ts');
+const locationService = read('services/LocationService.ts');
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
@@ -400,6 +403,29 @@ check('Voice Protection state remains local and account scoped', () => {
   assert.match(accountStorage, /\| 'voice-protection'/);
   assert.match(voiceProtectionScreen, /VoiceProtectionStorage\.save\(userId/);
   assert.match(voiceProtectionService, /VoiceProtectionStorage\.save\(taskData\.userId/);
+});
+
+check('Push token registration retries and follows native token rotation', () => {
+  assert.match(pushTokenRegistrar, /addPushTokenListener/);
+  assert.match(pushTokenRegistrar, /registerDevice\('foreground'\)/);
+  assert.match(pushTokenRegistrar, /scheduleRetry/);
+  assert.match(pushTokenRegistrar, /Math\.min\(60_000/);
+  assert.match(
+    pushTokenRepository,
+    /select\('id,user_id,active,updated_at'\)[\s\S]*\.single\(\)/,
+  );
+});
+
+check('Radar uses foreground GPS updates with periodic fallback', () => {
+  assert.match(locationService, /watchPositionAsync/);
+  assert.match(locationService, /RADAR_LOCATION_TIME_INTERVAL_MS = 15_000/);
+  assert.match(locationService, /RADAR_LOCATION_DISTANCE_INTERVAL_METERS = 10/);
+  assert.match(radarProvider, /startLocationWatch/);
+  assert.match(
+    radarProvider,
+    /setInterval\(\(\) => void runCycle\(\), RADAR_REFRESH_INTERVAL_MS\)/,
+  );
+  assert.match(radarProvider, /stopLocationWatch\(\)/);
 });
 
 process.stdout.write('All static audit checks passed.\n');

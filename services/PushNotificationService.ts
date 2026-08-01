@@ -21,8 +21,28 @@ const isExpoPushToken = (token: string) =>
   /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token);
 
 const tokenLabel = (token: string) => `...${token.slice(-10)}`;
-let cachedExpoPushToken: string | null = null;
+const cachedExpoPushTokensByUser = new Map<string, string>();
 const registrationsByUser = new Map<string, Promise<string | null>>();
+
+const getExpoProjectId = () =>
+  Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+
+async function getCurrentExpoPushToken() {
+  const projectId = getExpoProjectId();
+
+  if (!projectId) {
+    throw new Error('EAS projectId non disponibile: impossibile ottenere il token Expo Push.');
+  }
+
+  console.log('[SafeMeLink Push] Richiesta Expo Push Token.', { projectId });
+  const { data: expoPushToken } = await Notifications.getExpoPushTokenAsync({ projectId });
+
+  if (!isExpoPushToken(expoPushToken)) {
+    throw new Error('Il dispositivo ha restituito un Expo Push Token non valido.');
+  }
+
+  return expoPushToken;
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -66,17 +86,12 @@ async function registerDevice(userId: string) {
     throw new NotificationPermissionError();
   }
 
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+  console.log('[SafeMeLink Push] Permessi notifiche verificati.', {
+    userId,
+    status: finalPermissions.status,
+  });
 
-  if (!projectId) {
-    throw new Error('EAS projectId non disponibile: impossibile ottenere il token Expo Push.');
-  }
-
-  const { data: expoPushToken } = await Notifications.getExpoPushTokenAsync({ projectId });
-
-  if (!isExpoPushToken(expoPushToken)) {
-    throw new Error('Il dispositivo ha restituito un Expo Push Token non valido.');
-  }
+  const expoPushToken = await getCurrentExpoPushToken();
 
   const platform = Platform.OS;
 
@@ -100,7 +115,7 @@ async function registerDevice(userId: string) {
     device_name: Device.modelName,
     active: true,
   });
-  cachedExpoPushToken = expoPushToken;
+  cachedExpoPushTokensByUser.set(userId, expoPushToken);
 
   console.log('[SafeMeLink Push] Token associato all’utente.', {
     userId,
@@ -113,16 +128,26 @@ async function registerDevice(userId: string) {
 async function unregisterDeviceForUser(userId: string) {
   await registrationsByUser.get(userId)?.catch(() => null);
 
-  if (!cachedExpoPushToken) {
+  let tokenToDeactivate = cachedExpoPushTokensByUser.get(userId) ?? null;
+
+  if (!tokenToDeactivate && Device.isDevice) {
+    try {
+      tokenToDeactivate = await getCurrentExpoPushToken();
+    } catch (error) {
+      console.warn('[SafeMeLink Push] Token corrente non recuperabile durante il logout.', {
+        userId,
+        error,
+      });
+    }
+  }
+
+  if (!tokenToDeactivate) {
+    console.warn('[SafeMeLink Push] Nessun token da disattivare durante il logout.', { userId });
     return;
   }
 
-  const tokenToDeactivate = cachedExpoPushToken;
   await PushTokenRepository.deactivateForUserAndToken(userId, tokenToDeactivate);
-
-  if (cachedExpoPushToken === tokenToDeactivate) {
-    cachedExpoPushToken = null;
-  }
+  cachedExpoPushTokensByUser.delete(userId);
 }
 
 export const PushNotificationService = {

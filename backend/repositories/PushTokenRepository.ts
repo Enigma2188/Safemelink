@@ -6,7 +6,7 @@ type PushTokenInsert = Database['public']['Tables']['device_push_tokens']['Inser
 
 export const PushTokenRepository = {
   async upsertForUser(input: PushTokenInsert) {
-    const { error } = await requireSupabaseClient()
+    const { data, error } = await requireSupabaseClient()
       .from('device_push_tokens')
       .upsert(
         {
@@ -15,16 +15,23 @@ export const PushTokenRepository = {
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'expo_push_token' },
-      );
+      )
+      .select('id,user_id,active,updated_at')
+      .single();
 
     if (error) {
       throw new BackendError('Impossibile salvare il token push del dispositivo.', error);
     }
 
     console.log('[SafeMeLink Push] Upsert device_push_tokens completato.', {
+      rowId: data.id,
       userId: input.user_id,
       platform: input.platform,
+      active: data.active,
+      updatedAt: data.updated_at,
     });
+
+    return data;
   },
 
   async deactivateForUserAndToken(userId: string, expoPushToken: string) {

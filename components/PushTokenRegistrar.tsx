@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as Notifications from 'expo-notifications';
 import { type Href, useRouter } from 'expo-router';
-import { Alert, Linking } from 'react-native';
+import { Alert, AppState, Linking } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import {
@@ -12,8 +12,8 @@ import {
 export function PushTokenRegistrar() {
   const { session, isInitializing } = useAuth();
   const router = useRouter();
-  const registrationInProgressForUser = useRef<string | null>(null);
   const handledNotificationIds = useRef(new Set<string>());
+  const permissionAlertShownForUser = useRef(new Set<string>());
 
   useEffect(() => {
     if (isInitializing) {
@@ -74,44 +74,126 @@ export function PushTokenRegistrar() {
   useEffect(() => {
     const userId = session?.user.id;
 
-    if (!userId || registrationInProgressForUser.current === userId) {
+    if (!userId) {
       return;
     }
 
-    registrationInProgressForUser.current = userId;
+    let isCurrent = true;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    console.log('[SafeMeLink Push] Avvio registrazione dispositivo.', { userId });
+    const clearRetry = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
-    void PushNotificationService.registerDeviceForUser(userId)
-      .catch((error: unknown) => {
-        if (error instanceof NotificationPermissionError) {
-          Alert.alert(
-            'Notifiche non autorizzate',
-            error.message,
-            [
-              { text: 'Non ora', style: 'cancel' },
-              {
-                text: 'Apri impostazioni',
-                onPress: () => {
-                  void Linking.openSettings().catch((settingsError: unknown) => {
-                    console.warn(
-                      '[SafeMeLink Push] Apertura impostazioni non riuscita.',
-                      settingsError,
-                    );
-                  });
-                },
-              },
-            ],
-          );
-        }
+    const scheduleRetry = () => {
+      if (!isCurrent || retryTimer) {
+        return;
+      }
 
-        console.warn('Registrazione Expo Push non riuscita.', error);
-      })
-      .finally(() => {
-        if (registrationInProgressForUser.current === userId) {
-          registrationInProgressForUser.current = null;
-        }
+      const delayMs = Math.min(60_000, 5_000 * 2 ** retryAttempt);
+      retryAttempt += 1;
+      console.warn('[SafeMeLink Push] Nuovo tentativo registrazione programmato.', {
+        userId,
+        retryAttempt,
+        delayMs,
       });
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void registerDevice('retry');
+      }, delayMs);
+    };
+
+    const registerDevice = async (reason: 'login' | 'foreground' | 'token_changed' | 'retry') => {
+      clearRetry();
+      console.log('[SafeMeLink Push] Avvio registrazione dispositivo.', {
+        userId,
+        reason,
+      });
+
+      try {
+        const token = await PushNotificationService.registerDeviceForUser(userId);
+
+        if (!isCurrent) {
+          return;
+        }
+
+        if (token) {
+          retryAttempt = 0;
+          console.log('[SafeMeLink Push] Registrazione dispositivo verificata.', {
+            userId,
+            reason,
+          });
+        } else {
+          console.warn('[SafeMeLink Push] Registrazione senza token, nuovo tentativo necessario.', {
+            userId,
+            reason,
+          });
+          scheduleRetry();
+        }
+      } catch (error: unknown) {
+        if (!isCurrent) {
+          return;
+        }
+
+        if (error instanceof NotificationPermissionError) {
+          if (!permissionAlertShownForUser.current.has(userId)) {
+            permissionAlertShownForUser.current.add(userId);
+            Alert.alert(
+              'Notifiche non autorizzate',
+              error.message,
+              [
+                { text: 'Non ora', style: 'cancel' },
+                {
+                  text: 'Apri impostazioni',
+                  onPress: () => {
+                    void Linking.openSettings().catch((settingsError: unknown) => {
+                      console.warn(
+                        '[SafeMeLink Push] Apertura impostazioni non riuscita.',
+                        settingsError,
+                      );
+                    });
+                  },
+                },
+              ],
+            );
+          }
+        } else {
+          scheduleRetry();
+        }
+
+        console.warn('[SafeMeLink Push] Registrazione Expo Push non riuscita.', {
+          userId,
+          reason,
+          error,
+        });
+      }
+    };
+
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        permissionAlertShownForUser.current.delete(userId);
+        void registerDevice('foreground');
+      }
+    });
+    const pushTokenSubscription = Notifications.addPushTokenListener(() => {
+      console.log('[SafeMeLink Push] Token nativo modificato, sincronizzazione richiesta.', {
+        userId,
+      });
+      void registerDevice('token_changed');
+    });
+
+    void registerDevice('login');
+
+    return () => {
+      isCurrent = false;
+      clearRetry();
+      appStateSubscription.remove();
+      pushTokenSubscription.remove();
+    };
   }, [session?.user.id]);
 
   return null;
