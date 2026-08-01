@@ -2,6 +2,12 @@ name: Build SafeMeLink Android test APK
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch or commit SHA to build
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: read
@@ -19,14 +25,25 @@ jobs:
       CI: "true"
 
     steps:
-      - name: Checkout SafeMeLink test candidate
+      - name: Validate selected source ref
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [ -z "${SOURCE_REF//[[:space:]]/}" ]; then
+            echo "::error::source_ref is required and cannot be empty."
+            exit 1
+          fi
+
+      - name: Checkout selected SafeMeLink source
         uses: actions/checkout@v4
         with:
-          ref: test/android-apk
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Verify checked out source
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           git rev-parse HEAD
           git branch --show-current
@@ -34,10 +51,18 @@ jobs:
           git status --short --branch
 
           checked_out_sha="$(git rev-parse HEAD)"
-          test_branch_sha="$(git rev-parse refs/remotes/origin/test/android-apk)"
 
-          if [ "$checked_out_sha" != "$test_branch_sha" ]; then
-            echo "::error::Wrong Git revision checked out: expected origin/test/android-apk."
+          if requested_sha="$(git rev-parse --verify "${SOURCE_REF}^{commit}" 2>/dev/null)"; then
+            :
+          elif requested_sha="$(git rev-parse --verify "refs/remotes/origin/${SOURCE_REF}^{commit}" 2>/dev/null)"; then
+            :
+          else
+            echo "::error::Unable to resolve checked out source_ref: ${SOURCE_REF}."
+            exit 1
+          fi
+
+          if [ "$checked_out_sha" != "$requested_sha" ]; then
+            echo "::error::Wrong Git revision checked out for source_ref: ${SOURCE_REF}."
             exit 1
           fi
 
@@ -90,7 +115,7 @@ jobs:
           chmod 600 google-services.json
           node -e "const f=require('./google-services.json'); const p=f.client?.some(c=>c.client_info?.android_client_info?.package_name==='com.tiziano.safemelink'); if(!p) throw new Error('google-services.json non contiene il package Android SafeMeLink.');"
 
-      - name: Verify test candidate index.tsx
+      - name: Verify selected candidate index.tsx
         run: node scripts/verify-android-test-candidate.cjs
 
       - name: TypeScript

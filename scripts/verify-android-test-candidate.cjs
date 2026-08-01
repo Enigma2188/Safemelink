@@ -6,7 +6,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const indexPath = path.join(root, 'app', '(tabs)', 'index.tsx');
 const wrongVersionMessage =
-  'Wrong index.tsx version checked out: expected test/android-apk candidate.';
+  'Selected index.tsx candidate is invalid.';
 
 const fail = (detail) => {
   throw new Error(`${wrongVersionMessage} ${detail}`);
@@ -60,5 +60,5 @@ for (const obsoleteSnippet of [
 
 const fingerprint = crypto.createHash('sha256').update(source).digest('hex');
 process.stdout.write(
-  `SafeMeLink test candidate index.tsx verified (sha256: ${fingerprint}).\n`,
+  `Selected SafeMeLink candidate index.tsx verified (sha256: ${fingerprint}).\n`,
 );

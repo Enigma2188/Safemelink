@@ -22,15 +22,23 @@ const candidateValidatorPath = path.join(
 
 assert.doesNotMatch(workflow, /\t/, 'Il workflow YAML contiene tab non valide.');
 assert.match(workflow, /^name:\s+.+$/m);
-assert.match(workflow, /^on:\s*\r?\n\s{2}workflow_dispatch:\s*$/m);
-assert.doesNotMatch(workflow, /inputs\.source_ref|github\.event\.inputs\.source_ref/);
-assert.match(workflow, /name:\s+Checkout SafeMeLink test candidate/);
-assert.match(workflow, /^\s{10}ref:\s+test\/android-apk\s*$/m);
+assert.match(workflow, /^on:\s*\r?\n\s{2}workflow_dispatch:\s*\r?\n\s{4}inputs:\s*$/m);
+assert.match(workflow, /^\s{6}source_ref:\s*$/m);
+assert.match(workflow, /^\s{8}description:\s+Branch or commit SHA to build\s*$/m);
+assert.match(workflow, /^\s{8}required:\s+true\s*$/m);
+assert.match(workflow, /^\s{8}default:\s+main\s*$/m);
+assert.match(workflow, /^\s{8}type:\s+string\s*$/m);
+assert.match(workflow, /name:\s+Validate selected source ref/);
+assert.match(workflow, /source_ref is required and cannot be empty/);
+assert.match(workflow, /name:\s+Checkout selected SafeMeLink source/);
+assert.match(workflow, /^\s{10}ref:\s+\$\{\{ inputs\.source_ref \}\}\s*$/m);
 assert.match(workflow, /persist-credentials:\s+false/);
 assert.match(workflow, /name:\s+Verify checked out source/);
 assert.match(workflow, /git rev-parse HEAD/);
-assert.match(workflow, /git rev-parse refs\/remotes\/origin\/test\/android-apk/);
-assert.match(workflow, /\[ "\$checked_out_sha" != "\$test_branch_sha" \]/);
+assert.match(workflow, /git rev-parse --verify "\$\{SOURCE_REF\}\^\{commit\}"/);
+assert.match(workflow, /refs\/remotes\/origin\/\$\{SOURCE_REF\}\^\{commit\}/);
+assert.match(workflow, /\[ "\$checked_out_sha" != "\$requested_sha" \]/);
+assert.doesNotMatch(workflow, /test\/android-apk/);
 assert.match(workflow, /node scripts\/verify-android-test-candidate\.cjs/);
 assert.match(workflow, /^jobs:\s*$/m);
 assert.match(workflow, /^\s{4}runs-on:\s+ubuntu-24\.04\s*$/m);
@@ -39,7 +47,7 @@ assert.equal(
   (workflow.match(/\}\}/g) ?? []).length,
   'Espressioni GitHub Actions non bilanciate.',
 );
-pass('struttura YAML e checkout fisso del branch test');
+pass('struttura YAML e checkout del source_ref selezionato');
 
 assert.doesNotMatch(workflow, /^\s{2}(push|pull_request|schedule):/m);
 assert.doesNotMatch(
@@ -115,9 +123,9 @@ const candidateValidator = fs.readFileSync(candidateValidatorPath, 'utf8');
 assert.match(candidateValidator, /completeSOS/);
 assert.match(candidateValidator, /dependencies\.includes\('contacts'\)/);
 assert.match(candidateValidator, /dependencies\.includes\('userId'\)/);
-assert.match(candidateValidator, /Wrong index\.tsx version checked out/);
+assert.match(candidateValidator, /Selected index\.tsx candidate is invalid/);
 assert.match(candidateValidator, /Obsolete JSX form detected/);
-pass('verifica strutturale della versione test di index.tsx');
+pass('verifica strutturale del candidato index.tsx selezionato');
 
 const trackedFiles = execFileSync('git', ['ls-files'], {
   cwd: root,
