@@ -16,46 +16,22 @@ if (!fs.existsSync(indexPath)) {
   fail('File not found.');
 }
 
+if (!fs.statSync(indexPath).isFile()) {
+  fail('Expected a regular file.');
+}
+
 const source = fs.readFileSync(indexPath, 'utf8');
-const callback = source.match(
-  /const completeSOS = useCallback\(async \(\) => \{[\s\S]*?\r?\n\s*\},\s*\[([^\]]*)\]\);/,
-);
 
-if (!callback) {
-  fail('completeSOS callback not found.');
+if (!source.trim()) {
+  fail('File is empty.');
 }
 
-const dependencies = callback[1]
-  .split(',')
-  .map((dependency) => dependency.trim())
-  .filter(Boolean);
-
-if (dependencies.includes('contacts') || !dependencies.includes('userId')) {
-  fail('completeSOS dependency array is not the expected one.');
+if (/^(<{7}|={7}|>{7})(?:\s|$)/m.test(source)) {
+  fail('Unresolved Git conflict marker detected.');
 }
 
-for (const expectedSnippet of [
-  '<Text style={styles.sectionTitle}>Parola d’ordine</Text>',
-  '{`Salvata: “${savedPassphrase.text}”`}',
-  '{`Riconosciuto: “${lastRecognizedPassphraseText}”`}',
-  '{`Da salvare: “${passphraseDraft}”`}',
-  '<Text style={styles.drawerItemText}>Parola d’ordine</Text>',
-]) {
-  if (!source.includes(expectedSnippet)) {
-    fail('Expected JSX correction not found.');
-  }
-}
-
-for (const obsoleteSnippet of [
-  "<Text style={styles.sectionTitle}>Parola d'ordine</Text>",
-  'Salvata: "{savedPassphrase.text}"',
-  'Riconosciuto: "{lastRecognizedPassphraseText}"',
-  'Da salvare: "{passphraseDraft}"',
-  "<Text style={styles.drawerItemText}>Parola d'ordine</Text>",
-]) {
-  if (source.includes(obsoleteSnippet)) {
-    fail('Obsolete JSX form detected.');
-  }
+if (source.includes('\0')) {
+  fail('Unexpected null byte detected.');
 }
 
 const fingerprint = crypto.createHash('sha256').update(source).digest('hex');

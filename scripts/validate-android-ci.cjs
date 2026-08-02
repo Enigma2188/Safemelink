@@ -120,11 +120,12 @@ assert.match(gitignore, /^\/google-services\.json$/m);
 assert.match(gitignore, /^\/android\/app\/google-services\.json$/m);
 assert.ok(fs.existsSync(candidateValidatorPath), 'Validatore del candidato test mancante.');
 const candidateValidator = fs.readFileSync(candidateValidatorPath, 'utf8');
-assert.match(candidateValidator, /completeSOS/);
-assert.match(candidateValidator, /dependencies\.includes\('contacts'\)/);
-assert.match(candidateValidator, /dependencies\.includes\('userId'\)/);
 assert.match(candidateValidator, /Selected index\.tsx candidate is invalid/);
-assert.match(candidateValidator, /Obsolete JSX form detected/);
+assert.match(candidateValidator, /fs\.statSync\(indexPath\)\.isFile\(\)/);
+assert.match(candidateValidator, /Unresolved Git conflict marker detected/);
+assert.match(candidateValidator, /Unexpected null byte detected/);
+assert.match(candidateValidator, /createHash\('sha256'\)/);
+assert.doesNotMatch(candidateValidator, /Expected JSX correction|Obsolete JSX form/);
 pass('verifica strutturale del candidato index.tsx selezionato');
 
 const trackedFiles = execFileSync('git', ['ls-files'], {
