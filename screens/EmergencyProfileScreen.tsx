@@ -1,4 +1,14 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { useEmergencyProfile } from '@/hooks/useEmergencyProfile';
 import {
@@ -99,8 +109,12 @@ export function EmergencyProfileScreen() {
   };
 
   return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.screen}>
     <ScrollView
       contentContainerStyle={styles.container}
+      keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Profilo di Emergenza</Text>
       <Text style={styles.introduction}>
@@ -216,10 +230,15 @@ export function EmergencyProfileScreen() {
         </Text>
       ) : null}
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    backgroundColor: '#f7f9fb',
+    flex: 1,
+  },
   container: {
     backgroundColor: '#f7f9fb',
     flexGrow: 1,

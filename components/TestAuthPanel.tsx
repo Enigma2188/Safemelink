@@ -107,7 +107,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   form: {
-    flexDirection: 'row',
     gap: 8,
   },
   input: {

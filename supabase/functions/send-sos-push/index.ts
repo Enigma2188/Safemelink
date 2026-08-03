@@ -201,6 +201,10 @@ Deno.serve(async (request) => {
       });
 
       if (!expoResponse.ok) {
+        console.error('[send-sos-push] Expo Push API non disponibile.', {
+          batch: start / 100 + 1,
+          status: expoResponse.status,
+        });
         expoErrors.push({
           code: `HTTP_${expoResponse.status}`,
           message: `Expo Push API ha restituito HTTP ${expoResponse.status}.`,
@@ -255,11 +259,21 @@ Deno.serve(async (request) => {
         message: ticket.message ?? 'Expo non ha accettato la notifica.',
       }));
     const unprocessedCount = tokens.length - tickets.length;
+    const sent = tickets.filter((ticket) => ticket.status === 'ok').length;
+    const failed =
+      tickets.filter((ticket) => ticket.status === 'error').length + unprocessedCount;
+
+    console.log('[send-sos-push] Invio completato.', {
+      sosId: sos.id,
+      recipientCount: recipientIds.length,
+      tokenCount: tokens.length,
+      sent,
+      failed,
+    });
 
     return jsonResponse({
-      sent: tickets.filter((ticket) => ticket.status === 'ok').length,
-      failed:
-        tickets.filter((ticket) => ticket.status === 'error').length + unprocessedCount,
+      sent,
+      failed,
       recipientCount: recipientIds.length,
       tokenCount: tokens.length,
       errors: [...expoErrors, ...ticketErrors],

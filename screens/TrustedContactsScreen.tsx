@@ -1,6 +1,16 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
@@ -263,7 +273,13 @@ export function TrustedContactsScreen() {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      keyboardDismissMode="on-drag"
+      keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
         <Text style={styles.title}>Contatti fidati</Text>
         <Text style={styles.subtitle}>Gestisci i contatti telefonici e i collegamenti SafeMeLink.</Text>
@@ -419,14 +435,20 @@ export function TrustedContactsScreen() {
         )}
       </View>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    backgroundColor: '#f7f9fb',
+    flex: 1,
+  },
   container: {
     backgroundColor: '#f7f9fb',
     flexGrow: 1,
     padding: 20,
+    paddingBottom: 96,
     paddingTop: 64,
   },
   header: {

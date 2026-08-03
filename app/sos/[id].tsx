@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ReceivedSOSRepository } from '@/backend/repositories/ReceivedSOSRepository';
@@ -157,8 +157,16 @@ export default function ReceivedSOSScreen() {
     }
   };
 
+  const goBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/');
+    }
+  };
+
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>SOS SafeMeLink</Text>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -218,17 +226,17 @@ export default function ReceivedSOSScreen() {
         </View>
       ) : null}
 
-      <Pressable style={styles.secondaryButton} onPress={() => router.back()}>
+      <Pressable style={styles.secondaryButton} onPress={goBack}>
         <Text style={styles.secondaryButtonText}>Indietro</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#f7f9fb',
-    flex: 1,
+    flexGrow: 1,
     padding: 20,
     paddingTop: 64,
   },

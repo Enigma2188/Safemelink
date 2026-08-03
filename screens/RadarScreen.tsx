@@ -2,6 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -118,7 +120,14 @@ export function RadarScreen() {
         <View style={[styles.backgroundPoint, styles.backgroundPointTwo]} />
         <View style={[styles.backgroundPoint, styles.backgroundPointThree]} />
       </View>
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
         <View style={styles.heading}>
           <View>
             <Text style={styles.title}>Radar SafeMeLink</Text>
@@ -291,6 +300,7 @@ export function RadarScreen() {
           utenti.
         </Text>
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -298,6 +308,9 @@ export function RadarScreen() {
 const styles = StyleSheet.create({
   screen: {
     backgroundColor: '#050816',
+    flex: 1,
+  },
+  keyboardAvoidingView: {
     flex: 1,
   },
   background: {

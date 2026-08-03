@@ -2,8 +2,9 @@ import { type Href, Link, useFocusEffect } from 'expo-router';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Easing, Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, BackHandler, Easing, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
@@ -446,6 +447,32 @@ export default function HomeScreen() {
     }, [loadSOSData]),
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (drawerVisible) {
+          setDrawerVisible(false);
+          return true;
+        }
+
+        if (activePanel !== 'home') {
+          setActivePanel('home');
+          return true;
+        }
+
+        if (status === 'countdown') {
+          setRemainingSeconds(SAFETY_TIMER_SECONDS);
+          setStatus('idle');
+          return true;
+        }
+
+        return false;
+      });
+
+      return () => backSubscription.remove();
+    }, [activePanel, drawerVisible, status]),
+  );
+
   const confirmPassphraseDraft = async () => {
     const normalizedDraft = normalizePassphrase(passphraseDraft);
 
@@ -515,7 +542,7 @@ export default function HomeScreen() {
     cancelCheckpoint();
   };
 
-  const saveCurrentLocationAsHome = async () => {
+  const captureCurrentLocationAsHome = async () => {
     if (!userId) {
       Alert.alert('Torno a casa', 'Accedi prima di salvare la posizione Casa.');
       return;
@@ -535,6 +562,27 @@ export default function HomeScreen() {
     } catch (error) {
       Alert.alert('Torno a casa', error instanceof Error ? error.message : 'Non riesco a salvare la posizione Casa.');
     }
+  };
+
+  const confirmHomeLocationChange = () => {
+    if (!userId) {
+      Alert.alert('Torno a casa', 'Accedi prima di salvare la posizione Casa.');
+      return;
+    }
+
+    Alert.alert(
+      homeLocation ? 'Modifica casa' : 'Imposta casa',
+      homeLocation
+        ? 'Vuoi sostituire la posizione Casa salvata con la posizione in cui ti trovi ora?'
+        : 'Vuoi impostare come Casa la posizione in cui ti trovi ora?',
+      [
+        { text: 'Annulla', style: 'cancel' },
+        {
+          text: homeLocation ? 'Modifica' : 'Imposta',
+          onPress: () => void captureCurrentLocationAsHome(),
+        },
+      ],
+    );
   };
 
   const cancelGoHome = () => {
@@ -1038,7 +1086,10 @@ export default function HomeScreen() {
         <Animated.View style={[styles.nebula, styles.nebulaTwo, nebulaAnimatedStyle]} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <Pressable style={styles.iconButton} onPress={() => setDrawerVisible(true)}>
           <Ionicons color="#F7FAFF" name="menu-outline" size={25} />
@@ -1203,8 +1254,10 @@ export default function HomeScreen() {
           </View>
         ) : (
           <View style={styles.goHomeActions}>
-            <Pressable style={styles.secondaryActionButton} onPress={saveCurrentLocationAsHome}>
-              <Text style={styles.secondaryActionText}>Salva questa posizione come Casa</Text>
+            <Pressable style={styles.secondaryActionButton} onPress={confirmHomeLocationChange}>
+              <Text style={styles.secondaryActionText}>
+                {homeLocation ? 'Modifica casa' : 'Imposta casa'}
+              </Text>
             </Pressable>
             <Pressable
               disabled={goHomeStatus === 'estimating'}
@@ -1330,6 +1383,11 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
+            <ScrollView
+              contentContainerStyle={styles.drawerContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={styles.drawerScroll}>
             <Text style={styles.drawerSectionLabel}>EMERGENZA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('home')}>
               <Ionicons color="#FF607A" name="alert-circle-outline" size={20} />
@@ -1415,6 +1473,7 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.drawerBadge}>In arrivo</Text>
             </View>
+            </ScrollView>
           </SafeAreaView>
         </View>
       </Modal>
@@ -2191,10 +2250,18 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     bottom: 0,
     left: 0,
-    padding: 18,
+    paddingHorizontal: 18,
+    paddingTop: 18,
     position: 'absolute',
     top: 0,
-    width: 306,
+    maxWidth: 340,
+    width: '86%',
+  },
+  drawerContent: {
+    paddingBottom: 32,
+  },
+  drawerScroll: {
+    flex: 1,
   },
   drawerHeader: {
     alignItems: 'center',

@@ -5,11 +5,13 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   AppState,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -84,30 +86,42 @@ export default function VoiceProtectionScreen() {
       return;
     }
 
-    const storedSettings = await VoiceProtectionStorage.get(userId);
-    const hasExpired =
-      storedSettings.expiresAt !== null &&
-      new Date(storedSettings.expiresAt).getTime() <= Date.now();
-    const serviceRunning = VoiceProtectionService.isRunning();
+    setIsLoading(true);
+    try {
+      const storedSettings = await VoiceProtectionStorage.get(userId);
+      const hasExpired =
+        storedSettings.expiresAt !== null &&
+        new Date(storedSettings.expiresAt).getTime() <= Date.now();
+      const serviceRunning = VoiceProtectionService.isRunning();
 
-    if (storedSettings.enabled && (hasExpired || !serviceRunning)) {
-      const stoppedSettings: VoiceProtectionSettings = {
-        ...storedSettings,
-        enabled: false,
-        enabledAt: null,
-        expiresAt: null,
-      };
-      await VoiceProtectionStorage.save(userId, stoppedSettings);
-      setSettings(stoppedSettings);
-      setPassphraseDraft(stoppedSettings.passphrase);
-      setMicrophoneState('off');
-    } else {
-      setSettings(storedSettings);
-      setPassphraseDraft(storedSettings.passphrase);
-      setMicrophoneState(storedSettings.enabled ? 'ready' : 'off');
+      if (storedSettings.enabled && (hasExpired || !serviceRunning)) {
+        const stoppedSettings: VoiceProtectionSettings = {
+          ...storedSettings,
+          enabled: false,
+          enabledAt: null,
+          expiresAt: null,
+        };
+        await VoiceProtectionStorage.save(userId, stoppedSettings);
+        setSettings(stoppedSettings);
+        setPassphraseDraft(stoppedSettings.passphrase);
+        setMicrophoneState('off');
+      } else {
+        setSettings(storedSettings);
+        setPassphraseDraft(storedSettings.passphrase);
+        setMicrophoneState(storedSettings.enabled ? 'ready' : 'off');
+      }
+    } catch (error) {
+      setSettings(DEFAULT_VOICE_PROTECTION_SETTINGS);
+      setPassphraseDraft('');
+      setMicrophoneState('error');
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : 'Impossibile caricare le impostazioni di Protezione Vocale.',
+      );
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   }, [userId]);
 
   useFocusEffect(
@@ -225,6 +239,10 @@ export default function VoiceProtectionScreen() {
       await VoiceProtectionStorage.save(userId, updatedSettings);
       setSettings(updatedSettings);
       setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'Impossibile salvare la parola d’ordine.',
+      );
     } finally {
       setIsSaving(false);
     }
@@ -306,6 +324,13 @@ export default function VoiceProtectionScreen() {
       setSettings(inactiveSettings);
       setMicrophoneState('off');
       setMessage('Protezione disattivata.');
+    } catch (error) {
+      setMicrophoneState('error');
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : 'Impossibile disattivare Protezione Vocale.',
+      );
     } finally {
       setIsSaving(false);
     }
@@ -394,7 +419,14 @@ export default function VoiceProtectionScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
           <View style={styles.heroIcon}>
             <Ionicons color="#E9E5FF" name="mic-outline" size={34} />
@@ -562,12 +594,14 @@ export default function VoiceProtectionScreen() {
           </View>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: '#050816', flex: 1 },
+  keyboardAvoidingView: { flex: 1 },
   content: { gap: 14, padding: 18, paddingBottom: 42 },
   centered: { alignItems: 'center', flex: 1, justifyContent: 'center' },
   hero: { alignItems: 'center', paddingBottom: 8, paddingTop: 12 },
