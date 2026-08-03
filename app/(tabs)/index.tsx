@@ -4,11 +4,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, BackHandler, Easing, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
-import { LocationService } from '@/services/LocationService';
+import {
+  INTERACTIVE_LOCATION_TIMEOUT_MS,
+  LocationPermissionError,
+  LocationService,
+} from '@/services/LocationService';
 import { SOSLifecycleService } from '@/services/SOSLifecycleService';
 import {
   SOSService,
@@ -93,6 +97,9 @@ export default function HomeScreen() {
   const passphraseModeRef = useRef<PassphraseMode>('idle');
   const savedPassphraseRef = useRef<SavedPassphrase | null>(null);
   const passphraseCooldownUntilRef = useRef(0);
+  const goHomeEstimateGenerationRef = useRef(0);
+  const goHomeEstimateInFlightRef = useRef(false);
+  const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
@@ -337,6 +344,9 @@ export default function HomeScreen() {
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
     setHomeLocation(null);
+    goHomeEstimateGenerationRef.current += 1;
+    goHomeEstimateInFlightRef.current = false;
+    homeCaptureInFlightRef.current = false;
     setGoHomeStatus('idle');
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
@@ -443,6 +453,9 @@ export default function HomeScreen() {
 
       return () => {
         loadGenerationRef.current += 1;
+        goHomeEstimateGenerationRef.current += 1;
+        goHomeEstimateInFlightRef.current = false;
+        homeCaptureInFlightRef.current = false;
       };
     }, [loadSOSData]),
   );
@@ -456,6 +469,11 @@ export default function HomeScreen() {
         }
 
         if (activePanel !== 'home') {
+          if (activePanel === 'goHome' && goHomeStatus === 'estimating') {
+            goHomeEstimateGenerationRef.current += 1;
+            goHomeEstimateInFlightRef.current = false;
+            setGoHomeStatus('idle');
+          }
           setActivePanel('home');
           return true;
         }
@@ -470,7 +488,7 @@ export default function HomeScreen() {
       });
 
       return () => backSubscription.remove();
-    }, [activePanel, drawerVisible, status]),
+    }, [activePanel, drawerVisible, goHomeStatus, status]),
   );
 
   const confirmPassphraseDraft = async () => {
@@ -548,19 +566,47 @@ export default function HomeScreen() {
       return;
     }
 
+    if (homeCaptureInFlightRef.current) {
+      return;
+    }
+
+    const requestGeneration = goHomeEstimateGenerationRef.current + 1;
+    goHomeEstimateGenerationRef.current = requestGeneration;
+    homeCaptureInFlightRef.current = true;
+
     try {
       const actionUserId = userId;
-      const location = await LocationService.getCurrentLocation();
+      const location = await LocationService.getCurrentLocation({
+        timeoutMs: INTERACTIVE_LOCATION_TIMEOUT_MS,
+      });
+
+      if (
+        activeUserIdRef.current !== actionUserId ||
+        goHomeEstimateGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
+
       const savedLocation = await GoHomeStorage.saveHomeLocation(actionUserId, location);
 
-      if (activeUserIdRef.current !== actionUserId) {
+      if (
+        activeUserIdRef.current !== actionUserId ||
+        goHomeEstimateGenerationRef.current !== requestGeneration
+      ) {
         return;
       }
 
       setHomeLocation(savedLocation);
       Alert.alert('Torno a casa', 'Posizione Casa salvata su questo dispositivo.');
     } catch (error) {
-      Alert.alert('Torno a casa', error instanceof Error ? error.message : 'Non riesco a salvare la posizione Casa.');
+      if (goHomeEstimateGenerationRef.current === requestGeneration) {
+        Alert.alert(
+          'Torno a casa',
+          error instanceof Error ? error.message : 'Non riesco a salvare la posizione Casa.',
+        );
+      }
+    } finally {
+      homeCaptureInFlightRef.current = false;
     }
   };
 
@@ -586,6 +632,8 @@ export default function HomeScreen() {
   };
 
   const cancelGoHome = () => {
+    goHomeEstimateGenerationRef.current += 1;
+    goHomeEstimateInFlightRef.current = false;
     setGoHomeStatus('idle');
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
@@ -593,6 +641,10 @@ export default function HomeScreen() {
   };
 
   const startGoHome = async () => {
+    if (goHomeEstimateInFlightRef.current) {
+      return;
+    }
+
     if (!userId) {
       Alert.alert('Torno a casa', 'Accedi prima di avviare Torno a casa.');
       return;
@@ -608,25 +660,35 @@ export default function HomeScreen() {
       return;
     }
 
+    const requestGeneration = goHomeEstimateGenerationRef.current + 1;
+    goHomeEstimateGenerationRef.current = requestGeneration;
+    goHomeEstimateInFlightRef.current = true;
     setGoHomeStatus('estimating');
 
     try {
       const actionUserId = userId;
       const savedHomeLocation = await GoHomeStorage.getHomeLocation(actionUserId);
 
-      if (activeUserIdRef.current !== actionUserId) {
+      if (
+        activeUserIdRef.current !== actionUserId ||
+        goHomeEstimateGenerationRef.current !== requestGeneration
+      ) {
         return;
       }
 
       if (!savedHomeLocation) {
-        setGoHomeStatus('idle');
         Alert.alert('Torno a casa', 'Salva prima la posizione Casa.');
         return;
       }
 
-      const startLocation = await LocationService.getCurrentLocation();
+      const startLocation = await LocationService.getCurrentLocation({
+        timeoutMs: INTERACTIVE_LOCATION_TIMEOUT_MS,
+      });
 
-      if (activeUserIdRef.current !== actionUserId) {
+      if (
+        activeUserIdRef.current !== actionUserId ||
+        goHomeEstimateGenerationRef.current !== requestGeneration
+      ) {
         return;
       }
 
@@ -662,8 +724,37 @@ export default function HomeScreen() {
         ]
       );
     } catch (error) {
-      setGoHomeStatus('idle');
-      Alert.alert('Torno a casa', error instanceof Error ? error.message : 'Non riesco ad avviare Torno a casa.');
+      if (goHomeEstimateGenerationRef.current !== requestGeneration) {
+        return;
+      }
+
+      if (error instanceof LocationPermissionError) {
+        Alert.alert(
+          'Posizione non autorizzata',
+          'Consenti a SafeMeLink di usare la posizione nelle impostazioni e poi riprova.',
+          [
+            { text: 'Annulla', style: 'cancel' },
+            { text: 'Apri impostazioni', onPress: () => void Linking.openSettings() },
+          ],
+        );
+      } else {
+        Alert.alert(
+          'Torno a casa',
+          error instanceof Error ? error.message : 'Non riesco ad avviare Torno a casa.',
+          [
+            { text: 'Annulla', style: 'cancel' },
+            {
+              text: 'Riprova',
+              onPress: () => void startGoHome(),
+            },
+          ],
+        );
+      }
+    } finally {
+      if (goHomeEstimateGenerationRef.current === requestGeneration) {
+        goHomeEstimateInFlightRef.current = false;
+        setGoHomeStatus((current) => (current === 'estimating' ? 'idle' : current));
+      }
     }
   };
 
@@ -1057,6 +1148,8 @@ export default function HomeScreen() {
       <View style={styles.starField}>
         <View style={styles.deepSpaceGlow} />
         <View style={styles.networkHalo} />
+        <View style={[styles.backgroundNetworkRing, styles.backgroundNetworkRingOuter]} />
+        <View style={[styles.backgroundNetworkRing, styles.backgroundNetworkRingInner]} />
         <View style={[styles.star, styles.starOne]} />
         <View style={[styles.star, styles.starTwo]} />
         <View style={[styles.star, styles.starThree]} />
@@ -1513,11 +1606,11 @@ const styles = StyleSheet.create({
   },
   starField: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#030518',
+    backgroundColor: '#050816',
     overflow: 'hidden',
   },
   deepSpaceGlow: {
-    backgroundColor: 'rgba(41, 31, 126, 0.7)',
+    backgroundColor: 'rgba(63, 48, 154, 0.42)',
     borderRadius: 260,
     height: 480,
     left: -210,
@@ -1527,8 +1620,8 @@ const styles = StyleSheet.create({
     width: 520,
   },
   networkHalo: {
-    backgroundColor: 'rgba(20, 105, 255, 0.24)',
-    borderColor: 'rgba(69, 183, 255, 0.18)',
+    backgroundColor: 'rgba(20, 105, 255, 0.12)',
+    borderColor: 'rgba(69, 183, 255, 0.12)',
     borderRadius: 260,
     borderWidth: 1,
     height: 520,
@@ -1536,6 +1629,24 @@ const styles = StyleSheet.create({
     right: -250,
     top: -90,
     width: 520,
+  },
+  backgroundNetworkRing: {
+    aspectRatio: 1,
+    borderColor: 'rgba(69, 183, 255, 0.09)',
+    borderRadius: 999,
+    borderWidth: 1,
+    position: 'absolute',
+  },
+  backgroundNetworkRingOuter: {
+    left: '10%',
+    top: '20%',
+    width: '80%',
+  },
+  backgroundNetworkRingInner: {
+    borderColor: 'rgba(167, 139, 250, 0.1)',
+    left: '24%',
+    top: '31%',
+    width: '52%',
   },
   star: {
     backgroundColor: '#dce9ff',
@@ -1593,18 +1704,18 @@ const styles = StyleSheet.create({
   },
   networkPoint: {
     backgroundColor: '#79D5FF',
-    borderColor: 'rgba(224, 246, 255, 0.9)',
+    borderColor: 'rgba(224, 246, 255, 0.72)',
     borderRadius: 7,
     borderWidth: 1,
-    elevation: 5,
-    height: 10,
-    opacity: 0.92,
+    elevation: 2,
+    height: 7,
+    opacity: 0.74,
     position: 'absolute',
     shadowColor: '#45B7FF',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 9,
-    width: 10,
+    shadowOpacity: 0.55,
+    shadowRadius: 6,
+    width: 7,
   },
   networkPointOne: {
     left: '18%',
@@ -1643,13 +1754,13 @@ const styles = StyleSheet.create({
     top: '48%',
   },
   networkLine: {
-    backgroundColor: 'rgba(104, 190, 255, 0.42)',
-    height: 1.5,
+    backgroundColor: 'rgba(104, 190, 255, 0.18)',
+    height: 1,
     position: 'absolute',
     shadowColor: '#45B7FF',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 4,
+    shadowOpacity: 0.22,
+    shadowRadius: 3,
   },
   networkLineOne: {
     left: '20%',

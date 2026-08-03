@@ -8,7 +8,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
-  AppState,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -39,6 +38,7 @@ const DURATION_OPTIONS: {
   { label: '2 ore', value: 120 },
   { label: 'Finché la disattivi', value: 0 },
 ];
+const VOICE_SETTINGS_LOAD_TIMEOUT_MS = 8_000;
 
 type MicrophoneState = 'off' | 'ready' | 'testing' | 'recognized' | 'error';
 
@@ -60,6 +60,45 @@ const formatRemainingTime = (expiresAt: string | null, now: number) => {
     : `${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
+const loadSettingsWithTimeout = async (userId: string) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      (async () => {
+        const storedSettings = await VoiceProtectionStorage.get(userId);
+        const hasExpired =
+          storedSettings.expiresAt !== null &&
+          new Date(storedSettings.expiresAt).getTime() <= Date.now();
+        const serviceRunning = VoiceProtectionService.isRunning();
+
+        if (storedSettings.enabled && (hasExpired || !serviceRunning)) {
+          const stoppedSettings: VoiceProtectionSettings = {
+            ...storedSettings,
+            enabled: false,
+            enabledAt: null,
+            expiresAt: null,
+          };
+          await VoiceProtectionStorage.save(userId, stoppedSettings);
+          return stoppedSettings;
+        }
+
+        return storedSettings;
+      })(),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Caricamento locale troppo lento. Riprova.')),
+          VOICE_SETTINGS_LOAD_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
 export default function VoiceProtectionScreen() {
   const { session, isInitializing } = useAuth();
   const userId = session?.user.id ?? null;
@@ -70,100 +109,107 @@ export default function VoiceProtectionScreen() {
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>('off');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [testTranscript, setTestTranscript] = useState('');
   const [now, setNow] = useState(Date.now());
   const testingRef = useRef(false);
+  const screenActiveRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
-  const refreshState = useCallback(async () => {
-    if (!userId) {
-      setSettings(DEFAULT_VOICE_PROTECTION_SETTINGS);
-      setPassphraseDraft('');
-      setMicrophoneState('off');
-      setIsLoading(false);
+  const refreshState = useCallback(async (showLoading = true) => {
+    if (refreshInFlightRef.current) {
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const storedSettings = await VoiceProtectionStorage.get(userId);
-      const hasExpired =
-        storedSettings.expiresAt !== null &&
-        new Date(storedSettings.expiresAt).getTime() <= Date.now();
-      const serviceRunning = VoiceProtectionService.isRunning();
+    refreshInFlightRef.current = true;
 
-      if (storedSettings.enabled && (hasExpired || !serviceRunning)) {
-        const stoppedSettings: VoiceProtectionSettings = {
-          ...storedSettings,
-          enabled: false,
-          enabledAt: null,
-          expiresAt: null,
-        };
-        await VoiceProtectionStorage.save(userId, stoppedSettings);
-        setSettings(stoppedSettings);
-        setPassphraseDraft(stoppedSettings.passphrase);
+    if (!userId) {
+      if (screenActiveRef.current) {
+        setSettings(DEFAULT_VOICE_PROTECTION_SETTINGS);
+        setPassphraseDraft('');
         setMicrophoneState('off');
-      } else {
+        setLoadError(null);
+        setIsLoading(false);
+      }
+      refreshInFlightRef.current = false;
+      return;
+    }
+
+    if (showLoading && screenActiveRef.current) {
+      setIsLoading(true);
+    }
+    if (screenActiveRef.current) {
+      setLoadError(null);
+    }
+
+    try {
+      const storedSettings = await loadSettingsWithTimeout(userId);
+
+      if (screenActiveRef.current) {
         setSettings(storedSettings);
         setPassphraseDraft(storedSettings.passphrase);
         setMicrophoneState(storedSettings.enabled ? 'ready' : 'off');
       }
     } catch (error) {
-      setSettings(DEFAULT_VOICE_PROTECTION_SETTINGS);
-      setPassphraseDraft('');
-      setMicrophoneState('error');
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Impossibile caricare le impostazioni di Protezione Vocale.',
-      );
+      if (screenActiveRef.current) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Impossibile caricare le impostazioni di Protezione Vocale.';
+        setSettings(DEFAULT_VOICE_PROTECTION_SETTINGS);
+        setPassphraseDraft('');
+        setMicrophoneState('error');
+        setLoadError(errorMessage);
+        setMessage(errorMessage);
+      }
     } finally {
-      setIsLoading(false);
+      refreshInFlightRef.current = false;
+      if (screenActiveRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      void refreshState();
+      screenActiveRef.current = true;
+      void refreshState(true);
+
+      return () => {
+        screenActiveRef.current = false;
+        testingRef.current = false;
+        try {
+          ExpoSpeechRecognitionModule.abort();
+        } catch {}
+      };
     }, [refreshState]),
   );
 
   useEffect(() => {
     const clock = setInterval(() => {
-      setNow(Date.now());
+      const currentTime = Date.now();
+      if (screenActiveRef.current) {
+        setNow(currentTime);
+      }
       const expiresAt = settingsRef.current.expiresAt;
 
       if (
+        screenActiveRef.current &&
         settingsRef.current.enabled &&
         expiresAt &&
-        new Date(expiresAt).getTime() <= Date.now()
+        new Date(expiresAt).getTime() <= currentTime
       ) {
-        void refreshState();
+        void refreshState(false);
       }
     }, 1000);
-    const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        void refreshState();
-      }
-    });
 
     return () => {
       clearInterval(clock);
-      appStateSubscription.remove();
     };
   }, [refreshState]);
-
-  useEffect(
-    () => () => {
-      testingRef.current = false;
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-    },
-    [],
-  );
 
   useSpeechRecognitionEvent('result', (event) => {
     if (!testingRef.current) {
@@ -484,6 +530,20 @@ export default function VoiceProtectionScreen() {
           </View>
         ) : null}
 
+        {loadError ? (
+          <View style={styles.warningCard}>
+            <Ionicons color="#FFCA72" name="warning-outline" size={22} />
+            <View style={styles.retryCopy}>
+              <Text style={[styles.warningText, styles.retryMessage]}>{loadError}</Text>
+              <Pressable
+                onPress={() => void refreshState(true)}
+                style={styles.retryButton}>
+                <Text style={styles.retryButtonText}>RIPROVA</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Parola d’ordine</Text>
           <Text style={styles.cardDescription}>
@@ -682,6 +742,10 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   warningText: { color: '#FFE0A8', flex: 1, fontSize: 13, lineHeight: 18 },
+  retryCopy: { flex: 1 },
+  retryMessage: { flex: 0 },
+  retryButton: { alignSelf: 'flex-start', marginTop: 9, paddingVertical: 4 },
+  retryButtonText: { color: '#FFCA72', fontSize: 12, fontWeight: '900' },
   cardTitle: { color: '#F7FAFF', fontSize: 18, fontWeight: '900' },
   cardDescription: { color: '#A8B5D1', fontSize: 13, lineHeight: 19, marginTop: 5 },
   input: {
