@@ -82,7 +82,7 @@ check('Radar OFF performs no location publication or nearby search', () => {
   );
   assert.match(
     radarProvider,
-    /if \(session && preferencesUserId === session\.user\.id && preferences\)[\s\S]*deactivate\(\)/,
+    /if \(userId && preferencesUserId === userId && preferences\)[\s\S]*deactivate\(\)/,
   );
 });
 

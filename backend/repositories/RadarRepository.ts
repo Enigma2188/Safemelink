@@ -32,12 +32,32 @@ const radarErrorMessages = {
   network: 'Connessione non disponibile. Controlla la rete e riprova.',
 } as const;
 
+const RADAR_REQUEST_TIMEOUT_MS = 12_000;
+
+const runRadarRequest = async <T,>(
+  operation: (signal: AbortSignal) => PromiseLike<T>,
+): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), RADAR_REQUEST_TIMEOUT_MS);
+
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('La richiesta Radar non risponde. Riprova tra poco.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 export const RadarRepository = {
   async getPreferences(): Promise<RadarPreferencesRow | null> {
     const client = requireSupabaseClient();
-    const { data, error } = await client
-      .rpc('get_my_radar_preferences')
-      .maybeSingle();
+    const { data, error } = await runRadarRequest((signal) =>
+      client.rpc('get_my_radar_preferences').abortSignal(signal).maybeSingle(),
+    );
 
     if (error) {
       throw createBackendError(
@@ -55,14 +75,16 @@ export const RadarRepository = {
 
   async updatePreferences(changes: RadarPreferencesUpdate): Promise<RadarPreferencesRow> {
     const client = requireSupabaseClient();
-    const { data, error } = await client
-      .rpc('update_my_radar_preferences', {
+    const { data, error } = await runRadarRequest((signal) =>
+      client.rpc('update_my_radar_preferences', {
         next_radar_enabled: changes.radarEnabled,
         next_visible_to_nearby: changes.visibleToNearby,
         next_show_nickname: changes.showNickname,
         next_public_nickname: changes.publicNickname,
       })
-      .single();
+        .abortSignal(signal)
+        .single(),
+    );
 
     if (error) {
       throw createBackendError(
@@ -81,11 +103,15 @@ export const RadarRepository = {
 
   async updatePresence(latitude: number, longitude: number, accuracy: number) {
     const client = requireSupabaseClient();
-    const { data, error } = await client.rpc('update_my_radar_presence', {
-      position_latitude: latitude,
-      position_longitude: longitude,
-      position_accuracy: accuracy,
-    });
+    const { data, error } = await runRadarRequest((signal) =>
+      client
+        .rpc('update_my_radar_presence', {
+          position_latitude: latitude,
+          position_longitude: longitude,
+          position_accuracy: accuracy,
+        })
+        .abortSignal(signal),
+    );
 
     if (error) {
       throw createBackendError(
@@ -103,10 +129,14 @@ export const RadarRepository = {
 
   async findNearby(radiusMeters: number, limit: number): Promise<NearbyUserRow[]> {
     const client = requireSupabaseClient();
-    const { data, error } = await client.rpc('find_nearby_users', {
-      search_radius_meters: radiusMeters,
-      result_limit: limit,
-    });
+    const { data, error } = await runRadarRequest((signal) =>
+      client
+        .rpc('find_nearby_users', {
+          search_radius_meters: radiusMeters,
+          result_limit: limit,
+        })
+        .abortSignal(signal),
+    );
 
     if (error) {
       throw createBackendError(
@@ -124,7 +154,9 @@ export const RadarRepository = {
 
   async deactivatePresence() {
     const client = requireSupabaseClient();
-    const { error } = await client.rpc('deactivate_my_radar_presence');
+    const { error } = await runRadarRequest((signal) =>
+      client.rpc('deactivate_my_radar_presence').abortSignal(signal),
+    );
 
     if (error) {
       throw createBackendError(

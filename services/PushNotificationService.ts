@@ -9,9 +9,11 @@ import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository'
 export const SOS_NOTIFICATION_CHANNEL_ID = 'sos-alerts';
 
 export class NotificationPermissionError extends Error {
-  constructor() {
+  constructor(readonly permanentlyDenied = false) {
     super(
-      'Le notifiche non sono autorizzate. Abilitale nelle impostazioni del dispositivo per ricevere gli SOS SafeMeLink.',
+      permanentlyDenied
+        ? 'Le notifiche sono disabilitate nelle impostazioni del dispositivo. Abilitale per ricevere gli SOS SafeMeLink.'
+        : 'Le notifiche non sono autorizzate. Concedi il permesso per ricevere gli SOS SafeMeLink.',
     );
     this.name = 'NotificationPermissionError';
   }
@@ -120,13 +122,15 @@ async function registerDevice(userId: string) {
     console.warn('[SafeMeLink Push] Permesso notifiche non concesso.', {
       userId,
       status: finalPermissions.status,
+      canAskAgain: finalPermissions.canAskAgain,
     });
-    throw new NotificationPermissionError();
+    throw new NotificationPermissionError(!finalPermissions.canAskAgain);
   }
 
   console.log('[SafeMeLink Push] Permessi notifiche verificati.', {
     userId,
     status: finalPermissions.status,
+    canAskAgain: finalPermissions.canAskAgain,
   });
 
   const expoPushToken = await getCurrentExpoPushToken();

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import Svg, {
   Circle,
@@ -50,7 +50,7 @@ const NETWORK_LINES = [
 
 const RADAR_RINGS = [76, 104, 134, 166, 202, 240] as const;
 
-function NetworkLayer({ highlight = false }: { highlight?: boolean }) {
+const NetworkLayer = memo(function NetworkLayer({ highlight = false }: { highlight?: boolean }) {
   return (
     <Svg
       height="100%"
@@ -139,9 +139,9 @@ function NetworkLayer({ highlight = false }: { highlight?: boolean }) {
       ))}
     </Svg>
   );
-}
+});
 
-export function SafeNetworkBackground() {
+export const SafeNetworkBackground = memo(function SafeNetworkBackground() {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -183,7 +183,7 @@ export function SafeNetworkBackground() {
       <View style={styles.bottomShade} />
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

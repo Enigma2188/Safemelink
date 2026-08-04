@@ -24,6 +24,7 @@ type SOSRecord = {
 
 type ExpoPushTicket = {
   status: 'ok' | 'error';
+  id?: string;
   message?: string;
   details?: { error?: string };
 };
@@ -161,11 +162,22 @@ Deno.serve(async (request) => {
     });
 
     if (tokens.length === 0) {
+      const reason =
+        recipientIds.length === 0
+          ? 'no_linked_recipients'
+          : 'recipients_without_active_tokens';
+      console.warn('[send-sos-push] Invio non eseguito.', {
+        sosId: sos.id,
+        recipientCount: recipientIds.length,
+        tokenCount: 0,
+        reason,
+      });
       return jsonResponse({
         sent: 0,
         failed: 0,
-        reason: 'no_active_recipients',
+        reason,
         recipientCount: recipientIds.length,
+        tokenCount: 0,
       });
     }
 
@@ -220,7 +232,9 @@ Deno.serve(async (request) => {
 
       console.log('[send-sos-push] Risposta Expo Push API.', {
         batch: start / 100 + 1,
-        response: result,
+        httpStatus: expoResponse.status,
+        ticketCount: batchTickets.length,
+        apiErrorCount: result.errors?.length ?? 0,
       });
       expoErrors.push(...(result.errors ?? []));
       batchTickets.forEach((ticket, index) => {
@@ -231,9 +245,14 @@ Deno.serve(async (request) => {
     }
 
     const tickets = ticketsWithTokens.map((item) => item.ticket);
+    const ticketIds = tickets
+      .map((ticket) => ticket.id)
+      .filter((ticketId): ticketId is string => typeof ticketId === 'string');
     console.log('[send-sos-push] Ticket Expo.', {
       ok: tickets.filter((ticket) => ticket.status === 'ok').length,
-      errors: tickets.filter((ticket) => ticket.status === 'error'),
+      failed: tickets.filter((ticket) => ticket.status === 'error').length,
+      ticketIds,
+      receiptCheckRecommendedAfterMinutes: 15,
     });
     const invalidTokens = ticketsWithTokens
       .filter(

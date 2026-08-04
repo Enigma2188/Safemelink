@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import { VoiceProtectionService } from '@/services/VoiceProtectionService';
 import { normalizePassphrase } from '@/storage/PassphraseStorage';
 import {
@@ -40,6 +41,7 @@ const DURATION_OPTIONS: {
 ];
 const VOICE_SETTINGS_LOAD_TIMEOUT_MS = 8_000;
 const VOICE_SETTINGS_SAVE_TIMEOUT_MS = 8_000;
+const VOICE_TEST_TIMEOUT_MS = 12_000;
 
 type MicrophoneState = 'off' | 'ready' | 'testing' | 'recognized' | 'error';
 
@@ -136,12 +138,53 @@ export default function VoiceProtectionScreen() {
   const [testTranscript, setTestTranscript] = useState('');
   const [now, setNow] = useState(Date.now());
   const testingRef = useRef(false);
+  const testTranscriptRef = useRef('');
+  const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const screenActiveRef = useRef(false);
   const screenGenerationRef = useRef(0);
   const refreshInFlightRef = useRef(false);
   const saveInFlightRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  const clearTestTimeout = useCallback(() => {
+    if (testTimeoutRef.current) {
+      clearTimeout(testTimeoutRef.current);
+      testTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finishVoiceTest = useCallback((reason: 'end' | 'nomatch' | 'timeout') => {
+    if (!testingRef.current) {
+      return;
+    }
+
+    testingRef.current = false;
+    clearTestTimeout();
+    const transcript = testTranscriptRef.current.trim();
+    const expected = normalizePassphrase(settingsRef.current.passphrase);
+    const recognizedText = normalizePassphrase(transcript);
+    const matches =
+      Boolean(expected && recognizedText) &&
+      (recognizedText === expected || recognizedText.includes(expected));
+
+    if (matches) {
+      setMicrophoneState('recognized');
+      setMessage('Test riuscito: parola d’ordine riconosciuta localmente.');
+      return;
+    }
+
+    setMicrophoneState('ready');
+    if (transcript) {
+      setMessage('Parola non riconosciuta. Puoi ripetere il test.');
+    } else if (reason === 'timeout') {
+      setMessage(
+        'Tempo scaduto: non ho rilevato una parola. Avvicinati al microfono e riprova.',
+      );
+    } else {
+      setMessage('Nessuna parola riconosciuta. Controlla il microfono e riprova.');
+    }
+  }, [clearTestTimeout]);
 
   const refreshState = useCallback(async (showLoading = true) => {
     if (refreshInFlightRef.current) {
@@ -207,11 +250,12 @@ export default function VoiceProtectionScreen() {
       return () => {
         screenActiveRef.current = false;
         testingRef.current = false;
+        clearTestTimeout();
         try {
           ExpoSpeechRecognitionModule.abort();
         } catch {}
       };
-    }, [refreshState]),
+    }, [clearTestTimeout, refreshState]),
   );
 
   useEffect(() => {
@@ -248,23 +292,12 @@ export default function VoiceProtectionScreen() {
     }
 
     setTestTranscript(transcript);
+    testTranscriptRef.current = transcript;
     if (!event.isFinal) {
       return;
     }
 
-    testingRef.current = false;
-    const expectedPassphrase = normalizePassphrase(settingsRef.current.passphrase);
-    const recognizedText = normalizePassphrase(transcript);
-    const recognized =
-      recognizedText === expectedPassphrase ||
-      recognizedText.includes(expectedPassphrase);
-
-    setMicrophoneState(recognized ? 'recognized' : 'ready');
-    setMessage(
-      recognized
-        ? 'Test riuscito: parola d’ordine riconosciuta localmente.'
-        : 'Parola non riconosciuta. Puoi ripetere il test.',
-    );
+    finishVoiceTest('end');
   });
 
   useSpeechRecognitionEvent('error', (event) => {
@@ -273,15 +306,17 @@ export default function VoiceProtectionScreen() {
     }
 
     testingRef.current = false;
+    clearTestTimeout();
     setMicrophoneState('error');
     setMessage(event.message || 'Test vocale interrotto.');
   });
 
+  useSpeechRecognitionEvent('nomatch', () => {
+    finishVoiceTest('nomatch');
+  });
+
   useSpeechRecognitionEvent('end', () => {
-    if (testingRef.current) {
-      testingRef.current = false;
-      setMicrophoneState(settingsRef.current.enabled ? 'ready' : 'off');
-    }
+    finishVoiceTest('end');
   });
 
   const durationLabel = useMemo(
@@ -357,6 +392,7 @@ export default function VoiceProtectionScreen() {
         setSettings(storedSettings);
         setPassphraseDraft(storedSettings.passphrase);
         setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
+        VoiceProtectionRuntime.notifySettingsChanged(userId);
       }
     } catch (error) {
       console.error('[VoiceProtection] errore salvataggio parola', {
@@ -429,7 +465,8 @@ export default function VoiceProtectionScreen() {
       );
       setSettings(activeSettings);
       setMicrophoneState('ready');
-      setMessage('Protezione attiva. Il motore locale è pronto.');
+      VoiceProtectionRuntime.notifySettingsChanged(userId);
+      setMessage('Protezione attiva. Ascolto locale disponibile mentre l’app è aperta.');
     } catch (error) {
       setMicrophoneState('error');
       setMessage(
@@ -467,6 +504,7 @@ export default function VoiceProtectionScreen() {
       );
       setSettings(inactiveSettings);
       setMicrophoneState('off');
+      VoiceProtectionRuntime.notifySettingsChanged(userId);
       setMessage('Protezione disattivata.');
     } catch (error) {
       setMicrophoneState('error');
@@ -497,6 +535,10 @@ export default function VoiceProtectionScreen() {
       );
       return;
     }
+    if (settings.enabled) {
+      setMessage('Disattiva temporaneamente la modalità protetta prima di eseguire il test.');
+      return;
+    }
 
     try {
       const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
@@ -510,8 +552,9 @@ export default function VoiceProtectionScreen() {
         ExpoSpeechRecognitionModule.abort();
       } catch {}
       testingRef.current = true;
+      testTranscriptRef.current = '';
       setTestTranscript('');
-      setMessage('Pronuncia ora la parola d’ordine.');
+      setMessage('Sto ascoltando… Pronuncia ora la parola d’ordine.');
       setMicrophoneState('testing');
       ExpoSpeechRecognitionModule.start({
         lang: 'it-IT',
@@ -521,8 +564,16 @@ export default function VoiceProtectionScreen() {
         contextualStrings: [settings.passphrase],
         requiresOnDeviceRecognition: true,
       });
+      clearTestTimeout();
+      testTimeoutRef.current = setTimeout(() => {
+        try {
+          ExpoSpeechRecognitionModule.stop();
+        } catch {}
+        finishVoiceTest('timeout');
+      }, VOICE_TEST_TIMEOUT_MS);
     } catch (error) {
       testingRef.current = false;
+      clearTestTimeout();
       setMicrophoneState('error');
       setMessage(
         error instanceof Error ? error.message : 'Impossibile avviare il test.',
@@ -611,7 +662,7 @@ export default function VoiceProtectionScreen() {
               </Text>
             </View>
             <Switch
-              disabled={isSaving}
+              disabled={isSaving || !userId || (!settings.enabled && !settings.passphrase)}
               onValueChange={(enabled) =>
                 void (enabled ? activateProtection() : deactivateProtection())
               }
@@ -620,6 +671,12 @@ export default function VoiceProtectionScreen() {
               value={settings.enabled}
             />
           </View>
+
+          {!settings.enabled && !settings.passphrase ? (
+            <Text style={styles.cardDescription}>
+              Salva prima una parola d’ordine per rendere disponibile l’attivazione.
+            </Text>
+          ) : null}
 
           <View style={styles.microphoneRow}>
             <View
@@ -726,12 +783,12 @@ export default function VoiceProtectionScreen() {
             Il test ascolta una sola volta e verifica la frase esclusivamente sul dispositivo.
           </Text>
           <Pressable
-            disabled={isSaving || microphoneState === 'testing' || !userId}
+            disabled={isSaving || microphoneState === 'testing' || settings.enabled || !userId}
             onPress={() => void runVoiceTest()}
             style={({ pressed }) => [
               styles.testButton,
               pressed && styles.buttonPressed,
-              (isSaving || microphoneState === 'testing' || !userId) &&
+              (isSaving || microphoneState === 'testing' || settings.enabled || !userId) &&
                 styles.disabled,
             ]}>
             <Ionicons color="#FFFFFF" name="mic" size={20} />

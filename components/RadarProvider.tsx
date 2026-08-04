@@ -59,6 +59,7 @@ const clearRadarState = (
 
 export function RadarProvider({ children }: PropsWithChildren) {
   const { session, isInitializing } = useAuth();
+  const userId = session?.user.id ?? null;
   const [users, setUsers] = useState<NearbyUser[]>([]);
   const [status, setStatus] = useState<RadarViewStatus>('loading_preferences');
   const [error, setError] = useState<string | null>(null);
@@ -66,19 +67,45 @@ export function RadarProvider({ children }: PropsWithChildren) {
   const [preferencesUserId, setPreferencesUserId] = useState<string | null>(null);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const cycleInFlightRef = useRef(false);
+  const lastCycleStartedAtRef = useRef(0);
   const preferenceSaveRef = useRef<RadarPreferenceSave | null>(null);
-  const activeUserIdRef = useRef<string | null>(session?.user.id ?? null);
+  const deactivationInFlightRef = useRef<Promise<void> | null>(null);
+  const presenceMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeUserIdRef = useRef<string | null>(userId);
   const lastPublishedRef = useRef<RadarPresenceSnapshot | null>(null);
   const radarEnabled = preferences?.radarEnabled ?? false;
   const participationEnabled = canParticipateInRadar(preferences);
-  activeUserIdRef.current = session?.user.id ?? null;
+  activeUserIdRef.current = userId;
+
+  const enqueuePresenceMutation = useCallback(<T,>(operation: () => Promise<T>) => {
+    const request = presenceMutationQueueRef.current
+      .catch(() => undefined)
+      .then(operation);
+    presenceMutationQueueRef.current = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    return request;
+  }, []);
 
   const deactivate = useCallback(() => {
     lastPublishedRef.current = null;
-    void RadarService.deactivatePresence().catch((deactivationError: unknown) => {
-      console.warn('[SafeMeLink Radar] Disattivazione presenza non riuscita.', deactivationError);
-    });
-  }, []);
+    if (deactivationInFlightRef.current) {
+      return deactivationInFlightRef.current;
+    }
+
+    const request = enqueuePresenceMutation(() => RadarService.deactivatePresence())
+      .catch((deactivationError: unknown) => {
+        console.warn('[SafeMeLink Radar] Disattivazione presenza non riuscita.', deactivationError);
+      })
+      .finally(() => {
+        if (deactivationInFlightRef.current === request) {
+          deactivationInFlightRef.current = null;
+        }
+      });
+    deactivationInFlightRef.current = request;
+    return request;
+  }, [enqueuePresenceMutation]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -89,7 +116,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       };
     }
 
-    if (!session) {
+    if (!userId) {
       setPreferences(null);
       setPreferencesUserId(null);
       setIsSavingPreferences(false);
@@ -109,7 +136,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       .then((storedPreferences) => {
         if (isCurrent) {
           setPreferences(storedPreferences);
-          setPreferencesUserId(session.user.id);
+          setPreferencesUserId(userId);
           setStatus(
             storedPreferences.radarEnabled
               ? storedPreferences.visibleToNearby
@@ -134,7 +161,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
     return () => {
       isCurrent = false;
     };
-  }, [isInitializing, session]);
+  }, [isInitializing, userId]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -143,8 +170,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
     let locationSubscription: LocationWatchSubscription | null = null;
     let locationWatchStarting = false;
     const canParticipate = Boolean(
-      session &&
-        preferencesUserId === session.user.id &&
+      userId &&
+        preferencesUserId === userId &&
         participationEnabled,
     );
 
@@ -162,20 +189,29 @@ export function RadarProvider({ children }: PropsWithChildren) {
     };
 
     const runCycle = async (observedLocation?: SOSLocation) => {
+      const cycleStartedAt = Date.now();
       if (
         !isCurrent ||
         appState !== 'active' ||
         !canParticipate ||
-        cycleInFlightRef.current
+        cycleInFlightRef.current ||
+        cycleStartedAt - lastCycleStartedAtRef.current < RADAR_REFRESH_INTERVAL_MS
       ) {
         return;
       }
 
+      lastCycleStartedAtRef.current = cycleStartedAt;
       cycleInFlightRef.current = true;
       setStatus((current) => (current === 'ready' ? current : 'searching'));
       setError(null);
 
       try {
+        await deactivationInFlightRef.current;
+
+        if (!isCurrent || appState !== 'active') {
+          return;
+        }
+
         const location = observedLocation ?? (await LocationService.getCurrentLocation());
 
         if (!isCurrent || appState !== 'active') {
@@ -193,7 +229,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
         const now = Date.now();
 
         if (shouldPublishRadarPresence(lastPublishedRef.current, location, now)) {
-          await RadarService.publishPresence(location);
+          await enqueuePresenceMutation(() => RadarService.publishPresence(location));
 
           if (!isCurrent || appState !== 'active') {
             deactivate();
@@ -305,19 +341,20 @@ export function RadarProvider({ children }: PropsWithChildren) {
       } else if (wasActive) {
         stopInterval();
         stopLocationWatch();
+        lastCycleStartedAtRef.current = 0;
         deactivate();
       }
     });
 
-    if (session && preferencesUserId !== session.user.id) {
+    if (userId && preferencesUserId !== userId) {
       clearRadarState(setUsers, setError);
       setStatus('loading_preferences');
       deactivate();
     } else if (!canParticipate) {
       clearRadarState(setUsers, setError);
-      setStatus(session ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
+      setStatus(userId ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
 
-      if (session && preferencesUserId === session.user.id && preferences) {
+      if (userId && preferencesUserId === userId && preferences) {
         deactivate();
       } else {
         lastPublishedRef.current = null;
@@ -330,6 +367,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       isCurrent = false;
       stopInterval();
       stopLocationWatch();
+      lastCycleStartedAtRef.current = 0;
       appStateSubscription.remove();
 
       if (canParticipate) {
@@ -338,17 +376,16 @@ export function RadarProvider({ children }: PropsWithChildren) {
     };
   }, [
     deactivate,
+    enqueuePresenceMutation,
     participationEnabled,
     preferences,
     preferencesUserId,
     radarEnabled,
-    session,
+    userId,
   ]);
 
   const updatePreferences = useCallback(
     async (changes: RadarPreferenceChanges) => {
-      const userId = session?.user.id;
-
       if (!userId || !preferences || preferencesUserId !== userId) {
         throw new Error('Preferenze Radar non disponibili.');
       }
@@ -398,7 +435,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
         }
       }
     },
-    [preferences, preferencesUserId, session?.user.id],
+    [preferences, preferencesUserId, userId],
   );
 
   const value = useMemo<RadarContextValue>(

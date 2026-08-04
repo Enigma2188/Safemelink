@@ -16,6 +16,7 @@ import {
   LocationService,
 } from '@/services/LocationService';
 import { SOSLifecycleService } from '@/services/SOSLifecycleService';
+import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import {
   SOSService,
   type ActiveSOSEvent,
@@ -35,7 +36,7 @@ const WALKING_SPEED_KM_H = 5;
 const GO_HOME_SAFETY_MARGIN = 1.3;
 const GO_HOME_STORAGE_TIMEOUT_MS = 8_000;
 const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
-const DRAWER_DISMISS_DELAY_MS = 350;
+const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
 const PASSPHRASE_COOLDOWN_MS = 10000;
 const SPEECH_RECOGNITION_LANGUAGE = 'it-IT';
 
@@ -96,6 +97,26 @@ const runGoHomeStepWithTimeout = async <T,>(
   }
 };
 
+const runSOSLocalStepWithTimeout = async <T,>(operation: Promise<T>) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('La cronologia locale non risponde.')),
+          SOS_LOCAL_FINALIZE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
 export default function HomeScreen() {
   const { session, isInitializing, isSubmitting, logout } = useAuth();
   const router = useRouter();
@@ -131,8 +152,10 @@ export default function HomeScreen() {
   const goHomeEstimateInFlightRef = useRef(false);
   const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
+  const statusRef = useRef<SOSStatus>('idle');
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
+  const sosEndingInFlightRef = useRef(false);
   const drawerNavigationInFlightRef = useRef(false);
   const pendingDrawerRouteRef = useRef<Href | null>(null);
   const drawerNavigationStartedAtRef = useRef(0);
@@ -142,9 +165,11 @@ export default function HomeScreen() {
   const latestEvent = useMemo(() => lastEvents[0], [lastEvents]);
   const passphraseIsConfigured = Boolean(savedPassphrase);
   activeUserIdRef.current = userId;
+  statusRef.current = status;
 
-  useEffect(() => {
-    const logoAnimation = Animated.loop(
+  useFocusEffect(
+    useCallback(() => {
+      const logoAnimation = Animated.loop(
       Animated.sequence([
         Animated.timing(logoGlowPulse, {
           duration: 8000,
@@ -160,7 +185,7 @@ export default function HomeScreen() {
         }),
       ])
     );
-    const sosAnimation = Animated.loop(
+      const sosAnimation = Animated.loop(
       Animated.sequence([
         Animated.timing(sosGlowPulse, {
           duration: 7000,
@@ -177,14 +202,15 @@ export default function HomeScreen() {
       ])
     );
 
-    logoAnimation.start();
-    sosAnimation.start();
+      logoAnimation.start();
+      sosAnimation.start();
 
-    return () => {
-      logoAnimation.stop();
-      sosAnimation.stop();
-    };
-  }, [logoGlowPulse, sosGlowPulse]);
+      return () => {
+        logoAnimation.stop();
+        sosAnimation.stop();
+      };
+    }, [logoGlowPulse, sosGlowPulse]),
+  );
 
   const startSOSCountdown = useCallback(() => {
     if (contacts.length === 0) {
@@ -196,6 +222,23 @@ export default function HomeScreen() {
     setActiveEvent(null);
     setStatus('countdown');
   }, [contacts.length]);
+
+  useEffect(
+    () =>
+      VoiceProtectionRuntime.onSOSRequested((requestUserId) => {
+        if (requestUserId !== activeUserIdRef.current) {
+          return;
+        }
+        if (statusRef.current !== 'idle') {
+          console.info('[VoiceProtection] SOS vocale ignorato: flusso SOS già attivo');
+          return;
+        }
+
+        console.info('[VoiceProtection] avvio countdown SOS esistente');
+        startSOSCountdown();
+      }),
+    [startSOSCountdown],
+  );
 
   useEffect(() => {
     passphraseModeRef.current = passphraseMode;
@@ -351,6 +394,7 @@ export default function HomeScreen() {
     setContacts([]);
     setLastEvents([]);
     setActiveEvent(null);
+    sosEndingInFlightRef.current = false;
     setIsEndingSOS(false);
     setStatus('idle');
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
@@ -1095,7 +1139,10 @@ export default function HomeScreen() {
   }, [goHomeConfirmSeconds, goHomeStatus, startSOSCountdown]);
 
   const finishSOS = async (terminalStatus: SOSTerminalStatus) => {
-    if (isEndingSOS || !activeEvent) {
+    if (sosEndingInFlightRef.current || !activeEvent) {
+      if (sosEndingInFlightRef.current) {
+        console.info('[SafeMeLink SOS] Chiusura duplicata ignorata.');
+      }
       return;
     }
 
@@ -1107,10 +1154,17 @@ export default function HomeScreen() {
       return;
     }
 
+    const startedAt = Date.now();
+    sosEndingInFlightRef.current = true;
     setIsEndingSOS(true);
+    console.info('[SafeMeLink SOS] Chiusura avviata.', {
+      terminalStatus,
+      hasRemoteSos: Boolean(eventToFinish.remoteSosId),
+    });
 
     try {
       if (eventToFinish.remoteSosId) {
+        console.info('[SafeMeLink SOS] Aggiornamento stato remoto avviato.');
         const remoteState =
           terminalStatus === 'closed'
             ? await SOSLifecycleService.close(eventToFinish.remoteSosId)
@@ -1119,15 +1173,14 @@ export default function HomeScreen() {
         if (remoteState.sos_status !== terminalStatus) {
           throw new Error('Il backend non ha confermato la conclusione dell’SOS.');
         }
+        console.info('[SafeMeLink SOS] Stato remoto confermato.', { terminalStatus });
       }
 
       let nextEvents: SOSEvent[];
 
       try {
-        nextEvents = await SOSStorage.finalizeEvent(
-          actionUserId,
-          eventToFinish.id,
-          terminalStatus,
+        nextEvents = await runSOSLocalStepWithTimeout(
+          SOSStorage.finalizeEvent(actionUserId, eventToFinish.id, terminalStatus),
         );
       } catch (storageError: unknown) {
         console.warn('[SafeMeLink SOS] Cronologia locale non aggiornata.', storageError);
@@ -1155,7 +1208,16 @@ export default function HomeScreen() {
       setActiveEvent(null);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
+      console.info('[SafeMeLink SOS] Chiusura completata.', {
+        durationMs: Date.now() - startedAt,
+        terminalStatus,
+      });
     } catch (finishError: unknown) {
+      console.warn('[SafeMeLink SOS] Chiusura non completata.', {
+        durationMs: Date.now() - startedAt,
+        message:
+          finishError instanceof Error ? finishError.message : 'errore sconosciuto',
+      });
       if (activeUserIdRef.current === actionUserId) {
         Alert.alert(
           'SOS ancora attivo',
@@ -1165,6 +1227,7 @@ export default function HomeScreen() {
         );
       }
     } finally {
+      sosEndingInFlightRef.current = false;
       if (activeUserIdRef.current === actionUserId) {
         setIsEndingSOS(false);
       }
@@ -1244,13 +1307,13 @@ export default function HomeScreen() {
     }
 
     const destination = pendingDrawerRouteRef.current;
-    const navigationTimer = setTimeout(() => {
+    const navigationFrame = requestAnimationFrame(() => {
       if (pendingDrawerRouteRef.current !== destination) {
         return;
       }
 
       try {
-        router.push(destination);
+        router.navigate(destination);
         console.info('[SafeMeLink Navigation] fine navigazione drawer.', {
           origin: '/(tabs)',
           destination: String(destination),
@@ -1267,10 +1330,10 @@ export default function HomeScreen() {
         pendingDrawerRouteRef.current = null;
         drawerNavigationInFlightRef.current = false;
       }
-    }, DRAWER_DISMISS_DELAY_MS);
+    });
 
     return () => {
-      clearTimeout(navigationTimer);
+      cancelAnimationFrame(navigationFrame);
       if (pendingDrawerRouteRef.current === destination) {
         console.info('[SafeMeLink Navigation] navigazione drawer annullata nel cleanup.', {
           origin: '/(tabs)',
@@ -1636,6 +1699,8 @@ export default function HomeScreen() {
             <ScrollView
               contentContainerStyle={styles.drawerContent}
               keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+              overScrollMode="always"
               showsVerticalScrollIndicator={false}
               style={styles.drawerScroll}>
             <Text style={styles.drawerSectionLabel}>EMERGENZA</Text>
@@ -2299,13 +2364,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     maxWidth: 340,
+    minHeight: 0,
     width: '86%',
   },
   drawerContent: {
+    flexGrow: 1,
     paddingBottom: 32,
   },
   drawerScroll: {
     flex: 1,
+    minHeight: 0,
   },
   drawerHeader: {
     alignItems: 'center',

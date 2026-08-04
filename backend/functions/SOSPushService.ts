@@ -11,7 +11,10 @@ export type SOSDeliveryResult = {
   notificationsSent: number;
   notificationsFailed: number;
   errors: string[];
-  reason?: 'not_authenticated' | 'no_active_recipients';
+  reason?:
+    | 'not_authenticated'
+    | 'no_linked_recipients'
+    | 'recipients_without_active_tokens';
 };
 
 type SOSPushResponse = {
@@ -20,7 +23,7 @@ type SOSPushResponse = {
   recipientCount?: number;
   tokenCount?: number;
   errors?: { code?: string; message: string }[];
-  reason?: 'no_active_recipients';
+  reason?: 'no_linked_recipients' | 'recipients_without_active_tokens';
 };
 
 const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
@@ -171,7 +174,13 @@ async function sendSOSPush(
 
     console.log('[SafeMeLink Push] Risposta Edge Function ricevuta.', {
       sosId: sos.id,
-      result: data,
+      httpStatus: 200,
+      recipientCount: data?.recipientCount ?? 0,
+      tokenCount: data?.tokenCount ?? 0,
+      sent: data?.sent ?? 0,
+      failed: data?.failed ?? 0,
+      reason: data?.reason,
+      errorCount: data?.errors?.length ?? 0,
     });
 
     return {
