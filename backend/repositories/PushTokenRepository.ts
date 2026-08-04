@@ -20,6 +20,13 @@ export const PushTokenRepository = {
       .single();
 
     if (error) {
+      console.error('[SafeMeLink Push] Upsert device_push_tokens non riuscito.', {
+        userId: input.user_id,
+        platform: input.platform,
+        code: error.code,
+        possibleTokenOwnershipConflict:
+          error.code === '23505' || error.code === '42501',
+      });
       throw new BackendError('Impossibile salvare il token push del dispositivo.', error);
     }
 

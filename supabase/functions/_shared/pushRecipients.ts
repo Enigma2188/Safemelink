@@ -51,5 +51,12 @@ export async function getActiveRecipientTokens(
     ),
   ];
 
+  console.log('[send-sos-push] Token destinatari verificati.', {
+    recipientCount: recipientIds.length,
+    activeTokenRowCount: pushTokenRows.length,
+    validUniqueTokenCount: tokens.length,
+    discardedTokenCount: pushTokenRows.length - tokens.length,
+  });
+
   return { recipientIds, tokens };
 }

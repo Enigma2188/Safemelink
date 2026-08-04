@@ -39,6 +39,7 @@ const DURATION_OPTIONS: {
   { label: 'Finché la disattivi', value: 0 },
 ];
 const VOICE_SETTINGS_LOAD_TIMEOUT_MS = 8_000;
+const VOICE_SETTINGS_SAVE_TIMEOUT_MS = 8_000;
 
 type MicrophoneState = 'off' | 'ready' | 'testing' | 'recognized' | 'error';
 
@@ -99,6 +100,27 @@ const loadSettingsWithTimeout = async (userId: string) => {
   }
 };
 
+const runWithTimeout = async <T,>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
 export default function VoiceProtectionScreen() {
   const { session, isInitializing } = useAuth();
   const userId = session?.user.id ?? null;
@@ -115,7 +137,9 @@ export default function VoiceProtectionScreen() {
   const [now, setNow] = useState(Date.now());
   const testingRef = useRef(false);
   const screenActiveRef = useRef(false);
+  const screenGenerationRef = useRef(0);
   const refreshInFlightRef = useRef(false);
+  const saveInFlightRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
@@ -176,6 +200,8 @@ export default function VoiceProtectionScreen() {
   useFocusEffect(
     useCallback(() => {
       screenActiveRef.current = true;
+      screenGenerationRef.current += 1;
+      setIsSaving(saveInFlightRef.current);
       void refreshState(true);
 
       return () => {
@@ -266,31 +292,95 @@ export default function VoiceProtectionScreen() {
   );
 
   const savePassphrase = async () => {
+    if (saveInFlightRef.current) {
+      console.info('[VoiceProtection] salvataggio ignorato: operazione già in corso');
+      return;
+    }
+
     if (!userId) {
       setMessage('Accedi prima di configurare Protezione Vocale.');
       return;
     }
 
-    if (normalizePassphrase(passphraseDraft).length < 3) {
+    const trimmedPassphrase = passphraseDraft.trim();
+    const normalizedPassphrase = normalizePassphrase(trimmedPassphrase);
+
+    if (normalizedPassphrase.length < 3) {
       setMessage('La parola d’ordine deve contenere almeno 3 caratteri.');
       return;
     }
 
+    const startedAt = Date.now();
+    const screenGeneration = screenGenerationRef.current;
+    saveInFlightRef.current = true;
     setIsSaving(true);
+    setMessage('');
+    console.info('[VoiceProtection] inizio salvataggio parola');
+    console.info('[VoiceProtection] valore parola', {
+      length: trimmedPassphrase.length,
+      normalizedValue: normalizedPassphrase,
+    });
+
     try {
-      const updatedSettings = {
-        ...settings,
-        passphrase: passphraseDraft.trim(),
+      const updatedSettings: VoiceProtectionSettings = {
+        ...settingsRef.current,
+        passphrase: trimmedPassphrase,
       };
-      await VoiceProtectionStorage.save(userId, updatedSettings);
-      setSettings(updatedSettings);
-      setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : 'Impossibile salvare la parola d’ordine.',
+
+      console.info('[VoiceProtection] scrittura storage avviata');
+      await runWithTimeout(
+        VoiceProtectionStorage.save(userId, updatedSettings),
+        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+        'Il salvataggio locale non risponde. Riprova.',
       );
+      console.info('[VoiceProtection] scrittura storage completata');
+
+      console.info('[VoiceProtection] lettura di verifica avviata');
+      const storedSettings = await runWithTimeout(
+        VoiceProtectionStorage.get(userId),
+        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+        'La verifica del salvataggio locale non risponde. Riprova.',
+      );
+      console.info('[VoiceProtection] lettura di verifica completata');
+
+      if (normalizePassphrase(storedSettings.passphrase) !== normalizedPassphrase) {
+        throw new Error('La parola salvata non coincide con il valore inserito. Riprova.');
+      }
+
+      console.info('[VoiceProtection] conferma salvataggio riuscita', {
+        durationMs: Date.now() - startedAt,
+      });
+      if (
+        screenActiveRef.current &&
+        screenGenerationRef.current === screenGeneration
+      ) {
+        setSettings(storedSettings);
+        setPassphraseDraft(storedSettings.passphrase);
+        setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
+      }
+    } catch (error) {
+      console.error('[VoiceProtection] errore salvataggio parola', {
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+      if (
+        screenActiveRef.current &&
+        screenGenerationRef.current === screenGeneration
+      ) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : 'Impossibile salvare la parola d’ordine.',
+        );
+      }
     } finally {
-      setIsSaving(false);
+      saveInFlightRef.current = false;
+      console.info('[VoiceProtection] salvataggio terminato', {
+        durationMs: Date.now() - startedAt,
+      });
+      if (screenActiveRef.current) {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -332,7 +422,11 @@ export default function VoiceProtectionScreen() {
         enabledAt: activation.enabledAt,
         expiresAt: activation.expiresAt,
       };
-      await VoiceProtectionStorage.save(userId, activeSettings);
+      await runWithTimeout(
+        VoiceProtectionStorage.save(userId, activeSettings),
+        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+        'Il salvataggio locale non risponde. Riprova.',
+      );
       setSettings(activeSettings);
       setMicrophoneState('ready');
       setMessage('Protezione attiva. Il motore locale è pronto.');
@@ -366,7 +460,11 @@ export default function VoiceProtectionScreen() {
         enabledAt: null,
         expiresAt: null,
       };
-      await VoiceProtectionStorage.save(userId, inactiveSettings);
+      await runWithTimeout(
+        VoiceProtectionStorage.save(userId, inactiveSettings),
+        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+        'Il salvataggio locale non risponde. Riprova.',
+      );
       setSettings(inactiveSettings);
       setMicrophoneState('off');
       setMessage('Protezione disattivata.');
@@ -437,9 +535,25 @@ export default function VoiceProtectionScreen() {
       return;
     }
 
-    const updatedSettings = { ...settings, durationMinutes };
+    const previousSettings = settingsRef.current;
+    const updatedSettings = { ...previousSettings, durationMinutes };
     setSettings(updatedSettings);
-    await VoiceProtectionStorage.save(userId, updatedSettings);
+    try {
+      await runWithTimeout(
+        VoiceProtectionStorage.save(userId, updatedSettings),
+        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+        'Il salvataggio locale non risponde. Riprova.',
+      );
+    } catch (error) {
+      if (screenActiveRef.current) {
+        setSettings(previousSettings);
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : 'Impossibile salvare la durata della protezione.',
+        );
+      }
+    }
   };
 
   const microphoneLabel =

@@ -1,9 +1,6 @@
-import {
-  getAccountStorageItem,
-  setAccountStorageItem,
-} from '@/storage/AccountScopedStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const LEGACY_KEYS: readonly string[] = [];
+import { getAccountStorageKey } from '@/storage/AccountScopedStorage';
 
 export type VoiceProtectionDurationMinutes = 30 | 60 | 120 | 0;
 
@@ -25,10 +22,8 @@ export const DEFAULT_VOICE_PROTECTION_SETTINGS: VoiceProtectionSettings = {
 
 export const VoiceProtectionStorage = {
   async get(userId: string): Promise<VoiceProtectionSettings> {
-    const storedValue = await getAccountStorageItem(
-      userId,
-      'voice-protection',
-      LEGACY_KEYS,
+    const storedValue = await AsyncStorage.getItem(
+      getAccountStorageKey(userId, 'voice-protection'),
     );
 
     if (!storedValue) {
@@ -47,11 +42,9 @@ export const VoiceProtectionStorage = {
   },
 
   async save(userId: string, settings: VoiceProtectionSettings) {
-    await setAccountStorageItem(
-      userId,
-      'voice-protection',
+    await AsyncStorage.setItem(
+      getAccountStorageKey(userId, 'voice-protection'),
       JSON.stringify(settings),
-      LEGACY_KEYS,
     );
   },
 };

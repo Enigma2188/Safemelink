@@ -21,8 +21,34 @@ const isExpoPushToken = (token: string) =>
   /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token);
 
 const tokenLabel = (token: string) => `...${token.slice(-10)}`;
+const PUSH_NATIVE_STEP_TIMEOUT_MS = 15_000;
+const PUSH_BACKEND_STEP_TIMEOUT_MS = 15_000;
 const cachedExpoPushTokensByUser = new Map<string, string>();
 const registrationsByUser = new Map<string, Promise<string | null>>();
+
+const runPushStepWithTimeout = async <T,>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  step: string,
+) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Timeout registrazione push durante: ${step}.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
 
 const getExpoProjectId = () =>
   Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
@@ -35,7 +61,11 @@ async function getCurrentExpoPushToken() {
   }
 
   console.log('[SafeMeLink Push] Richiesta Expo Push Token.', { projectId });
-  const { data: expoPushToken } = await Notifications.getExpoPushTokenAsync({ projectId });
+  const { data: expoPushToken } = await runPushStepWithTimeout(
+    Notifications.getExpoPushTokenAsync({ projectId }),
+    PUSH_NATIVE_STEP_TIMEOUT_MS,
+    'ottenimento Expo Push Token',
+  );
 
   if (!isExpoPushToken(expoPushToken)) {
     throw new Error('Il dispositivo ha restituito un Expo Push Token non valido.');
@@ -73,10 +103,18 @@ async function registerDevice(userId: string) {
     });
   }
 
-  const currentPermissions = await Notifications.getPermissionsAsync();
+  const currentPermissions = await runPushStepWithTimeout(
+    Notifications.getPermissionsAsync(),
+    PUSH_NATIVE_STEP_TIMEOUT_MS,
+    'lettura permessi notifiche',
+  );
   const finalPermissions = currentPermissions.granted
     ? currentPermissions
-    : await Notifications.requestPermissionsAsync();
+    : await runPushStepWithTimeout(
+        Notifications.requestPermissionsAsync(),
+        PUSH_NATIVE_STEP_TIMEOUT_MS,
+        'richiesta permessi notifiche',
+      );
 
   if (!finalPermissions.granted) {
     console.warn('[SafeMeLink Push] Permesso notifiche non concesso.', {
@@ -101,20 +139,32 @@ async function registerDevice(userId: string) {
     platform,
   });
 
-  const currentSession = await AuthService.getSession();
+  const currentSession = await runPushStepWithTimeout(
+    AuthService.getSession(),
+    PUSH_BACKEND_STEP_TIMEOUT_MS,
+    'verifica sessione Supabase',
+  );
 
   if (currentSession?.user.id !== userId) {
     console.warn('[SafeMeLink Push] Registrazione annullata: account non più attivo.', { userId });
     return null;
   }
 
-  await PushTokenRepository.upsertForUser({
-    user_id: userId,
-    expo_push_token: expoPushToken,
-    platform,
-    device_name: Device.modelName,
-    active: true,
+  console.log('[SafeMeLink Push] Upsert token avviato.', {
+    userId,
+    token: tokenLabel(expoPushToken),
   });
+  await runPushStepWithTimeout(
+    PushTokenRepository.upsertForUser({
+      user_id: userId,
+      expo_push_token: expoPushToken,
+      platform,
+      device_name: Device.modelName,
+      active: true,
+    }),
+    PUSH_BACKEND_STEP_TIMEOUT_MS,
+    'upsert device_push_tokens',
+  );
   cachedExpoPushTokensByUser.set(userId, expoPushToken);
 
   console.log('[SafeMeLink Push] Token associato all’utente.', {

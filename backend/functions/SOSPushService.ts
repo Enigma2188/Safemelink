@@ -24,6 +24,27 @@ type SOSPushResponse = {
 };
 
 const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
+const EDGE_FUNCTION_TIMEOUT_MS = 20_000;
+
+async function invokeWithTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Timeout chiamata Edge Function send-sos-push.')),
+          EDGE_FUNCTION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 async function getInvokeErrorDetails(error: unknown) {
   const details: Record<string, unknown> = {
@@ -89,20 +110,47 @@ async function sendSOSPush(
       hasAccessToken: session.access_token.length > 0,
     });
 
-    const { data, error } = await client.functions.invoke<SOSPushResponse>(
-      'send-sos-push',
-      {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: {
-          sosId: sos.id,
-          senderUserId: session.user.id,
-          latitude: sos.latitude,
-          longitude: sos.longitude,
-        },
-      },
-    );
+    let invokeResult: Awaited<ReturnType<typeof client.functions.invoke<SOSPushResponse>>>;
+
+    try {
+      invokeResult = await invokeWithTimeout(
+        client.functions.invoke<SOSPushResponse>(
+          'send-sos-push',
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: {
+              sosId: sos.id,
+              senderUserId: session.user.id,
+              latitude: sos.latitude,
+              longitude: sos.longitude,
+            },
+          },
+        ),
+      );
+    } catch (invokeError) {
+      console.error('[SafeMeLink Push] Edge Function senza risposta.', {
+        sosId: sos.id,
+        error:
+          invokeError instanceof Error ? invokeError.message : 'Errore invocazione sconosciuto.',
+      });
+      return {
+        sosCreated: true,
+        sosId: sos.id,
+        recipientCount: 0,
+        tokenCount: 0,
+        notificationsSent: 0,
+        notificationsFailed: 0,
+        errors: [
+          invokeError instanceof Error
+            ? invokeError.message
+            : 'Edge Function send-sos-push senza risposta.',
+        ],
+      };
+    }
+
+    const { data, error } = invokeResult;
 
     if (error) {
       const errorDetails = await getInvokeErrorDetails(error);

@@ -1,16 +1,17 @@
-import { type Href, Link, useFocusEffect } from 'expo-router';
+import { type Href, Link, useFocusEffect, useRouter } from 'expo-router';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import {
   INTERACTIVE_LOCATION_TIMEOUT_MS,
   LocationPermissionError,
+  LocationUnavailableError,
   LocationService,
 } from '@/services/LocationService';
 import { SOSLifecycleService } from '@/services/SOSLifecycleService';
@@ -31,12 +32,16 @@ const CHECKPOINT_OPTIONS_MINUTES = [5, 10, 15, 30];
 const GO_HOME_CONFIRM_SECONDS = 30;
 const WALKING_SPEED_KM_H = 5;
 const GO_HOME_SAFETY_MARGIN = 1.3;
+const GO_HOME_STORAGE_TIMEOUT_MS = 8_000;
+const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
+const DRAWER_DISMISS_DELAY_MS = 350;
 const PASSPHRASE_COOLDOWN_MS = 10000;
 const SPEECH_RECOGNITION_LANGUAGE = 'it-IT';
 
 type SOSStatus = 'idle' | 'countdown' | 'sending' | 'active';
 type CheckpointStatus = 'idle' | 'running' | 'confirming';
 type GoHomeStatus = 'idle' | 'estimating' | 'running' | 'confirming';
+type GoHomeErrorAction = 'retry' | 'location-settings' | null;
 type PassphraseMode = 'idle' | 'recording' | 'listening';
 type HomePanel = 'home' | 'checkpoint' | 'goHome' | 'passphrase';
 
@@ -69,8 +74,30 @@ const calculateDistanceKm = (
 const estimateWalkingMinutes = (distanceKm: number) =>
   Math.max(1, Math.round((distanceKm / WALKING_SPEED_KM_H) * 60 * GO_HOME_SAFETY_MARGIN));
 
+const runGoHomeStepWithTimeout = async <T,>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
 export default function HomeScreen() {
   const { session, isInitializing, isSubmitting, logout } = useAuth();
+  const router = useRouter();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
@@ -87,6 +114,8 @@ export default function HomeScreen() {
   const [goHomeSession, setGoHomeSession] = useState<GoHomeSession | null>(null);
   const [goHomeRemainingSeconds, setGoHomeRemainingSeconds] = useState(0);
   const [goHomeConfirmSeconds, setGoHomeConfirmSeconds] = useState(GO_HOME_CONFIRM_SECONDS);
+  const [goHomeError, setGoHomeError] = useState('');
+  const [goHomeErrorAction, setGoHomeErrorAction] = useState<GoHomeErrorAction>(null);
   const [savedPassphrase, setSavedPassphrase] = useState<SavedPassphrase | null>(null);
   const [passphraseMode, setPassphraseMode] = useState<PassphraseMode>('idle');
   const [passphraseDraft, setPassphraseDraft] = useState('');
@@ -103,6 +132,9 @@ export default function HomeScreen() {
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
+  const drawerNavigationInFlightRef = useRef(false);
+  const pendingDrawerRouteRef = useRef<Href | null>(null);
+  const drawerNavigationStartedAtRef = useRef(0);
   const nebulaPulse = useRef(new Animated.Value(0)).current;
   const logoGlowPulse = useRef(new Animated.Value(0)).current;
   const sosGlowPulse = useRef(new Animated.Value(0)).current;
@@ -351,6 +383,8 @@ export default function HomeScreen() {
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+    setGoHomeError('');
+    setGoHomeErrorAction(null);
     setSavedPassphrase(null);
     setPassphraseDraft('');
     setLastRecognizedPassphraseText('');
@@ -464,6 +498,14 @@ export default function HomeScreen() {
     useCallback(() => {
       const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
         if (drawerVisible) {
+          if (pendingDrawerRouteRef.current) {
+            console.info('[SafeMeLink Navigation] navigazione drawer annullata.', {
+              origin: '/(tabs)',
+              destination: String(pendingDrawerRouteRef.current),
+            });
+            pendingDrawerRouteRef.current = null;
+            drawerNavigationInFlightRef.current = false;
+          }
           setDrawerVisible(false);
           return true;
         }
@@ -635,13 +677,30 @@ export default function HomeScreen() {
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
     setGoHomeStatus('idle');
+    setGoHomeError('');
+    setGoHomeErrorAction(null);
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
   };
 
+  const openGoHomeLocationSettings = async () => {
+    try {
+      if (Platform.OS === 'android') {
+        await Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+        return;
+      }
+
+      await Linking.openSettings();
+    } catch (error) {
+      console.warn('[TornoACasa] apertura impostazioni posizione non riuscita', error);
+      await Linking.openSettings();
+    }
+  };
+
   const startGoHome = async () => {
     if (goHomeEstimateInFlightRef.current) {
+      console.info('[TornoACasa] richiesta ignorata: calcolo già in corso');
       return;
     }
 
@@ -664,10 +723,22 @@ export default function HomeScreen() {
     goHomeEstimateGenerationRef.current = requestGeneration;
     goHomeEstimateInFlightRef.current = true;
     setGoHomeStatus('estimating');
+    setGoHomeError('');
+    setGoHomeErrorAction(null);
+    const startedAt = Date.now();
+    console.info('[TornoACasa] inizio operazione');
 
     try {
       const actionUserId = userId;
-      const savedHomeLocation = await GoHomeStorage.getHomeLocation(actionUserId);
+      console.info('[TornoACasa] lettura casa salvata avviata');
+      const savedHomeLocation = await runGoHomeStepWithTimeout(
+        GoHomeStorage.getHomeLocation(actionUserId),
+        GO_HOME_STORAGE_TIMEOUT_MS,
+        'La lettura della posizione Casa non risponde. Riprova.',
+      );
+      console.info('[TornoACasa] lettura casa salvata completata', {
+        found: Boolean(savedHomeLocation),
+      });
 
       if (
         activeUserIdRef.current !== actionUserId ||
@@ -677,12 +748,22 @@ export default function HomeScreen() {
       }
 
       if (!savedHomeLocation) {
+        setGoHomeError('Salva prima la posizione Casa.');
+        setGoHomeErrorAction(null);
         Alert.alert('Torno a casa', 'Salva prima la posizione Casa.');
         return;
       }
 
-      const startLocation = await LocationService.getCurrentLocation({
-        timeoutMs: INTERACTIVE_LOCATION_TIMEOUT_MS,
+      console.info('[TornoACasa] richiesta GPS avviata');
+      const startLocation = await runGoHomeStepWithTimeout(
+        LocationService.getCurrentLocation({
+          timeoutMs: INTERACTIVE_LOCATION_TIMEOUT_MS,
+        }),
+        GO_HOME_GPS_TIMEOUT_MS,
+        'La richiesta GPS non risponde. Controlla la posizione e riprova.',
+      );
+      console.info('[TornoACasa] posizione GPS ricevuta', {
+        accuracy: startLocation.accuracy,
       });
 
       if (
@@ -694,6 +775,10 @@ export default function HomeScreen() {
 
       const distanceKm = calculateDistanceKm(startLocation, savedHomeLocation);
       const estimatedMinutes = estimateWalkingMinutes(distanceKm);
+      console.info('[TornoACasa] distanza calcolata', {
+        distanceKm,
+        estimatedMinutes,
+      });
       const session: GoHomeSession = {
         id: `${Date.now()}`,
         createdAt: new Date().toISOString(),
@@ -710,11 +795,21 @@ export default function HomeScreen() {
           {
             text: 'Annulla',
             style: 'cancel',
-            onPress: () => setGoHomeStatus('idle'),
+            onPress: () => {
+              if (goHomeEstimateGenerationRef.current === requestGeneration) {
+                setGoHomeStatus('idle');
+              }
+            },
           },
           {
             text: 'Avvia',
             onPress: () => {
+              if (
+                activeUserIdRef.current !== actionUserId ||
+                goHomeEstimateGenerationRef.current !== requestGeneration
+              ) {
+                return;
+              }
               setGoHomeSession(session);
               setGoHomeRemainingSeconds(estimatedMinutes * 60);
               setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
@@ -725,22 +820,50 @@ export default function HomeScreen() {
       );
     } catch (error) {
       if (goHomeEstimateGenerationRef.current !== requestGeneration) {
+        console.info('[TornoACasa] risultato ignorato: operazione annullata', {
+          durationMs: Date.now() - startedAt,
+        });
         return;
       }
 
+      const errorMessage =
+        error instanceof Error ? error.message : 'Non riesco ad avviare Torno a casa.';
+      console.error('[TornoACasa] errore operazione', {
+        durationMs: Date.now() - startedAt,
+        error,
+      });
+
       if (error instanceof LocationPermissionError) {
+        setGoHomeError(errorMessage);
+        setGoHomeErrorAction('location-settings');
         Alert.alert(
           'Posizione non autorizzata',
           'Consenti a SafeMeLink di usare la posizione nelle impostazioni e poi riprova.',
           [
             { text: 'Annulla', style: 'cancel' },
-            { text: 'Apri impostazioni', onPress: () => void Linking.openSettings() },
+            { text: 'Apri impostazioni', onPress: () => void openGoHomeLocationSettings() },
+          ],
+        );
+      } else if (error instanceof LocationUnavailableError) {
+        setGoHomeError(errorMessage);
+        setGoHomeErrorAction('location-settings');
+        Alert.alert(
+          'GPS non disponibile',
+          errorMessage,
+          [
+            { text: 'Annulla', style: 'cancel' },
+            {
+              text: 'Apri impostazioni',
+              onPress: () => void openGoHomeLocationSettings(),
+            },
           ],
         );
       } else {
+        setGoHomeError(errorMessage);
+        setGoHomeErrorAction('retry');
         Alert.alert(
           'Torno a casa',
-          error instanceof Error ? error.message : 'Non riesco ad avviare Torno a casa.',
+          errorMessage,
           [
             { text: 'Annulla', style: 'cancel' },
             {
@@ -755,6 +878,10 @@ export default function HomeScreen() {
         goHomeEstimateInFlightRef.current = false;
         setGoHomeStatus((current) => (current === 'estimating' ? 'idle' : current));
       }
+      console.info('[TornoACasa] termine operazione', {
+        cancelled: goHomeEstimateGenerationRef.current !== requestGeneration,
+        durationMs: Date.now() - startedAt,
+      });
     }
   };
 
@@ -1098,6 +1225,82 @@ export default function HomeScreen() {
     setDrawerVisible(false);
   };
 
+  const closeDrawer = () => {
+    if (pendingDrawerRouteRef.current) {
+      console.info('[SafeMeLink Navigation] navigazione drawer annullata.', {
+        origin: '/(tabs)',
+        destination: String(pendingDrawerRouteRef.current),
+      });
+      pendingDrawerRouteRef.current = null;
+      drawerNavigationInFlightRef.current = false;
+    }
+    setDrawerVisible(false);
+  };
+
+  const navigateFromDrawer = (destination: Href) => {
+    if (drawerNavigationInFlightRef.current) {
+      console.info('[SafeMeLink Navigation] navigazione duplicata ignorata.', {
+        origin: '/(tabs)',
+        destination: String(destination),
+      });
+      return;
+    }
+
+    drawerNavigationInFlightRef.current = true;
+    pendingDrawerRouteRef.current = destination;
+    drawerNavigationStartedAtRef.current = Date.now();
+    console.info('[SafeMeLink Navigation] inizio navigazione drawer.', {
+      origin: '/(tabs)',
+      destination: String(destination),
+    });
+    setDrawerVisible(false);
+  };
+
+  useEffect(() => {
+    if (drawerVisible || !pendingDrawerRouteRef.current) {
+      return;
+    }
+
+    const destination = pendingDrawerRouteRef.current;
+    const navigationTimer = setTimeout(() => {
+      if (pendingDrawerRouteRef.current !== destination) {
+        return;
+      }
+
+      try {
+        router.push(destination);
+        console.info('[SafeMeLink Navigation] fine navigazione drawer.', {
+          origin: '/(tabs)',
+          destination: String(destination),
+          durationMs: Date.now() - drawerNavigationStartedAtRef.current,
+        });
+      } catch (error) {
+        console.error('[SafeMeLink Navigation] errore navigazione drawer.', {
+          origin: '/(tabs)',
+          destination: String(destination),
+          durationMs: Date.now() - drawerNavigationStartedAtRef.current,
+          error: error instanceof Error ? error.message : 'Errore sconosciuto.',
+        });
+      } finally {
+        pendingDrawerRouteRef.current = null;
+        drawerNavigationInFlightRef.current = false;
+      }
+    }, DRAWER_DISMISS_DELAY_MS);
+
+    return () => {
+      clearTimeout(navigationTimer);
+      if (pendingDrawerRouteRef.current === destination) {
+        console.info('[SafeMeLink Navigation] navigazione drawer annullata nel cleanup.', {
+          origin: '/(tabs)',
+          destination: String(destination),
+          durationMs: Date.now() - drawerNavigationStartedAtRef.current,
+        });
+        pendingDrawerRouteRef.current = null;
+        drawerNavigationInFlightRef.current = false;
+      }
+    };
+  }, [drawerVisible, router]);
+
   const activeSafetyMode =
     status !== 'idle'
       ? 'SOS attivo'
@@ -1358,6 +1561,24 @@ export default function HomeScreen() {
               onPress={startGoHome}>
               <Text style={styles.goHomeStartText}>{goHomeStatus === 'estimating' ? 'Calcolo...' : 'Avvia Torno a casa'}</Text>
             </Pressable>
+            {goHomeError && goHomeErrorAction ? (
+              <View>
+                <Text style={styles.goHomeNote}>{goHomeError}</Text>
+                <Pressable
+                  style={styles.secondaryActionButton}
+                  onPress={() =>
+                    void (goHomeErrorAction === 'location-settings'
+                      ? openGoHomeLocationSettings()
+                      : startGoHome())
+                  }>
+                  <Text style={styles.secondaryActionText}>
+                    {goHomeErrorAction === 'location-settings'
+                      ? 'Apri impostazioni'
+                      : 'Riprova'}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         )}
       </View>
@@ -1447,9 +1668,9 @@ export default function HomeScreen() {
       </View>
       )}
 
-      <Modal visible={drawerVisible} transparent animationType="fade" onRequestClose={() => setDrawerVisible(false)}>
+      <Modal visible={drawerVisible} transparent animationType="fade" onRequestClose={closeDrawer}>
         <View style={styles.drawerOverlay}>
-          <Pressable style={styles.drawerScrim} onPress={() => setDrawerVisible(false)} />
+          <Pressable style={styles.drawerScrim} onPress={closeDrawer} />
           <SafeAreaView style={styles.drawer}>
             <View style={styles.drawerHeader}>
               <View style={styles.drawerBrand}>
@@ -1471,7 +1692,7 @@ export default function HomeScreen() {
                   </View>
                 </View>
               </View>
-              <Pressable style={styles.drawerClose} onPress={() => setDrawerVisible(false)}>
+              <Pressable style={styles.drawerClose} onPress={closeDrawer}>
                 <Ionicons color="#A8B5D1" name="close-outline" size={24} />
               </Pressable>
             </View>
@@ -1486,12 +1707,12 @@ export default function HomeScreen() {
               <Ionicons color="#FF607A" name="alert-circle-outline" size={20} />
               <Text style={styles.drawerItemText}>SOS</Text>
             </Pressable>
-            <Link href={"/(tabs)/contacts" as any} asChild>
-              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Ionicons color="#45B7FF" name="people-outline" size={20} />
-                <Text style={styles.drawerItemText}>Contatti fidati</Text>
-              </Pressable>
-            </Link>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/(tabs)/contacts' as unknown as Href)}>
+              <Ionicons color="#45B7FF" name="people-outline" size={20} />
+              <Text style={styles.drawerItemText}>Contatti fidati</Text>
+            </Pressable>
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>SICUREZZA PREVENTIVA</Text>
             <Pressable style={styles.drawerItem} onPress={() => openPanel('checkpoint')}>
@@ -1502,21 +1723,21 @@ export default function HomeScreen() {
               <Ionicons color="#7868FF" name="navigate-outline" size={20} />
               <Text style={styles.drawerItemText}>Torno a casa</Text>
             </Pressable>
-            <Link href={'/voice-protection' as unknown as Href} asChild>
-              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Ionicons color="#A78BFA" name="mic-outline" size={20} />
-                <Text style={styles.drawerItemText}>Protezione Vocale</Text>
-              </Pressable>
-            </Link>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/voice-protection' as unknown as Href)}>
+              <Ionicons color="#A78BFA" name="mic-outline" size={20} />
+              <Text style={styles.drawerItemText}>Protezione Vocale</Text>
+            </Pressable>
 
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>COMMUNITY</Text>
-            <Link href={'/radar' as unknown as Href} asChild>
-              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Ionicons color="#45B7FF" name="radio-outline" size={20} />
-                <Text style={styles.drawerItemText}>Radar</Text>
-              </Pressable>
-            </Link>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/radar' as unknown as Href)}>
+              <Ionicons color="#45B7FF" name="radio-outline" size={20} />
+              <Text style={styles.drawerItemText}>Radar</Text>
+            </Pressable>
             <View style={styles.drawerItemDisabled}>
               <View style={styles.drawerDisabledCopy}>
                 <Ionicons color="#687898" name="shield-checkmark-outline" size={20} />
@@ -1534,19 +1755,19 @@ export default function HomeScreen() {
 
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>ACCOUNT</Text>
-            <Link href={'/emergency-profile' as unknown as Href} asChild>
-              <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                <Ionicons color="#A78BFA" name="person-circle-outline" size={20} />
-                <Text style={styles.drawerItemText}>Profilo</Text>
-              </Pressable>
-            </Link>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/emergency-profile' as unknown as Href)}>
+              <Ionicons color="#A78BFA" name="person-circle-outline" size={20} />
+              <Text style={styles.drawerItemText}>Profilo</Text>
+            </Pressable>
             {!session ? (
-              <Link href={'/login' as unknown as Href} asChild>
-                <Pressable style={styles.drawerItem} onPress={() => setDrawerVisible(false)}>
-                  <Ionicons color="#45B7FF" name="log-in-outline" size={20} />
-                  <Text style={styles.drawerItemText}>Accesso</Text>
-                </Pressable>
-              </Link>
+              <Pressable
+                style={styles.drawerItem}
+                onPress={() => navigateFromDrawer('/login' as unknown as Href)}>
+                <Ionicons color="#45B7FF" name="log-in-outline" size={20} />
+                <Text style={styles.drawerItemText}>Accesso</Text>
+              </Pressable>
             ) : (
               <Pressable
                 disabled={isSubmitting}

@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ReceivedSOSRepository } from '@/backend/repositories/ReceivedSOSRepository';
@@ -30,7 +30,21 @@ export default function ReceivedSOSScreen() {
   const [error, setError] = useState<string | null>(null);
   const [isAccepting, setIsAccepting] = useState(false);
   const activeUserIdRef = useRef<string | undefined>(userId);
+  const backNavigationInFlightRef = useRef(false);
+  const backNavigationCompletedRef = useRef(false);
   activeUserIdRef.current = userId;
+
+  useEffect(
+    () => () => {
+      if (backNavigationInFlightRef.current) {
+        console.info('[SafeMeLink Navigation] ritorno SOS annullato nel cleanup.', {
+          origin: '/sos/[id]',
+        });
+      }
+      backNavigationInFlightRef.current = false;
+    },
+    [],
+  );
 
   useEffect(() => {
     setSOS(null);
@@ -157,13 +171,58 @@ export default function ReceivedSOSScreen() {
     }
   };
 
-  const goBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/');
+  const goBack = useCallback(() => {
+    if (backNavigationInFlightRef.current || backNavigationCompletedRef.current) {
+      console.info('[SafeMeLink Navigation] ritorno SOS duplicato ignorato.', {
+        origin: '/sos/[id]',
+      });
+      return;
     }
-  };
+
+    backNavigationInFlightRef.current = true;
+    const startedAt = Date.now();
+    const canGoBack = router.canGoBack();
+    const destination = canGoBack ? 'schermata precedente' : '/';
+    console.info('[SafeMeLink Navigation] inizio ritorno SOS.', {
+      origin: '/sos/[id]',
+      destination,
+    });
+
+    try {
+      if (canGoBack) {
+        router.back();
+      } else {
+        router.replace('/');
+      }
+      backNavigationCompletedRef.current = true;
+      console.info('[SafeMeLink Navigation] fine ritorno SOS.', {
+        origin: '/sos/[id]',
+        destination,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (navigationError) {
+      console.error('[SafeMeLink Navigation] errore ritorno SOS.', {
+        origin: '/sos/[id]',
+        destination,
+        durationMs: Date.now() - startedAt,
+        error:
+          navigationError instanceof Error
+            ? navigationError.message
+            : 'Errore sconosciuto.',
+      });
+    } finally {
+      backNavigationInFlightRef.current = false;
+    }
+  }, [router]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [goBack]);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -226,7 +285,10 @@ export default function ReceivedSOSScreen() {
         </View>
       ) : null}
 
-      <Pressable style={styles.secondaryButton} onPress={goBack}>
+      <Pressable
+        disabled={backNavigationInFlightRef.current || backNavigationCompletedRef.current}
+        style={styles.secondaryButton}
+        onPress={goBack}>
         <Text style={styles.secondaryButtonText}>Indietro</Text>
       </Pressable>
     </ScrollView>
