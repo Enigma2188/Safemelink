@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import {
   INTERACTIVE_LOCATION_TIMEOUT_MS,
@@ -135,7 +136,6 @@ export default function HomeScreen() {
   const drawerNavigationInFlightRef = useRef(false);
   const pendingDrawerRouteRef = useRef<Href | null>(null);
   const drawerNavigationStartedAtRef = useRef(0);
-  const nebulaPulse = useRef(new Animated.Value(0)).current;
   const logoGlowPulse = useRef(new Animated.Value(0)).current;
   const sosGlowPulse = useRef(new Animated.Value(0)).current;
 
@@ -144,22 +144,6 @@ export default function HomeScreen() {
   activeUserIdRef.current = userId;
 
   useEffect(() => {
-    const nebulaAnimation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(nebulaPulse, {
-          duration: 9000,
-          easing: Easing.inOut(Easing.sin),
-          toValue: 1,
-          useNativeDriver: true,
-        }),
-        Animated.timing(nebulaPulse, {
-          duration: 9000,
-          easing: Easing.inOut(Easing.sin),
-          toValue: 0,
-          useNativeDriver: true,
-        }),
-      ])
-    );
     const logoAnimation = Animated.loop(
       Animated.sequence([
         Animated.timing(logoGlowPulse, {
@@ -193,16 +177,14 @@ export default function HomeScreen() {
       ])
     );
 
-    nebulaAnimation.start();
     logoAnimation.start();
     sosAnimation.start();
 
     return () => {
-      nebulaAnimation.stop();
       logoAnimation.stop();
       sosAnimation.stop();
     };
-  }, [logoGlowPulse, nebulaPulse, sosGlowPulse]);
+  }, [logoGlowPulse, sosGlowPulse]);
 
   const startSOSCountdown = useCallback(() => {
     if (contacts.length === 0) {
@@ -1311,20 +1293,6 @@ export default function HomeScreen() {
           : passphraseMode === 'listening'
             ? "Parola d'ordine in ascolto"
             : 'Nessuna modalita attiva';
-  const nebulaAnimatedStyle = {
-    opacity: nebulaPulse.interpolate({
-      inputRange: [0, 1],
-      outputRange: [0.18, 0.32],
-    }),
-    transform: [
-      {
-        scale: nebulaPulse.interpolate({
-          inputRange: [0, 1],
-          outputRange: [1, 1.04],
-        }),
-      },
-    ],
-  };
   const logoGlowAnimatedStyle = {
     opacity: logoGlowPulse.interpolate({
       inputRange: [0, 1],
@@ -1348,39 +1316,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.starField}>
-        <View style={styles.deepSpaceGlow} />
-        <View style={styles.networkHalo} />
-        <View style={[styles.backgroundNetworkRing, styles.backgroundNetworkRingOuter]} />
-        <View style={[styles.backgroundNetworkRing, styles.backgroundNetworkRingInner]} />
-        <View style={[styles.star, styles.starOne]} />
-        <View style={[styles.star, styles.starTwo]} />
-        <View style={[styles.star, styles.starThree]} />
-        <View style={[styles.star, styles.starFour]} />
-        <View style={[styles.star, styles.starFive]} />
-        <View style={[styles.star, styles.starSix]} />
-        <View style={[styles.star, styles.starSeven]} />
-        <View style={[styles.star, styles.starEight]} />
-        <View style={[styles.networkPoint, styles.networkPointOne]} />
-        <View style={[styles.networkPoint, styles.networkPointTwo]} />
-        <View style={[styles.networkPoint, styles.networkPointThree]} />
-        <View style={[styles.networkPoint, styles.networkPointFour]} />
-        <View style={[styles.networkPoint, styles.networkPointFive]} />
-        <View style={[styles.networkPoint, styles.networkPointSix]} />
-        <View style={[styles.networkPoint, styles.networkPointSeven]} />
-        <View style={[styles.networkPoint, styles.networkPointEight]} />
-        <View style={[styles.networkPoint, styles.networkPointNine]} />
-        <View style={[styles.networkLine, styles.networkLineOne]} />
-        <View style={[styles.networkLine, styles.networkLineTwo]} />
-        <View style={[styles.networkLine, styles.networkLineThree]} />
-        <View style={[styles.networkLine, styles.networkLineFour]} />
-        <View style={[styles.networkLine, styles.networkLineFive]} />
-        <View style={[styles.networkLine, styles.networkLineSix]} />
-        <View style={[styles.networkLine, styles.networkLineSeven]} />
-        <View style={[styles.networkLine, styles.networkLineEight]} />
-        <Animated.View style={[styles.nebula, styles.nebulaOne, nebulaAnimatedStyle]} />
-        <Animated.View style={[styles.nebula, styles.nebulaTwo, nebulaAnimatedStyle]} />
-      </View>
+      <SafeNetworkBackground />
 
       <ScrollView
         contentContainerStyle={styles.container}
@@ -1824,230 +1760,6 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: '#050816',
     flex: 1,
-  },
-  starField: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#050816',
-    overflow: 'hidden',
-  },
-  deepSpaceGlow: {
-    backgroundColor: 'rgba(63, 48, 154, 0.42)',
-    borderRadius: 260,
-    height: 480,
-    left: -210,
-    position: 'absolute',
-    top: 150,
-    transform: [{ rotate: '-18deg' }],
-    width: 520,
-  },
-  networkHalo: {
-    backgroundColor: 'rgba(20, 105, 255, 0.12)',
-    borderColor: 'rgba(69, 183, 255, 0.12)',
-    borderRadius: 260,
-    borderWidth: 1,
-    height: 520,
-    position: 'absolute',
-    right: -250,
-    top: -90,
-    width: 520,
-  },
-  backgroundNetworkRing: {
-    aspectRatio: 1,
-    borderColor: 'rgba(69, 183, 255, 0.09)',
-    borderRadius: 999,
-    borderWidth: 1,
-    position: 'absolute',
-  },
-  backgroundNetworkRingOuter: {
-    left: '10%',
-    top: '20%',
-    width: '80%',
-  },
-  backgroundNetworkRingInner: {
-    borderColor: 'rgba(167, 139, 250, 0.1)',
-    left: '24%',
-    top: '31%',
-    width: '52%',
-  },
-  star: {
-    backgroundColor: '#dce9ff',
-    borderRadius: 4,
-    opacity: 0.78,
-    position: 'absolute',
-  },
-  starOne: {
-    height: 4,
-    left: '14%',
-    top: '12%',
-    width: 4,
-  },
-  starTwo: {
-    height: 3,
-    right: '18%',
-    top: '21%',
-    width: 3,
-  },
-  starThree: {
-    bottom: '26%',
-    height: 5,
-    left: '22%',
-    width: 5,
-  },
-  starFour: {
-    bottom: '14%',
-    height: 3,
-    right: '12%',
-    width: 3,
-  },
-  starFive: {
-    height: 3,
-    left: '48%',
-    top: '8%',
-    width: 3,
-  },
-  starSix: {
-    bottom: '39%',
-    height: 4,
-    right: '42%',
-    width: 4,
-  },
-  starSeven: {
-    bottom: '8%',
-    height: 3,
-    left: '44%',
-    width: 3,
-  },
-  starEight: {
-    height: 5,
-    right: '8%',
-    top: '52%',
-    width: 5,
-  },
-  networkPoint: {
-    backgroundColor: '#79D5FF',
-    borderColor: 'rgba(224, 246, 255, 0.72)',
-    borderRadius: 7,
-    borderWidth: 1,
-    elevation: 2,
-    height: 7,
-    opacity: 0.74,
-    position: 'absolute',
-    shadowColor: '#45B7FF',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 6,
-    width: 7,
-  },
-  networkPointOne: {
-    left: '18%',
-    top: '32%',
-  },
-  networkPointTwo: {
-    right: '20%',
-    top: '36%',
-  },
-  networkPointThree: {
-    bottom: '30%',
-    left: '28%',
-  },
-  networkPointFour: {
-    bottom: '22%',
-    right: '18%',
-  },
-  networkPointFive: {
-    left: '8%',
-    top: '58%',
-  },
-  networkPointSix: {
-    right: '8%',
-    top: '62%',
-  },
-  networkPointSeven: {
-    left: '46%',
-    top: '20%',
-  },
-  networkPointEight: {
-    bottom: '8%',
-    left: '50%',
-  },
-  networkPointNine: {
-    right: '43%',
-    top: '48%',
-  },
-  networkLine: {
-    backgroundColor: 'rgba(104, 190, 255, 0.18)',
-    height: 1,
-    position: 'absolute',
-    shadowColor: '#45B7FF',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.22,
-    shadowRadius: 3,
-  },
-  networkLineOne: {
-    left: '20%',
-    top: '34%',
-    transform: [{ rotate: '8deg' }],
-    width: '58%',
-  },
-  networkLineTwo: {
-    bottom: '28%',
-    left: '28%',
-    transform: [{ rotate: '-12deg' }],
-    width: '48%',
-  },
-  networkLineThree: {
-    left: '18%',
-    top: '48%',
-    transform: [{ rotate: '58deg' }],
-    width: '38%',
-  },
-  networkLineFour: {
-    left: '7%',
-    top: '57%',
-    transform: [{ rotate: '-28deg' }],
-    width: '49%',
-  },
-  networkLineFive: {
-    right: '7%',
-    top: '57%',
-    transform: [{ rotate: '27deg' }],
-    width: '48%',
-  },
-  networkLineSix: {
-    left: '45%',
-    top: '33%',
-    transform: [{ rotate: '88deg' }],
-    width: '31%',
-  },
-  networkLineSeven: {
-    bottom: '16%',
-    left: '22%',
-    transform: [{ rotate: '24deg' }],
-    width: '54%',
-  },
-  networkLineEight: {
-    right: '15%',
-    top: '44%',
-    transform: [{ rotate: '-68deg' }],
-    width: '34%',
-  },
-  nebula: {
-    borderRadius: 240,
-    position: 'absolute',
-  },
-  nebulaOne: {
-    backgroundColor: '#1468FF',
-    height: 380,
-    right: -148,
-    top: 18,
-    width: 380,
-  },
-  nebulaTwo: {
-    backgroundColor: '#9D3CFF',
-    bottom: -16,
-    height: 350,
-    left: -158,
-    width: 350,
   },
   container: {
     flexGrow: 1,
