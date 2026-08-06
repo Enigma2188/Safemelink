@@ -5,11 +5,12 @@ import { requireSupabaseClient } from '@/backend/supabaseClient';
 type SOSInsert = Database['public']['Tables']['sos']['Insert'];
 
 export const SOSRepository = {
-  async create(input: SOSInsert) {
+  async create(input: SOSInsert, signal: AbortSignal) {
     const { data, error } = await requireSupabaseClient()
       .from('sos')
       .insert(input)
       .select('*')
+      .abortSignal(signal)
       .single();
 
     if (error) {

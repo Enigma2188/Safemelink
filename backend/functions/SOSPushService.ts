@@ -1,7 +1,7 @@
-import { AuthService } from '@/backend/auth/AuthService';
 import { SOSRepository } from '@/backend/repositories/SOSRepository';
 import { requireSupabaseClient } from '@/backend/supabaseClient';
 import type { ActiveSOSEvent } from '@/services/SOSService';
+import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
 
 export type SOSDeliveryResult = {
   sosCreated: boolean;
@@ -28,6 +28,37 @@ type SOSPushResponse = {
 
 const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
 const EDGE_FUNCTION_TIMEOUT_MS = 20_000;
+const SOS_CREATION_TIMEOUT_MS = 20_000;
+
+export class SOSRemoteCreationTimeoutError extends Error {
+  constructor() {
+    super('Timeout durante la creazione remota dell\'SOS.');
+    this.name = 'SOSRemoteCreationTimeoutError';
+  }
+}
+
+async function createRemoteSOSWithTimeout(
+  input: Parameters<typeof SOSRepository.create>[0],
+) {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      SOSRepository.create(input, controller.signal),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new SOSRemoteCreationTimeoutError());
+        }, SOS_CREATION_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 async function invokeWithTimeout<T>(operation: Promise<T>): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -77,7 +108,7 @@ async function sendSOSPush(
   event: ActiveSOSEvent,
   expectedUserId: string,
 ): Promise<SOSDeliveryResult> {
-    const session = await AuthService.getSession();
+    const session = await getSOSSessionWithTimeout();
 
     if (!session || session.user.id !== expectedUserId) {
       return {
@@ -92,7 +123,7 @@ async function sendSOSPush(
       };
     }
 
-    const sos = await SOSRepository.create({
+    const sos = await createRemoteSOSWithTimeout({
       user_id: session.user.id,
       latitude: event.location.latitude,
       longitude: event.location.longitude,

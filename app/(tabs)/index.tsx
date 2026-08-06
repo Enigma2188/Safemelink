@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import {
@@ -39,6 +40,26 @@ const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
 const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
 const PASSPHRASE_COOLDOWN_MS = 10000;
 const SPEECH_RECOGNITION_LANGUAGE = 'it-IT';
+
+const getPushDeliveryNotice = (result: SOSDeliveryResult) => {
+  if (result.notificationsSent > 0) {
+    return null;
+  }
+
+  if (result.reason === 'no_linked_recipients') {
+    return 'SOS attivo. Nessun contatto SafeMeLink collegato: non è stato possibile inviare notifiche.';
+  }
+
+  if (result.reason === 'recipients_without_active_tokens') {
+    return 'SOS attivo. I contatti collegati non risultano disponibili per le notifiche.';
+  }
+
+  if (result.errors.length > 0 || result.notificationsFailed > 0) {
+    return 'SOS attivo, ma si è verificato un problema tecnico durante l’invio della notifica SafeMeLink. Gli altri canali restano disponibili.';
+  }
+
+  return 'SOS attivo, ma il servizio Expo non ha accettato alcuna notifica SafeMeLink. Gli altri canali restano disponibili.';
+};
 
 type SOSStatus = 'idle' | 'countdown' | 'sending' | 'active';
 type CheckpointStatus = 'idle' | 'running' | 'confirming';
@@ -124,6 +145,7 @@ export default function HomeScreen() {
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
   const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
+  const [pushDeliveryNotice, setPushDeliveryNotice] = useState<string | null>(null);
   const [isEndingSOS, setIsEndingSOS] = useState(false);
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
@@ -220,6 +242,7 @@ export default function HomeScreen() {
 
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setActiveEvent(null);
+    setPushDeliveryNotice(null);
     setStatus('countdown');
   }, [contacts.length]);
 
@@ -394,6 +417,7 @@ export default function HomeScreen() {
     setContacts([]);
     setLastEvents([]);
     setActiveEvent(null);
+    setPushDeliveryNotice(null);
     sosEndingInFlightRef.current = false;
     setIsEndingSOS(false);
     setStatus('idle');
@@ -955,6 +979,7 @@ export default function HomeScreen() {
 
       setActiveEvent(result.event);
       setLastEvents(result.events);
+      setPushDeliveryNotice(getPushDeliveryNotice(result.pushResult));
       setStatus('active');
     } catch (error) {
       if (activeUserIdRef.current === actionUserId) {
@@ -1206,6 +1231,7 @@ export default function HomeScreen() {
 
       setLastEvents(nextEvents);
       setActiveEvent(null);
+      setPushDeliveryNotice(null);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
       console.info('[SafeMeLink SOS] Chiusura completata.', {
@@ -1455,6 +1481,17 @@ export default function HomeScreen() {
           <Text style={styles.coordinates}>
             {activeEvent.location.latitude}, {activeEvent.location.longitude}
           </Text>
+          {pushDeliveryNotice ? (
+            <View style={styles.pushDeliveryNotice}>
+              <Text style={styles.pushDeliveryNoticeText}>{pushDeliveryNotice}</Text>
+              <Pressable
+                accessibilityLabel="Chiudi avviso notifiche"
+                onPress={() => setPushDeliveryNotice(null)}
+                style={styles.pushDeliveryNoticeDismiss}>
+                <Text style={styles.pushDeliveryNoticeDismissText}>Chiudi</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
             <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
           </Pressable>
@@ -2164,6 +2201,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 8,
     textAlign: 'center',
+  },
+  pushDeliveryNotice: {
+    backgroundColor: 'rgba(5, 8, 22, 0.58)',
+    borderColor: 'rgba(255, 255, 255, 0.24)',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 14,
+    padding: 12,
+  },
+  pushDeliveryNoticeText: {
+    color: '#F7FAFF',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  pushDeliveryNoticeDismiss: {
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  pushDeliveryNoticeDismissText: {
+    color: '#A8DFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
   shareButton: {
     backgroundColor: '#fff',

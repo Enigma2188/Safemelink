@@ -1,12 +1,12 @@
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SosStatus } from '@/backend/database.types';
-import { AuthService } from '@/backend/auth/AuthService';
 import {
   SOSPushService,
   type SOSDeliveryResult,
 } from '@/backend/functions/SOSPushService';
 import { LocationService, type SOSLocation } from '@/services/LocationService';
 import { sendSosAlert, shareSosAlert } from '@/services/SOSAlertService';
+import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
 import { SOSStorage } from '@/storage/SOSStorage';
 
 export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
@@ -41,14 +41,14 @@ export const SOSService = {
   },
 
   async completeSOS(expectedUserId: string) {
-    const initialSession = await AuthService.getSession();
+    const initialSession = await getSOSSessionWithTimeout();
 
     if (initialSession?.user.id !== expectedUserId) {
       throw new Error('Sessione cambiata: riavvia l’SOS con l’account attivo.');
     }
 
     const location = await LocationService.getCurrentLocation();
-    const currentSession = await AuthService.getSession();
+    const currentSession = await getSOSSessionWithTimeout();
 
     if (currentSession?.user.id !== expectedUserId) {
       throw new Error('Sessione cambiata durante l’SOS. Nessun evento remoto è stato creato.');
@@ -64,7 +64,7 @@ export const SOSService = {
       console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', error);
     }
 
-    if ((await AuthService.getSession())?.user.id !== expectedUserId) {
+    if ((await getSOSSessionWithTimeout())?.user.id !== expectedUserId) {
       throw new Error('Sessione cambiata durante l’SOS. Nessun evento remoto è stato creato.');
     }
 

@@ -53,20 +53,49 @@ const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) =
   ];
 };
 
+const getUrlDiagnostics = (url: string) => {
+  const rawScheme = url.slice(0, Math.max(0, url.indexOf(':'))).toLowerCase();
+  const scheme = ['sms', 'smsto', 'whatsapp', 'https'].includes(rawScheme)
+    ? rawScheme
+    : 'unknown';
+  const channel = scheme === 'sms' || scheme === 'smsto' ? 'sms' : 'whatsapp';
+
+  return { channel, scheme };
+};
+
+const getGenericErrorCategory = (error: unknown) =>
+  error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : 'UnknownError';
+
 const openUrlWithDiagnostics = async (url: string) => {
+  const diagnostics = getUrlDiagnostics(url);
+
   try {
     const canOpen = await Linking.canOpenURL(url);
-    console.log('[SafeMeLink SOS] canOpenURL', { url, canOpen });
+    console.log('[SafeMeLink SOS] verifica apertura canale', {
+      ...diagnostics,
+      outcome: canOpen ? 'success' : 'failure',
+    });
   } catch (error) {
-    console.log('[SafeMeLink SOS] canOpenURL error', { url, error });
+    console.log('[SafeMeLink SOS] verifica apertura canale fallita', {
+      ...diagnostics,
+      outcome: 'failure',
+      errorCategory: getGenericErrorCategory(error),
+    });
   }
 
   try {
     await Linking.openURL(url);
-    console.log('[SafeMeLink SOS] openURL success', { url });
+    console.log('[SafeMeLink SOS] apertura canale completata', {
+      ...diagnostics,
+      outcome: 'success',
+    });
     return true;
   } catch (error) {
-    console.log('[SafeMeLink SOS] openURL failed', { url, error });
+    console.log('[SafeMeLink SOS] apertura canale fallita', {
+      ...diagnostics,
+      outcome: 'failure',
+      errorCategory: getGenericErrorCategory(error),
+    });
     return false;
   }
 };
