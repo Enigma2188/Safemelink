@@ -45,7 +45,18 @@ const createSmsUrls = (event: ActiveSOSEvent, contact?: SafeMeLinkContact) => {
 
 const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
   const message = encodeURIComponent(event.message);
-  const phone = contact.phone.replace(/[^\d]/g, '');
+  const compactPhone = contact.phone.trim().replace(/[\s().-]/g, '');
+
+  if (!/^\+[1-9]\d{6,14}$/.test(compactPhone)) {
+    console.info('[SafeMeLink SOS] canale WhatsApp ignorato', {
+      channel: 'whatsapp',
+      outcome: 'skipped',
+      reason: 'invalid_international_format',
+    });
+    return [];
+  }
+
+  const phone = compactPhone.slice(1);
 
   return [
     `whatsapp://send?phone=${phone}&text=${message}`,
@@ -75,12 +86,16 @@ const openUrlWithDiagnostics = async (url: string) => {
       ...diagnostics,
       outcome: canOpen ? 'success' : 'failure',
     });
+    if (!canOpen) {
+      return false;
+    }
   } catch (error) {
     console.log('[SafeMeLink SOS] verifica apertura canale fallita', {
       ...diagnostics,
       outcome: 'failure',
       errorCategory: getGenericErrorCategory(error),
     });
+    return false;
   }
 
   try {
@@ -110,25 +125,33 @@ export const shareSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkC
 
 export const sendSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkContact[]) => {
   const contactsWithValidPhones = getContactsWithValidPhones(contacts);
-  const smsContact = contactsWithValidPhones[0];
+  const tryUrls = async (urls: string[]) => {
+    for (const url of urls) {
+      if (await openUrlWithDiagnostics(url)) {
+        return true;
+      }
+    }
 
-  for (const url of createSmsUrls(event, smsContact)) {
-    if (await openUrlWithDiagnostics(url)) {
+    return false;
+  };
+
+  for (const contact of contactsWithValidPhones) {
+    const preferredUrls =
+      contact.preferredChannel === 'whatsapp'
+        ? createWhatsAppUrls(event, contact)
+        : createSmsUrls(event, contact);
+    const fallbackUrls =
+      contact.preferredChannel === 'whatsapp'
+        ? createSmsUrls(event, contact)
+        : createWhatsAppUrls(event, contact);
+
+    if ((await tryUrls(preferredUrls)) || (await tryUrls(fallbackUrls))) {
       return;
     }
   }
 
-  const whatsappContacts = [
-    ...contactsWithValidPhones.filter((contact) => contact.preferredChannel === 'whatsapp'),
-    ...contactsWithValidPhones.filter((contact) => contact.preferredChannel !== 'whatsapp'),
-  ];
-
-  for (const contact of whatsappContacts) {
-    for (const url of createWhatsAppUrls(event, contact)) {
-      if (await openUrlWithDiagnostics(url)) {
-        return;
-      }
-    }
+  if (contactsWithValidPhones.length === 0 && (await tryUrls(createSmsUrls(event)))) {
+    return;
   }
 
   Alert.alert(

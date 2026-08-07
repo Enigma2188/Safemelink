@@ -259,6 +259,10 @@ export default function VoiceProtectionScreen() {
   );
 
   useEffect(() => {
+    if (!settings.enabled || !settings.expiresAt) {
+      return;
+    }
+
     const clock = setInterval(() => {
       const currentTime = Date.now();
       if (screenActiveRef.current) {
@@ -279,7 +283,7 @@ export default function VoiceProtectionScreen() {
     return () => {
       clearInterval(clock);
     };
-  }, [refreshState]);
+  }, [refreshState, settings.enabled, settings.expiresAt]);
 
   useSpeechRecognitionEvent('result', (event) => {
     if (!testingRef.current) {
@@ -351,10 +355,6 @@ export default function VoiceProtectionScreen() {
     setIsSaving(true);
     setMessage('');
     console.info('[VoiceProtection] inizio salvataggio parola');
-    console.info('[VoiceProtection] valore parola', {
-      length: trimmedPassphrase.length,
-      normalizedValue: normalizedPassphrase,
-    });
 
     try {
       const updatedSettings: VoiceProtectionSettings = {
@@ -378,7 +378,7 @@ export default function VoiceProtectionScreen() {
       );
       console.info('[VoiceProtection] lettura di verifica completata');
 
-      if (normalizePassphrase(storedSettings.passphrase) !== normalizedPassphrase) {
+      if (storedSettings.passphrase !== trimmedPassphrase) {
         throw new Error('La parola salvata non coincide con il valore inserito. Riprova.');
       }
 
@@ -395,9 +395,9 @@ export default function VoiceProtectionScreen() {
         VoiceProtectionRuntime.notifySettingsChanged(userId);
       }
     } catch (error) {
-      console.error('[VoiceProtection] errore salvataggio parola', {
+      console.error('[VoiceProtection] salvataggio fallito', {
         durationMs: Date.now() - startedAt,
-        error,
+        category: error instanceof Error ? 'storage_error' : 'unknown_error',
       });
       if (
         screenActiveRef.current &&

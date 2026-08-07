@@ -117,7 +117,9 @@ export const SOSService = {
         : {}),
     };
     const events = await SOSStorage.saveEvent(expectedUserId, completedEvent);
-    await sendSosAlert(completedEvent, contacts);
+    if (pushResult.notificationsSent === 0) {
+      await sendSosAlert(completedEvent, contacts);
+    }
 
     return {
       event: completedEvent,
