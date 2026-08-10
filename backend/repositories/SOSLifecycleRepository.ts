@@ -43,6 +43,15 @@ export const SOSLifecycleRepository = {
       throw new BackendError('Impossibile chiudere l’SOS.', error);
     }
 
+    if (!data) {
+      throw new BackendError(
+        'La chiusura non ha restituito una risposta valida.',
+        undefined,
+        'unknown',
+        'EMPTY_RPC_RESULT',
+      );
+    }
+
     return data;
   },
 
@@ -53,6 +62,15 @@ export const SOSLifecycleRepository = {
 
     if (error) {
       throw new BackendError('Impossibile annullare l’SOS.', error);
+    }
+
+    if (!data) {
+      throw new BackendError(
+        'L’annullamento non ha restituito una risposta valida.',
+        undefined,
+        'unknown',
+        'EMPTY_RPC_RESULT',
+      );
     }
 
     return data;

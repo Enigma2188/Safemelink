@@ -16,7 +16,11 @@ import {
   LocationUnavailableError,
   LocationService,
 } from '@/services/LocationService';
-import { SOSLifecycleService } from '@/services/SOSLifecycleService';
+import {
+  getSOSLifecycleDiagnosticError,
+  SOSLifecycleDiagnosticError,
+  SOSLifecycleService,
+} from '@/services/SOSLifecycleService';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import {
   SOSService,
@@ -1175,7 +1179,11 @@ export default function HomeScreen() {
     const actionUserId = userId;
 
     if (!actionUserId) {
-      Alert.alert('SOS', 'Sessione non disponibile. Accedi e riprova.');
+      const diagnosticError = new SOSLifecycleDiagnosticError('auth');
+      Alert.alert(
+        'SOS ancora attivo',
+        `${diagnosticError.message}\n\nCodice diagnostico: ${diagnosticError.category}`,
+      );
       return;
     }
 
@@ -1196,7 +1204,7 @@ export default function HomeScreen() {
             : await SOSLifecycleService.cancel(eventToFinish.remoteSosId);
 
         if (remoteState.sos_status !== terminalStatus) {
-          throw new Error('Il backend non ha confermato la conclusione dell’SOS.');
+          throw new SOSLifecycleDiagnosticError('unexpected_status');
         }
         console.info('[SafeMeLink SOS] Stato remoto confermato.', { terminalStatus });
       }
@@ -1239,17 +1247,16 @@ export default function HomeScreen() {
         terminalStatus,
       });
     } catch (finishError: unknown) {
+      const diagnosticError = getSOSLifecycleDiagnosticError(finishError);
       console.warn('[SafeMeLink SOS] Chiusura non completata.', {
         durationMs: Date.now() - startedAt,
-        message:
-          finishError instanceof Error ? finishError.message : 'errore sconosciuto',
+        category: diagnosticError.category,
+        terminalStatus,
       });
       if (activeUserIdRef.current === actionUserId) {
         Alert.alert(
           'SOS ancora attivo',
-          finishError instanceof Error
-            ? finishError.message
-            : 'Il backend non ha confermato la conclusione dell’SOS.',
+          `${diagnosticError.message}\n\nCodice diagnostico: ${diagnosticError.category}`,
         );
       }
     } finally {

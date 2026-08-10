@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -44,6 +45,11 @@ const VOICE_SETTINGS_SAVE_TIMEOUT_MS = 8_000;
 const VOICE_TEST_TIMEOUT_MS = 12_000;
 
 type MicrophoneState = 'off' | 'ready' | 'testing' | 'recognized' | 'error';
+type PassphraseSaveFeedback = {
+  status: 'pending' | 'success' | 'error';
+  text: string;
+};
+type VoiceTestFinishReason = 'result' | 'end' | 'nomatch' | 'timeout' | 'lifecycle';
 
 const formatRemainingTime = (expiresAt: string | null, now: number) => {
   if (!expiresAt) {
@@ -135,10 +141,15 @@ export default function VoiceProtectionScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState('');
+  const [activationFeedback, setActivationFeedback] = useState('');
+  const [passphraseSaveFeedback, setPassphraseSaveFeedback] =
+    useState<PassphraseSaveFeedback | null>(null);
   const [testTranscript, setTestTranscript] = useState('');
   const [now, setNow] = useState(Date.now());
   const testingRef = useRef(false);
   const testTranscriptRef = useRef('');
+  const testResultReceivedRef = useRef(false);
+  const testLifecycleInterruptionRef = useRef(false);
   const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const screenActiveRef = useRef(false);
   const screenGenerationRef = useRef(0);
@@ -154,12 +165,13 @@ export default function VoiceProtectionScreen() {
     }
   }, []);
 
-  const finishVoiceTest = useCallback((reason: 'end' | 'nomatch' | 'timeout') => {
+  const finishVoiceTest = useCallback((reason: VoiceTestFinishReason) => {
     if (!testingRef.current) {
       return;
     }
 
     testingRef.current = false;
+    testLifecycleInterruptionRef.current = false;
     clearTestTimeout();
     const transcript = testTranscriptRef.current.trim();
     const expected = normalizePassphrase(settingsRef.current.passphrase);
@@ -168,23 +180,52 @@ export default function VoiceProtectionScreen() {
       Boolean(expected && recognizedText) &&
       (recognizedText === expected || recognizedText.includes(expected));
 
+    console.info('[VoiceProtection Test] test terminato', {
+      event: reason,
+      hasResult: testResultReceivedRef.current,
+      outcome: matches ? 'success' : 'failure',
+    });
+
     if (matches) {
       setMicrophoneState('recognized');
-      setMessage('Test riuscito: parola d’ordine riconosciuta localmente.');
+      setMessage('Test completato: parola d’ordine riconosciuta.');
       return;
     }
 
     setMicrophoneState('ready');
-    if (transcript) {
-      setMessage('Parola non riconosciuta. Puoi ripetere il test.');
-    } else if (reason === 'timeout') {
+    if (reason === 'timeout') {
+      setMessage('Tempo massimo raggiunto. Nessuna parola riconosciuta.');
+    } else if (reason === 'lifecycle') {
+      setMessage('Riconoscimento interrotto perché l’app non è più attiva.');
+    } else if (reason === 'nomatch') {
+      setMessage('Nessuna parola riconosciuta. Controlla il microfono e riprova.');
+    } else if (reason === 'end' && !transcript) {
       setMessage(
-        'Tempo scaduto: non ho rilevato una parola. Avvicinati al microfono e riprova.',
+        'Riconoscimento interrotto senza risultati. Verifica il modello italiano offline.',
       );
     } else {
-      setMessage('Nessuna parola riconosciuta. Controlla il microfono e riprova.');
+      setMessage('Test completato: la parola pronunciata non corrisponde.');
     }
   }, [clearTestTimeout]);
+
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' || !testingRef.current) {
+        return;
+      }
+
+      console.info('[VoiceProtection Test] riconoscimento interrotto', {
+        event: 'lifecycle',
+      });
+      testLifecycleInterruptionRef.current = true;
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {}
+      finishVoiceTest('lifecycle');
+    });
+
+    return () => appStateSubscription.remove();
+  }, [finishVoiceTest]);
 
   const refreshState = useCallback(async (showLoading = true) => {
     if (refreshInFlightRef.current) {
@@ -248,6 +289,11 @@ export default function VoiceProtectionScreen() {
       void refreshState(true);
 
       return () => {
+        if (testingRef.current) {
+          console.info('[VoiceProtection Test] riconoscimento interrotto', {
+            event: 'screen_cleanup',
+          });
+        }
         screenActiveRef.current = false;
         testingRef.current = false;
         clearTestTimeout();
@@ -297,29 +343,62 @@ export default function VoiceProtectionScreen() {
 
     setTestTranscript(transcript);
     testTranscriptRef.current = transcript;
+    testResultReceivedRef.current = true;
+    console.info('[VoiceProtection Test] risultato ricevuto', {
+      event: 'result',
+      isFinal: event.isFinal,
+    });
     if (!event.isFinal) {
       return;
     }
 
-    finishVoiceTest('end');
+    finishVoiceTest('result');
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (!testingRef.current || event.error === 'aborted') {
+    if (!testingRef.current) {
+      return;
+    }
+
+    if (event.error === 'aborted') {
+      const finishReason = testLifecycleInterruptionRef.current ? 'lifecycle' : 'end';
+      console.info('[VoiceProtection Test] riconoscimento interrotto', {
+        event: 'error',
+        code: 'aborted',
+        reason: finishReason,
+      });
+      finishVoiceTest(finishReason);
       return;
     }
 
     testingRef.current = false;
     clearTestTimeout();
     setMicrophoneState('error');
-    setMessage(event.message || 'Test vocale interrotto.');
+    console.warn('[VoiceProtection Test] errore motore vocale', {
+      event: 'error',
+      code: event.error,
+    });
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      setMessage('Permesso microfono negato.');
+    } else if (event.error === 'language-not-supported') {
+      setMessage('Modello italiano non disponibile.');
+    } else {
+      setMessage('Riconoscimento interrotto. Riprova.');
+    }
   });
 
   useSpeechRecognitionEvent('nomatch', () => {
+    console.info('[VoiceProtection Test] nessuna corrispondenza', {
+      event: 'nomatch',
+    });
     finishVoiceTest('nomatch');
   });
 
   useSpeechRecognitionEvent('end', () => {
+    console.info('[VoiceProtection Test] riconoscimento terminato', {
+      event: 'end',
+      hasResult: testResultReceivedRef.current,
+    });
     finishVoiceTest('end');
   });
 
@@ -337,7 +416,9 @@ export default function VoiceProtectionScreen() {
     }
 
     if (!userId) {
-      setMessage('Accedi prima di configurare Protezione Vocale.');
+      const feedback = 'Accedi prima di configurare Protezione Vocale.';
+      setPassphraseSaveFeedback({ status: 'error', text: feedback });
+      setMessage(feedback);
       return;
     }
 
@@ -345,7 +426,9 @@ export default function VoiceProtectionScreen() {
     const normalizedPassphrase = normalizePassphrase(trimmedPassphrase);
 
     if (normalizedPassphrase.length < 3) {
-      setMessage('La parola d’ordine deve contenere almeno 3 caratteri.');
+      const feedback = 'La parola d’ordine deve contenere almeno 3 caratteri.';
+      setPassphraseSaveFeedback({ status: 'error', text: feedback });
+      setMessage(feedback);
       return;
     }
 
@@ -354,6 +437,7 @@ export default function VoiceProtectionScreen() {
     saveInFlightRef.current = true;
     setIsSaving(true);
     setMessage('');
+    setPassphraseSaveFeedback({ status: 'pending', text: 'Salvataggio in corso…' });
     console.info('[VoiceProtection] inizio salvataggio parola');
 
     try {
@@ -392,6 +476,10 @@ export default function VoiceProtectionScreen() {
         setSettings(storedSettings);
         setPassphraseDraft(storedSettings.passphrase);
         setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
+        setPassphraseSaveFeedback({
+          status: 'success',
+          text: 'Parola d’ordine salvata.',
+        });
         VoiceProtectionRuntime.notifySettingsChanged(userId);
       }
     } catch (error) {
@@ -403,11 +491,15 @@ export default function VoiceProtectionScreen() {
         screenActiveRef.current &&
         screenGenerationRef.current === screenGeneration
       ) {
-        setMessage(
-          error instanceof Error
+        const feedback =
+          error instanceof Error &&
+          (error.message.startsWith('Il salvataggio locale non risponde') ||
+            error.message.startsWith('La verifica del salvataggio locale non risponde') ||
+            error.message.startsWith('La parola salvata non coincide'))
             ? error.message
-            : 'Impossibile salvare la parola d’ordine.',
-        );
+            : 'Impossibile salvare la parola d’ordine. Riprova.';
+        setPassphraseSaveFeedback({ status: 'error', text: feedback });
+        setMessage(feedback);
       }
     } finally {
       saveInFlightRef.current = false;
@@ -422,29 +514,38 @@ export default function VoiceProtectionScreen() {
 
   const activateProtection = async () => {
     if (!userId) {
-      setMessage('Accedi prima di attivare Protezione Vocale.');
+      const feedback = 'Accedi prima di attivare Protezione Vocale.';
+      setActivationFeedback(feedback);
+      setMessage(feedback);
       return;
     }
     if (!normalizePassphrase(settings.passphrase)) {
-      setMessage('Configura e salva prima una parola d’ordine.');
+      const feedback = 'Configura e salva prima una parola d’ordine.';
+      setActivationFeedback(feedback);
+      setMessage(feedback);
       return;
     }
 
     setIsSaving(true);
     setMessage('');
+    setActivationFeedback('Avvio della protezione in corso…');
 
     try {
       const permissions = await VoiceProtectionService.requestPermissions();
       if (!permissions.microphoneGranted) {
+        const feedback =
+          'Permesso microfono non concesso. La protezione non è stata attivata.';
         setMicrophoneState('error');
-        setMessage('Permesso microfono non concesso. La protezione non è stata attivata.');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
         return;
       }
       if (!permissions.notificationsGranted) {
+        const feedback =
+          'Autorizza le notifiche per avviare l’avviso persistente di protezione.';
         setMicrophoneState('error');
-        setMessage(
-          'Autorizza le notifiche per mostrare l’avviso persistente di protezione.',
-        );
+        setActivationFeedback(feedback);
+        setMessage(feedback);
         return;
       }
 
@@ -452,28 +553,79 @@ export default function VoiceProtectionScreen() {
         userId,
         settings.durationMinutes,
       );
+      if (!VoiceProtectionService.isRunning()) {
+        await VoiceProtectionService.stop().catch(() => {});
+        const feedback =
+          'Il servizio di protezione non si è avviato. Il controllo resta disattivato.';
+        setMicrophoneState('error');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+
       const activeSettings: VoiceProtectionSettings = {
         ...settings,
         enabled: true,
         enabledAt: activation.enabledAt,
         expiresAt: activation.expiresAt,
       };
-      await runWithTimeout(
-        VoiceProtectionStorage.save(userId, activeSettings),
-        VOICE_SETTINGS_SAVE_TIMEOUT_MS,
-        'Il salvataggio locale non risponde. Riprova.',
-      );
+
+      try {
+        await runWithTimeout(
+          VoiceProtectionStorage.save(userId, activeSettings),
+          VOICE_SETTINGS_SAVE_TIMEOUT_MS,
+          'Il salvataggio locale non risponde. Riprova.',
+        );
+      } catch {
+        await VoiceProtectionService.stop().catch(() => {});
+        const inactiveSettings: VoiceProtectionSettings = {
+          ...settingsRef.current,
+          enabled: false,
+          enabledAt: null,
+          expiresAt: null,
+        };
+        setSettings(inactiveSettings);
+        void VoiceProtectionStorage.save(userId, inactiveSettings).catch(() => {});
+        const feedback =
+          'Impossibile salvare l’attivazione. Il servizio è stato arrestato: puoi riprovare.';
+        setMicrophoneState('error');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+
+      if (!VoiceProtectionService.isRunning()) {
+        const inactiveSettings: VoiceProtectionSettings = {
+          ...settingsRef.current,
+          enabled: false,
+          enabledAt: null,
+          expiresAt: null,
+        };
+        await VoiceProtectionService.stop().catch(() => {});
+        setSettings(inactiveSettings);
+        void VoiceProtectionStorage.save(userId, inactiveSettings).catch(() => {});
+        const feedback =
+          'Il servizio di protezione si è interrotto durante l’attivazione. Puoi riprovare.';
+        setMicrophoneState('error');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+
       setSettings(activeSettings);
       setMicrophoneState('ready');
       VoiceProtectionRuntime.notifySettingsChanged(userId);
-      setMessage('Protezione attiva. Ascolto locale disponibile mentre l’app è aperta.');
-    } catch (error) {
+      const feedback =
+        'Protezione attiva. Il servizio di protezione è correttamente in esecuzione.';
+      setActivationFeedback(feedback);
+      setMessage(feedback);
+    } catch {
+      await VoiceProtectionService.stop().catch(() => {});
+      const feedback =
+        'Il servizio di protezione non si è avviato. Controlla i permessi e riprova.';
       setMicrophoneState('error');
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Impossibile attivare Protezione Vocale.',
-      );
+      setActivationFeedback(feedback);
+      setMessage(feedback);
     } finally {
       setIsSaving(false);
     }
@@ -531,7 +683,7 @@ export default function VoiceProtectionScreen() {
     if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
       setMicrophoneState('error');
       setMessage(
-        'Il riconoscimento locale non è disponibile. Installa il modello vocale offline italiano dalle impostazioni del dispositivo.',
+        'Modello italiano non disponibile. Installalo dalle impostazioni del dispositivo.',
       );
       return;
     }
@@ -544,17 +696,26 @@ export default function VoiceProtectionScreen() {
       const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!permission.granted) {
         setMicrophoneState('error');
-        setMessage('Permesso microfono o riconoscimento vocale non concesso.');
+        setMessage('Permesso microfono negato.');
+        console.info('[VoiceProtection Test] avvio non consentito', {
+          event: 'permission',
+          outcome: 'denied',
+        });
         return;
       }
 
+      console.info('[VoiceProtection Test] arresto sessione precedente', {
+        event: 'manual_cleanup',
+      });
       try {
         ExpoSpeechRecognitionModule.abort();
       } catch {}
       testingRef.current = true;
+      testLifecycleInterruptionRef.current = false;
       testTranscriptRef.current = '';
+      testResultReceivedRef.current = false;
       setTestTranscript('');
-      setMessage('Sto ascoltando… Pronuncia ora la parola d’ordine.');
+      setMessage('Microfono attivato. Pronuncia la parola d’ordine.');
       setMicrophoneState('testing');
       ExpoSpeechRecognitionModule.start({
         lang: 'it-IT',
@@ -564,20 +725,30 @@ export default function VoiceProtectionScreen() {
         contextualStrings: [settings.passphrase],
         requiresOnDeviceRecognition: true,
       });
+      console.info('[VoiceProtection Test] riconoscimento avviato', {
+        event: 'start',
+        mode: 'on_device',
+        language: 'it-IT',
+      });
       clearTestTimeout();
       testTimeoutRef.current = setTimeout(() => {
+        console.info('[VoiceProtection Test] tempo massimo raggiunto', {
+          event: 'timeout',
+        });
         try {
           ExpoSpeechRecognitionModule.stop();
         } catch {}
         finishVoiceTest('timeout');
       }, VOICE_TEST_TIMEOUT_MS);
-    } catch (error) {
+    } catch {
       testingRef.current = false;
       clearTestTimeout();
       setMicrophoneState('error');
-      setMessage(
-        error instanceof Error ? error.message : 'Impossibile avviare il test.',
-      );
+      setMessage('Riconoscimento interrotto. Non è stato possibile avviare il test.');
+      console.warn('[VoiceProtection Test] avvio fallito', {
+        event: 'start',
+        outcome: 'failure',
+      });
     }
   };
 
@@ -672,6 +843,12 @@ export default function VoiceProtectionScreen() {
             />
           </View>
 
+          {activationFeedback ? (
+            <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
+              {activationFeedback}
+            </Text>
+          ) : null}
+
           {!settings.enabled && !settings.passphrase ? (
             <Text style={styles.cardDescription}>
               Salva prima una parola d’ordine per rendere disponibile l’attivazione.
@@ -723,7 +900,10 @@ export default function VoiceProtectionScreen() {
           <TextInput
             autoCapitalize="none"
             editable={!settings.enabled && !isSaving}
-            onChangeText={setPassphraseDraft}
+            onChangeText={(value) => {
+              setPassphraseDraft(value);
+              setPassphraseSaveFeedback(null);
+            }}
             placeholder="Inserisci una parola o una breve frase"
             placeholderTextColor="#667391"
             secureTextEntry
@@ -740,6 +920,19 @@ export default function VoiceProtectionScreen() {
             ]}>
             <Text style={styles.secondaryButtonText}>SALVA PAROLA</Text>
           </Pressable>
+          {passphraseSaveFeedback ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={[
+                styles.passphraseSaveFeedback,
+                passphraseSaveFeedback.status === 'success' &&
+                  styles.passphraseSaveFeedbackSuccess,
+                passphraseSaveFeedback.status === 'error' &&
+                  styles.passphraseSaveFeedbackError,
+              ]}>
+              {passphraseSaveFeedback.text}
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.card}>
@@ -944,6 +1137,15 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.5,
   },
+  passphraseSaveFeedback: {
+    color: '#A8B5D1',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  passphraseSaveFeedbackSuccess: { color: '#45D6A5' },
+  passphraseSaveFeedbackError: { color: '#FF9AAA' },
   durationValue: { color: '#A78BFA', fontSize: 15, fontWeight: '800', marginTop: 5 },
   durationGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 13 },
   durationChip: {
