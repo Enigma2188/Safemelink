@@ -48,8 +48,8 @@ async function createRemoteSOSWithTimeout(
       SOSRepository.create(input, controller.signal),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-          controller.abort();
           reject(new SOSRemoteCreationTimeoutError());
+          controller.abort();
         }, SOS_CREATION_TIMEOUT_MS);
       }),
     ]);
@@ -80,10 +80,10 @@ async function invokeWithTimeout<T>(operation: Promise<T>): Promise<T> {
   }
 }
 
-async function getInvokeErrorDetails(error: unknown) {
-  const details: Record<string, unknown> = {
-    name: error instanceof Error ? error.name : 'UnknownError',
-    message: error instanceof Error ? error.message : String(error),
+function getInvokeErrorDetails(error: unknown) {
+  const details: { category: string; status?: number } = {
+    category:
+      error instanceof TypeError ? 'network' : error instanceof Error ? error.name : 'unknown',
   };
   const context =
     error && typeof error === 'object' && 'context' in error
@@ -92,13 +92,6 @@ async function getInvokeErrorDetails(error: unknown) {
 
   if (context instanceof Response) {
     details.status = context.status;
-    details.statusText = context.statusText;
-
-    try {
-      details.body = await context.clone().text();
-    } catch {
-      details.body = 'Risposta non leggibile.';
-    }
   }
 
   return details;
@@ -132,16 +125,14 @@ async function sendSOSPush(
     });
 
     console.log('[SafeMeLink Push] SOS remoto creato.', {
-      sosId: sos.id,
-      senderUserId: session.user.id,
+      outcome: 'success',
     });
 
     const client = requireSupabaseClient();
 
     console.log('[SafeMeLink Push] Chiamata Edge Function avviata.', {
       functionName: 'send-sos-push',
-      sosId: sos.id,
-      hasAccessToken: session.access_token.length > 0,
+      authenticated: true,
     });
 
     let invokeResult: Awaited<ReturnType<typeof client.functions.invoke<SOSPushResponse>>>;
@@ -165,9 +156,7 @@ async function sendSOSPush(
       );
     } catch (invokeError) {
       console.error('[SafeMeLink Push] Edge Function senza risposta.', {
-        sosId: sos.id,
-        error:
-          invokeError instanceof Error ? invokeError.message : 'Errore invocazione sconosciuto.',
+        category: invokeError instanceof Error ? invokeError.name : 'UnknownError',
       });
       return {
         sosCreated: true,
@@ -187,7 +176,7 @@ async function sendSOSPush(
     const { data, error } = invokeResult;
 
     if (error) {
-      const errorDetails = await getInvokeErrorDetails(error);
+      const errorDetails = getInvokeErrorDetails(error);
       console.error(
         '[SafeMeLink Push] Errore chiamata Edge Function.',
         errorDetails,
@@ -199,12 +188,11 @@ async function sendSOSPush(
         tokenCount: 0,
         notificationsSent: 0,
         notificationsFailed: 0,
-        errors: [String(errorDetails.message ?? 'Errore Edge Function.')],
+        errors: ['Errore Edge Function.'],
       };
     }
 
     console.log('[SafeMeLink Push] Risposta Edge Function ricevuta.', {
-      sosId: sos.id,
       httpStatus: 200,
       recipientCount: data?.recipientCount ?? 0,
       tokenCount: data?.tokenCount ?? 0,
@@ -232,9 +220,7 @@ export const SOSPushService = {
     const existingRequest = inFlightSOS.get(requestKey);
 
     if (existingRequest) {
-      console.log('[SafeMeLink Push] Invocazione duplicata riutilizzata.', {
-        eventId: event.id,
-      });
+      console.log('[SafeMeLink Push] Invocazione duplicata riutilizzata.');
       return existingRequest;
     }
 

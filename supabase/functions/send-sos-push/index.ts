@@ -146,7 +146,9 @@ Deno.serve(async (request) => {
       .maybeSingle();
 
     if (senderProfileError) {
-      console.warn('[send-sos-push] Profilo mittente non disponibile.', senderProfileError);
+      console.warn('[send-sos-push] Profilo mittente non disponibile.', {
+        category: 'profile_unavailable',
+      });
     }
 
     const senderDisplayName =
@@ -155,8 +157,6 @@ Deno.serve(async (request) => {
         : 'Un contatto fidato';
 
     console.log('[send-sos-push] Destinatari risolti.', {
-      sosId: sos.id,
-      senderUserId: user.id,
       recipientCount: recipientIds.length,
       tokenCount: tokens.length,
     });
@@ -167,7 +167,6 @@ Deno.serve(async (request) => {
           ? 'no_linked_recipients'
           : 'recipients_without_active_tokens';
       console.warn('[send-sos-push] Invio non eseguito.', {
-        sosId: sos.id,
         recipientCount: recipientIds.length,
         tokenCount: 0,
         reason,
@@ -245,13 +244,9 @@ Deno.serve(async (request) => {
     }
 
     const tickets = ticketsWithTokens.map((item) => item.ticket);
-    const ticketIds = tickets
-      .map((ticket) => ticket.id)
-      .filter((ticketId): ticketId is string => typeof ticketId === 'string');
     console.log('[send-sos-push] Ticket Expo.', {
       ok: tickets.filter((ticket) => ticket.status === 'ok').length,
       failed: tickets.filter((ticket) => ticket.status === 'error').length,
-      ticketIds,
       receiptCheckRecommendedAfterMinutes: 15,
     });
     const invalidTokens = ticketsWithTokens
@@ -283,7 +278,6 @@ Deno.serve(async (request) => {
       tickets.filter((ticket) => ticket.status === 'error').length + unprocessedCount;
 
     console.log('[send-sos-push] Invio completato.', {
-      sosId: sos.id,
       recipientCount: recipientIds.length,
       tokenCount: tokens.length,
       sent,
@@ -297,8 +291,8 @@ Deno.serve(async (request) => {
       tokenCount: tokens.length,
       errors: [...expoErrors, ...ticketErrors],
     });
-  } catch (error) {
-    console.error('send-sos-push failed', error);
+  } catch {
+    console.error('[send-sos-push] Invio fallito.', { category: 'unclassified_error' });
     return jsonResponse({ error: 'Unable to send SOS push notification.' }, 500);
   }
 });

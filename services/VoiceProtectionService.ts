@@ -9,6 +9,7 @@ import {
 } from '@/storage/VoiceProtectionStorage';
 
 const TASK_CHECK_INTERVAL_MS = 1000;
+const RECOGNITION_READINESS_TIMEOUT_MS = 5_000;
 
 type VoiceProtectionTaskData = {
   expiresAt: string | null;
@@ -20,6 +21,15 @@ export type VoiceProtectionPermissionState = {
   notificationsGranted: boolean;
 };
 
+export type VoiceRecognitionReadiness =
+  | 'ready'
+  | 'recognition_unavailable'
+  | 'on_device_unavailable'
+  | 'italian_model_missing'
+  | 'model_status_unknown';
+
+const normalizeLocale = (locale: string) => locale.replace('_', '-').toLowerCase();
+
 const sleep = (durationMs: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, durationMs);
@@ -28,14 +38,19 @@ const sleep = (durationMs: number) =>
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
   while (BackgroundService.isRunning()) {
     if (taskData?.expiresAt && Date.now() >= new Date(taskData.expiresAt).getTime()) {
-      const storedSettings = await VoiceProtectionStorage.get(taskData.userId);
-      await VoiceProtectionStorage.save(taskData.userId, {
-        ...storedSettings,
-        enabled: false,
-        enabledAt: null,
-        expiresAt: null,
-      });
-      await BackgroundService.stop();
+      try {
+        const storedSettings = await VoiceProtectionStorage.get(taskData.userId);
+        await VoiceProtectionStorage.save(taskData.userId, {
+          ...storedSettings,
+          enabled: false,
+          enabledAt: null,
+          expiresAt: null,
+        });
+      } catch {
+        console.warn('[VoiceProtection] scadenza non salvata nello storage locale');
+      } finally {
+        await BackgroundService.stop().catch(() => {});
+      }
       break;
     }
 
@@ -73,6 +88,63 @@ export const VoiceProtectionService = {
       microphoneGranted: speechPermission.granted,
       notificationsGranted: notificationPermission.granted,
     };
+  },
+
+  async getRecognitionReadiness(locale = 'it-IT'): Promise<VoiceRecognitionReadiness> {
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      return 'recognition_unavailable';
+    }
+    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
+      return 'on_device_unavailable';
+    }
+    if (Platform.OS !== 'android') {
+      return 'ready';
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const { installedLocales } = await Promise.race([
+        ExpoSpeechRecognitionModule.getSupportedLocales({}),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('recognition_readiness_timeout')),
+            RECOGNITION_READINESS_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      const expectedLocale = normalizeLocale(locale);
+      const expectedLanguage = expectedLocale.split('-')[0];
+      const modelInstalled = installedLocales.some((installedLocale) => {
+        const normalizedLocale = normalizeLocale(installedLocale);
+        return (
+          normalizedLocale === expectedLocale ||
+          normalizedLocale.split('-')[0] === expectedLanguage
+        );
+      });
+
+      if (modelInstalled) {
+        return 'ready';
+      }
+
+      const androidApiLevel =
+        typeof Platform.Version === 'number'
+          ? Platform.Version
+          : Number.parseInt(String(Platform.Version), 10);
+      return androidApiLevel >= 33 ? 'italian_model_missing' : 'model_status_unknown';
+    } catch {
+      return 'model_status_unknown';
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  },
+
+  async requestItalianModelDownload() {
+    if (Platform.OS !== 'android') {
+      throw new Error('Download del modello disponibile soltanto su Android.');
+    }
+    return ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({ locale: 'it-IT' });
   },
 
   async start(userId: string, durationMinutes: VoiceProtectionDurationMinutes) {

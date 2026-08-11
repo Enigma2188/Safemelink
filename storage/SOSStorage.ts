@@ -45,6 +45,7 @@ export const SOSStorage = {
             location: null,
             message: null,
             remoteStatus,
+            isActive: false,
           }
         : event,
     );

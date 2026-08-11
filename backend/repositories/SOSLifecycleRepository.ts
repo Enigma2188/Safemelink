@@ -10,10 +10,13 @@ const requireResult = <T>(data: T | null, message: string) => {
 };
 
 export const SOSLifecycleRepository = {
-  async getStatus(sosId: string) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('get_sos_status', { target_sos_id: sosId })
-      .maybeSingle();
+  async getStatus(sosId: string, signal?: AbortSignal) {
+    let query = requireSupabaseClient()
+      .rpc('get_sos_status', { target_sos_id: sosId });
+    if (signal) {
+      query = query.abortSignal(signal);
+    }
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
       throw new BackendError('Impossibile leggere lo stato aggiornato dell’SOS.', error);
@@ -22,10 +25,13 @@ export const SOSLifecycleRepository = {
     return requireResult(data, 'SOS non trovato o non autorizzato.');
   },
 
-  async accept(sosId: string) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('accept_sos', { target_sos_id: sosId })
-      .single();
+  async accept(sosId: string, signal?: AbortSignal) {
+    let query = requireSupabaseClient()
+      .rpc('accept_sos', { target_sos_id: sosId });
+    if (signal) {
+      query = query.abortSignal(signal);
+    }
+    const { data, error } = await query.single();
 
     if (error) {
       throw new BackendError('Impossibile accettare l’SOS.', error);
@@ -34,10 +40,13 @@ export const SOSLifecycleRepository = {
     return data;
   },
 
-  async close(sosId: string) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('close_my_sos', { target_sos_id: sosId })
-      .single();
+  async close(sosId: string, signal?: AbortSignal) {
+    let query = requireSupabaseClient()
+      .rpc('close_my_sos', { target_sos_id: sosId });
+    if (signal) {
+      query = query.abortSignal(signal);
+    }
+    const { data, error } = await query.single();
 
     if (error) {
       throw new BackendError('Impossibile chiudere l’SOS.', error);
@@ -55,10 +64,13 @@ export const SOSLifecycleRepository = {
     return data;
   },
 
-  async cancel(sosId: string) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('cancel_my_sos', { target_sos_id: sosId })
-      .single();
+  async cancel(sosId: string, signal?: AbortSignal) {
+    let query = requireSupabaseClient()
+      .rpc('cancel_my_sos', { target_sos_id: sosId });
+    if (signal) {
+      query = query.abortSignal(signal);
+    }
+    const { data, error } = await query.single();
 
     if (error) {
       throw new BackendError('Impossibile annullare l’SOS.', error);

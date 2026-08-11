@@ -100,7 +100,7 @@ const requireSOSId = (sosId: string) => {
 const runTransition = (
   transition: SOSTransition,
   sosId: string,
-  operation: () => Promise<SOSLifecycleState>,
+  operation: (signal: AbortSignal) => Promise<SOSLifecycleState>,
 ) => {
   requireSOSId(sosId);
   const requestKey = `${transition}:${sosId}`;
@@ -111,11 +111,15 @@ const runTransition = (
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const controller = new AbortController();
   const request = Promise.race([
-    operation(),
+    operation(controller.signal),
     new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
-        () => reject(new SOSLifecycleDiagnosticError('timeout')),
+        () => {
+          reject(new SOSLifecycleDiagnosticError('timeout'));
+          controller.abort();
+        },
         SOS_TRANSITION_TIMEOUT_MS,
       );
     }),
@@ -143,18 +147,36 @@ export const isActiveSOSStatus = (
 export const SOSLifecycleService = {
   async getStatus(sosId: string) {
     requireSOSId(sosId);
-    return SOSLifecycleRepository.getStatus(sosId);
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        SOSLifecycleRepository.getStatus(sosId, controller.signal),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new SOSLifecycleDiagnosticError('timeout'));
+            controller.abort();
+          }, SOS_TRANSITION_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      throw getSOSLifecycleDiagnosticError(error);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   },
 
   accept(sosId: string) {
-    return runTransition('accept', sosId, () => SOSLifecycleRepository.accept(sosId));
+    return runTransition('accept', sosId, (signal) => SOSLifecycleRepository.accept(sosId, signal));
   },
 
   close(sosId: string) {
-    return runTransition('close', sosId, () => SOSLifecycleRepository.close(sosId));
+    return runTransition('close', sosId, (signal) => SOSLifecycleRepository.close(sosId, signal));
   },
 
   cancel(sosId: string) {
-    return runTransition('cancel', sosId, () => SOSLifecycleRepository.cancel(sosId));
+    return runTransition('cancel', sosId, (signal) => SOSLifecycleRepository.cancel(sosId, signal));
   },
 };

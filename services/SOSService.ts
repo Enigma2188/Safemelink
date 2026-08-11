@@ -19,6 +19,7 @@ export type SOSEvent = {
   contactIds: string[];
   remoteSosId?: string;
   remoteStatus?: SosStatus;
+  isActive?: boolean;
 };
 
 export type ActiveSOSEvent = SOSEvent & {
@@ -28,6 +29,27 @@ export type ActiveSOSEvent = SOSEvent & {
 
 const createMapsLink = (location: SOSLocation) =>
   `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
+
+const SOS_LOCAL_OPERATION_TIMEOUT_MS = 8_000;
+
+const runLocalOperationWithTimeout = async <T,>(operation: Promise<T>) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('Operazione locale SOS non disponibile.')),
+          SOS_LOCAL_OPERATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
 
 export const SOSService = {
   createMessage(location: SOSLocation, createdAt: string) {
@@ -59,9 +81,11 @@ export const SOSService = {
     let contacts: TrustedContact[] = [];
 
     try {
-      contacts = await ContactsService.list(expectedUserId);
-    } catch (error) {
-      console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', error);
+      contacts = await runLocalOperationWithTimeout(ContactsService.list(expectedUserId));
+    } catch {
+      console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', {
+        category: 'local_contacts_unavailable',
+      });
     }
 
     if ((await getSOSSessionWithTimeout())?.user.id !== expectedUserId) {
@@ -80,7 +104,9 @@ export const SOSService = {
       event,
       expectedUserId,
     ).catch((error: unknown) => {
-      console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', error);
+      console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', {
+        category: error instanceof Error ? error.name : 'UnknownError',
+      });
       return {
         sosCreated: false,
         sosId: null,
@@ -88,19 +114,18 @@ export const SOSService = {
         tokenCount: 0,
         notificationsSent: 0,
         notificationsFailed: 0,
-        errors: [error instanceof Error ? error.message : 'Errore push inatteso.'],
+        errors: ['Invio SafeMeLink non disponibile.'],
       };
     });
 
-    console.log('[SafeMeLink Push] Esito completo consegna SOS.', {
-      sosId: pushResult.sosId,
+    console.log('[SafeMeLink Push] Esito consegna SOS.', {
       sosCreated: pushResult.sosCreated,
       recipientCount: pushResult.recipientCount,
       tokenCount: pushResult.tokenCount,
       notificationsSent: pushResult.notificationsSent,
       notificationsFailed: pushResult.notificationsFailed,
       reason: pushResult.reason,
-      errors: pushResult.errors,
+      errorCount: pushResult.errors.length,
     });
 
     if (pushResult.reason === 'not_authenticated') {
@@ -109,6 +134,7 @@ export const SOSService = {
 
     const completedEvent: ActiveSOSEvent = {
       ...event,
+      isActive: true,
       ...(pushResult.sosId
         ? {
             remoteSosId: pushResult.sosId,
@@ -116,15 +142,32 @@ export const SOSService = {
           }
         : {}),
     };
-    const events = await SOSStorage.saveEvent(expectedUserId, completedEvent);
+    let localPersistenceFailed = false;
+    let events: SOSEvent[];
+    try {
+      events = await runLocalOperationWithTimeout(
+        SOSStorage.saveEvent(expectedUserId, completedEvent),
+      );
+    } catch {
+      localPersistenceFailed = true;
+      events = [completedEvent];
+      console.warn('[SafeMeLink SOS] Persistenza locale non disponibile.', {
+        category: 'local_storage_unavailable',
+      });
+    }
     if (pushResult.notificationsSent === 0) {
-      await sendSosAlert(completedEvent, contacts);
+      void sendSosAlert(completedEvent, contacts).catch(() => {
+        console.warn('[SafeMeLink SOS] Fallback locale non completato.', {
+          category: 'local_fallback_unavailable',
+        });
+      });
     }
 
     return {
       event: completedEvent,
       events,
       pushResult,
+      localPersistenceFailed,
     };
   },
 

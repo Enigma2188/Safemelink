@@ -239,16 +239,11 @@ export default function HomeScreen() {
   );
 
   const startSOSCountdown = useCallback(() => {
-    if (contacts.length === 0) {
-      Alert.alert('Contatti fidati', 'Aggiungi almeno un contatto fidato prima di usare SOS.');
-      return;
-    }
-
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
     setStatus('countdown');
-  }, [contacts.length]);
+  }, []);
 
   useEffect(
     () =>
@@ -276,12 +271,15 @@ export default function HomeScreen() {
   }, [savedPassphrase]);
 
   const stopPassphraseRecognition = useCallback(() => {
+    const legacyRecognitionWasActive = passphraseModeRef.current !== 'idle';
     passphraseModeRef.current = 'idle';
     setPassphraseMode('idle');
 
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
+    if (legacyRecognitionWasActive) {
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {}
+    }
   }, []);
 
   const startPassphraseRecognition = useCallback(
@@ -346,6 +344,9 @@ export default function HomeScreen() {
   }, [startSOSCountdown, stopPassphraseRecognition]);
 
   useSpeechRecognitionEvent('result', (event) => {
+    if (passphraseModeRef.current === 'idle') {
+      return;
+    }
     const transcript = event.results[0]?.transcript?.trim();
 
     if (!transcript) {
@@ -381,7 +382,7 @@ export default function HomeScreen() {
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (event.error === 'aborted') {
+    if (passphraseModeRef.current === 'idle' || event.error === 'aborted') {
       return;
     }
 
@@ -422,6 +423,7 @@ export default function HomeScreen() {
     setLastEvents([]);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
+    sosCompletionInFlightRef.current = false;
     sosEndingInFlightRef.current = false;
     setIsEndingSOS(false);
     setStatus('idle');
@@ -467,11 +469,24 @@ export default function HomeScreen() {
       let restoredActiveEvent: ActiveSOSEvent | null = null;
       const latestStoredEvent = storedEvents[0];
 
-      if (
-        latestStoredEvent?.remoteSosId &&
-        latestStoredEvent.location &&
-        latestStoredEvent.message
-      ) {
+      const latestEventWasActive =
+        latestStoredEvent?.isActive === true ||
+        latestStoredEvent?.remoteStatus === 'open' ||
+        latestStoredEvent?.remoteStatus === 'accepted';
+
+      if (latestStoredEvent?.location && latestStoredEvent.message && latestEventWasActive) {
+        const restoreLatestEvent = () => {
+          restoredActiveEvent = {
+            ...latestStoredEvent,
+            isActive: true,
+            location: latestStoredEvent.location!,
+            message: latestStoredEvent.message!,
+          };
+        };
+
+        if (!latestStoredEvent.remoteSosId) {
+          restoreLatestEvent();
+        } else {
         try {
           const remoteState = await SOSLifecycleService.getStatus(
             latestStoredEvent.remoteSosId,
@@ -483,22 +498,44 @@ export default function HomeScreen() {
           ) {
             restoredActiveEvent = {
               ...latestStoredEvent,
+              isActive: true,
               location: latestStoredEvent.location,
               message: latestStoredEvent.message,
               remoteStatus: remoteState.sos_status,
             };
           } else {
-            nextEvents = await SOSStorage.finalizeEvent(
-              loadUserId,
-              latestStoredEvent.id,
-              remoteState.sos_status,
-            );
+            try {
+              nextEvents = await runSOSLocalStepWithTimeout(
+                SOSStorage.finalizeEvent(
+                  loadUserId,
+                  latestStoredEvent.id,
+                  remoteState.sos_status,
+                ),
+              );
+            } catch {
+              nextEvents = storedEvents.map((event) =>
+                event.id === latestStoredEvent.id
+                  ? {
+                      ...event,
+                      contactIds: [],
+                      isActive: false,
+                      location: null,
+                      message: null,
+                      remoteStatus: remoteState.sos_status,
+                    }
+                  : event,
+              );
+              console.warn('[SafeMeLink SOS] Stato terminale non salvato localmente.', {
+                category: 'local_storage_unavailable',
+              });
+            }
           }
-        } catch (statusError: unknown) {
-          console.warn(
-            '[SafeMeLink SOS] Stato remoto temporaneamente non disponibile.',
-            statusError,
-          );
+        } catch {
+          restoreLatestEvent();
+          console.warn('[SafeMeLink SOS] Stato remoto temporaneamente non disponibile.', {
+            category: 'remote_status_unavailable',
+          });
+        }
         }
       }
 
@@ -983,7 +1020,13 @@ export default function HomeScreen() {
 
       setActiveEvent(result.event);
       setLastEvents(result.events);
-      setPushDeliveryNotice(getPushDeliveryNotice(result.pushResult));
+      const deliveryNotice = getPushDeliveryNotice(result.pushResult);
+      const persistenceNotice = result.localPersistenceFailed
+        ? 'SOS attivo, ma la cronologia locale non è stata salvata. Mantieni aperta l’app fino alla conclusione.'
+        : null;
+      setPushDeliveryNotice(
+        [persistenceNotice, deliveryNotice].filter(Boolean).join(' ') || null,
+      );
       setStatus('active');
     } catch (error) {
       if (activeUserIdRef.current === actionUserId) {
@@ -1048,11 +1091,32 @@ export default function HomeScreen() {
           return;
         }
 
-        const nextEvents = await SOSStorage.finalizeEvent(
-          trackedUserId,
-          trackedEvent.id,
-          remoteState.sos_status,
-        );
+        let nextEvents: SOSEvent[];
+        try {
+          nextEvents = await runSOSLocalStepWithTimeout(
+            SOSStorage.finalizeEvent(
+              trackedUserId,
+              trackedEvent.id,
+              remoteState.sos_status,
+            ),
+          );
+        } catch {
+          nextEvents = lastEvents.map((event) =>
+            event.id === trackedEvent.id
+              ? {
+                  ...event,
+                  contactIds: [],
+                  isActive: false,
+                  location: null,
+                  message: null,
+                  remoteStatus: remoteState.sos_status,
+                }
+              : event,
+          );
+          console.warn('[SafeMeLink SOS] Stato terminale non salvato localmente.', {
+            category: 'local_storage_unavailable',
+          });
+        }
 
         if (isCurrent && activeUserIdRef.current === trackedUserId) {
           setLastEvents(nextEvents);
@@ -1060,8 +1124,10 @@ export default function HomeScreen() {
           setRemainingSeconds(SAFETY_TIMER_SECONDS);
           setStatus('idle');
         }
-      } catch (refreshError: unknown) {
-        console.warn('[SafeMeLink SOS] Aggiornamento stato remoto non riuscito.', refreshError);
+      } catch {
+        console.warn('[SafeMeLink SOS] Aggiornamento stato remoto non riuscito.', {
+          category: 'remote_status_unavailable',
+        });
       } finally {
         requestInFlight = false;
       }
@@ -1074,7 +1140,7 @@ export default function HomeScreen() {
       isCurrent = false;
       clearInterval(refreshInterval);
     };
-  }, [activeEvent, status, userId]);
+  }, [activeEvent, lastEvents, status, userId]);
 
   useEffect(() => {
     if (status !== 'countdown') {
@@ -1171,6 +1237,10 @@ export default function HomeScreen() {
     if (sosEndingInFlightRef.current || !activeEvent) {
       if (sosEndingInFlightRef.current) {
         console.info('[SafeMeLink SOS] Chiusura duplicata ignorata.');
+        Alert.alert(
+          'Chiusura SOS in corso',
+          'La richiesta è già stata inviata. Attendi la risposta del server.',
+        );
       }
       return;
     }
@@ -1215,8 +1285,10 @@ export default function HomeScreen() {
         nextEvents = await runSOSLocalStepWithTimeout(
           SOSStorage.finalizeEvent(actionUserId, eventToFinish.id, terminalStatus),
         );
-      } catch (storageError: unknown) {
-        console.warn('[SafeMeLink SOS] Cronologia locale non aggiornata.', storageError);
+      } catch {
+        console.warn('[SafeMeLink SOS] Cronologia locale non aggiornata.', {
+          category: 'local_storage_unavailable',
+        });
         nextEvents = lastEvents.map((event) =>
           event.id === eventToFinish.id
             ? {
@@ -1268,7 +1340,11 @@ export default function HomeScreen() {
   };
 
   const deactivateSOS = () => {
-    if (isEndingSOS) {
+    if (isEndingSOS || sosEndingInFlightRef.current) {
+      Alert.alert(
+        'Chiusura SOS in corso',
+        'La richiesta è già stata inviata. Attendi la risposta del server.',
+      );
       return;
     }
 
@@ -1503,7 +1579,6 @@ export default function HomeScreen() {
             <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
           </Pressable>
           <Pressable
-            disabled={isEndingSOS}
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
             onPress={deactivateSOS}>
             <Text style={styles.stopButtonText}>

@@ -21,6 +21,7 @@ export function VoiceProtectionLifecycle() {
   const passphraseRef = useRef('');
   const shouldListenRef = useRef(false);
   const recognitionStartedRef = useRef(false);
+  const recognitionGenerationRef = useRef(0);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   activeUserIdRef.current = userId;
 
@@ -32,6 +33,7 @@ export function VoiceProtectionLifecycle() {
   }, []);
 
   const stopRecognition = useCallback(() => {
+    recognitionGenerationRef.current += 1;
     clearRestartTimer();
     recognitionStartedRef.current = false;
     try {
@@ -40,11 +42,26 @@ export function VoiceProtectionLifecycle() {
   }, [clearRestartTimer]);
 
   const startRecognition = useCallback(async (targetUserId: string) => {
+    const recognitionGeneration = recognitionGenerationRef.current + 1;
+    recognitionGenerationRef.current = recognitionGeneration;
     if (activeUserIdRef.current !== targetUserId || AppState.currentState !== 'active') {
       return;
     }
 
-    const storedSettings = await VoiceProtectionStorage.get(targetUserId);
+    let storedSettings;
+    try {
+      storedSettings = await VoiceProtectionStorage.get(targetUserId);
+    } catch {
+      console.warn('[VoiceProtection] impostazioni locali non disponibili');
+      return;
+    }
+    if (
+      recognitionGenerationRef.current !== recognitionGeneration ||
+      activeUserIdRef.current !== targetUserId ||
+      AppState.currentState !== 'active'
+    ) {
+      return;
+    }
     const expired =
       storedSettings.expiresAt !== null &&
       new Date(storedSettings.expiresAt).getTime() <= Date.now();
@@ -56,16 +73,29 @@ export function VoiceProtectionLifecycle() {
       stopRecognition();
       return;
     }
-    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
-      console.warn('[VoiceProtection] riconoscimento vocale non disponibile');
+    const readiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
+    if (
+      recognitionGenerationRef.current !== recognitionGeneration ||
+      activeUserIdRef.current !== targetUserId ||
+      AppState.currentState !== 'active'
+    ) {
       return;
     }
-    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
-      console.warn('[VoiceProtection] modello locale di riconoscimento non disponibile');
+    if (readiness !== 'ready' && readiness !== 'model_status_unknown') {
+      console.warn('[VoiceProtection] ascolto locale non disponibile', { readiness });
       return;
     }
 
-    const permission = await ExpoSpeechRecognitionModule.getPermissionsAsync();
+    let permission;
+    try {
+      permission = await ExpoSpeechRecognitionModule.getPermissionsAsync();
+    } catch {
+      console.warn('[VoiceProtection] verifica permesso microfono non riuscita');
+      return;
+    }
+    if (recognitionGenerationRef.current !== recognitionGeneration) {
+      return;
+    }
     if (!permission.granted) {
       console.warn('[VoiceProtection] permesso microfono non disponibile');
       return;
@@ -137,8 +167,14 @@ export function VoiceProtectionLifecycle() {
     }
     console.warn('[VoiceProtection] ascolto protetto interrotto', {
       code: event.error,
-      message: event.message,
     });
+    recognitionStartedRef.current = false;
+    if (event.error === 'language-not-supported') {
+      shouldListenRef.current = false;
+      clearRestartTimer();
+      return;
+    }
+    scheduleRestart();
   });
 
   useSpeechRecognitionEvent('end', () => {
@@ -161,14 +197,18 @@ export function VoiceProtectionLifecycle() {
     }
 
     void (async () => {
-      await VoiceProtectionService.stop();
-      const previousSettings = await VoiceProtectionStorage.get(previousUserId);
-      await VoiceProtectionStorage.save(previousUserId, {
-        ...previousSettings,
-        enabled: false,
-        enabledAt: null,
-        expiresAt: null,
-      });
+      try {
+        await VoiceProtectionService.stop();
+        const previousSettings = await VoiceProtectionStorage.get(previousUserId);
+        await VoiceProtectionStorage.save(previousUserId, {
+          ...previousSettings,
+          enabled: false,
+          enabledAt: null,
+          expiresAt: null,
+        });
+      } catch {
+        console.warn('[VoiceProtection] cleanup cambio account non completato');
+      }
     })();
   }, [isInitializing, userId]);
 

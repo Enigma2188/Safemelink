@@ -142,6 +142,7 @@ export default function VoiceProtectionScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [activationFeedback, setActivationFeedback] = useState('');
+  const [italianModelDownloadRequired, setItalianModelDownloadRequired] = useState(false);
   const [passphraseSaveFeedback, setPassphraseSaveFeedback] =
     useState<PassphraseSaveFeedback | null>(null);
   const [testTranscript, setTestTranscript] = useState('');
@@ -154,6 +155,7 @@ export default function VoiceProtectionScreen() {
   const screenActiveRef = useRef(false);
   const screenGenerationRef = useRef(0);
   const refreshInFlightRef = useRef(false);
+  const refreshGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -233,6 +235,8 @@ export default function VoiceProtectionScreen() {
     }
 
     refreshInFlightRef.current = true;
+    const refreshGeneration = refreshGenerationRef.current + 1;
+    refreshGenerationRef.current = refreshGeneration;
 
     if (!userId) {
       if (screenActiveRef.current) {
@@ -256,13 +260,19 @@ export default function VoiceProtectionScreen() {
     try {
       const storedSettings = await loadSettingsWithTimeout(userId);
 
-      if (screenActiveRef.current) {
+      if (
+        screenActiveRef.current &&
+        refreshGenerationRef.current === refreshGeneration
+      ) {
         setSettings(storedSettings);
         setPassphraseDraft(storedSettings.passphrase);
         setMicrophoneState(storedSettings.enabled ? 'ready' : 'off');
       }
     } catch (error) {
-      if (screenActiveRef.current) {
+      if (
+        screenActiveRef.current &&
+        refreshGenerationRef.current === refreshGeneration
+      ) {
         const errorMessage =
           error instanceof Error
             ? error.message
@@ -289,6 +299,7 @@ export default function VoiceProtectionScreen() {
       void refreshState(true);
 
       return () => {
+        refreshGenerationRef.current += 1;
         if (testingRef.current) {
           console.info('[VoiceProtection Test] riconoscimento interrotto', {
             event: 'screen_cleanup',
@@ -473,6 +484,7 @@ export default function VoiceProtectionScreen() {
         screenActiveRef.current &&
         screenGenerationRef.current === screenGeneration
       ) {
+        refreshGenerationRef.current += 1;
         setSettings(storedSettings);
         setPassphraseDraft(storedSettings.passphrase);
         setMessage('Parola d’ordine salvata soltanto su questo dispositivo.');
@@ -531,6 +543,33 @@ export default function VoiceProtectionScreen() {
     setActivationFeedback('Avvio della protezione in corso…');
 
     try {
+      if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
+        const feedback = 'Il riconoscimento vocale locale non è supportato dal dispositivo.';
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+      const recognitionReadiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
+      if (recognitionReadiness === 'recognition_unavailable') {
+        const feedback = 'Riconoscimento vocale non disponibile su questo dispositivo.';
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+      if (recognitionReadiness === 'on_device_unavailable') {
+        const feedback = 'Il riconoscimento vocale locale non è supportato dal dispositivo.';
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+      if (recognitionReadiness === 'italian_model_missing') {
+        const feedback = 'Installa il modello italiano offline prima di attivare la protezione.';
+        setItalianModelDownloadRequired(true);
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+
       const permissions = await VoiceProtectionService.requestPermissions();
       if (!permissions.microphoneGranted) {
         const feedback =
@@ -612,6 +651,8 @@ export default function VoiceProtectionScreen() {
         return;
       }
 
+      refreshGenerationRef.current += 1;
+      setItalianModelDownloadRequired(false);
       setSettings(activeSettings);
       setMicrophoneState('ready');
       VoiceProtectionRuntime.notifySettingsChanged(userId);
@@ -654,6 +695,7 @@ export default function VoiceProtectionScreen() {
         VOICE_SETTINGS_SAVE_TIMEOUT_MS,
         'Il salvataggio locale non risponde. Riprova.',
       );
+      refreshGenerationRef.current += 1;
       setSettings(inactiveSettings);
       setMicrophoneState('off');
       VoiceProtectionRuntime.notifySettingsChanged(userId);
@@ -675,16 +717,28 @@ export default function VoiceProtectionScreen() {
       setMessage('Configura e salva prima una parola d’ordine.');
       return;
     }
-    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
+      setMicrophoneState('error');
+      setMessage('Il riconoscimento vocale locale non è supportato dal dispositivo.');
+      return;
+    }
+    const recognitionReadiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
+    if (recognitionReadiness === 'recognition_unavailable') {
       setMicrophoneState('error');
       setMessage('Riconoscimento vocale non disponibile su questo dispositivo.');
       return;
     }
-    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
+    if (recognitionReadiness === 'on_device_unavailable') {
       setMicrophoneState('error');
       setMessage(
-        'Modello italiano non disponibile. Installalo dalle impostazioni del dispositivo.',
+        'Il riconoscimento vocale locale non è supportato dal dispositivo.',
       );
+      return;
+    }
+    if (recognitionReadiness === 'italian_model_missing') {
+      setItalianModelDownloadRequired(true);
+      setMicrophoneState('error');
+      setMessage('Modello italiano offline non installato. Usa il pulsante qui sotto.');
       return;
     }
     if (settings.enabled) {
@@ -752,6 +806,32 @@ export default function VoiceProtectionScreen() {
     }
   };
 
+  const requestItalianModelDownload = async () => {
+    if (isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setMessage('Apertura installazione del modello italiano offline…');
+    try {
+      const result = await VoiceProtectionService.requestItalianModelDownload();
+      if (result.status === 'download_success') {
+        setItalianModelDownloadRequired(false);
+        setMessage('Modello italiano offline installato. Ora puoi eseguire il TEST.');
+      } else if (result.status === 'opened_dialog') {
+        setMessage('Completa l’installazione del modello italiano nella finestra Android.');
+      } else {
+        setMessage('Installazione annullata. Puoi riprovare quando vuoi.');
+      }
+    } catch {
+      setMessage(
+        'Non riesco ad aprire l’installazione automatica. Installa la lingua italiana nelle impostazioni del riconoscimento vocale Android.',
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const setDuration = async (durationMinutes: VoiceProtectionDurationMinutes) => {
     if (settings.enabled || !userId) {
       return;
@@ -759,6 +839,7 @@ export default function VoiceProtectionScreen() {
 
     const previousSettings = settingsRef.current;
     const updatedSettings = { ...previousSettings, durationMinutes };
+    refreshGenerationRef.current += 1;
     setSettings(updatedSettings);
     try {
       await runWithTimeout(
@@ -766,6 +847,7 @@ export default function VoiceProtectionScreen() {
         VOICE_SETTINGS_SAVE_TIMEOUT_MS,
         'Il salvataggio locale non risponde. Riprova.',
       );
+      setSettings(updatedSettings);
     } catch (error) {
       if (screenActiveRef.current) {
         setSettings(previousSettings);
@@ -788,6 +870,14 @@ export default function VoiceProtectionScreen() {
           : microphoneState === 'ready'
             ? 'Pronto per il motore locale'
             : 'Non in uso';
+
+  const toggleUnavailableFeedback = isSaving
+    ? 'Operazione in corso…'
+    : !userId
+      ? 'Accedi per attivare Protezione Vocale.'
+      : !settings.enabled && !settings.passphrase
+        ? 'Salva prima una parola d’ordine.'
+        : '';
 
   if (isInitializing || isLoading) {
     return (
@@ -843,15 +933,9 @@ export default function VoiceProtectionScreen() {
             />
           </View>
 
-          {activationFeedback ? (
+          {toggleUnavailableFeedback || activationFeedback ? (
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
-              {activationFeedback}
-            </Text>
-          ) : null}
-
-          {!settings.enabled && !settings.passphrase ? (
-            <Text style={styles.cardDescription}>
-              Salva prima una parola d’ordine per rendere disponibile l’attivazione.
+              {toggleUnavailableFeedback || activationFeedback}
             </Text>
           ) : null}
 
@@ -989,6 +1073,15 @@ export default function VoiceProtectionScreen() {
               {microphoneState === 'testing' ? 'ASCOLTO…' : 'TEST'}
             </Text>
           </Pressable>
+          {italianModelDownloadRequired ? (
+            <Pressable
+              disabled={isSaving}
+              onPress={() => void requestItalianModelDownload()}
+              style={[styles.batteryButton, isSaving && styles.disabled]}>
+              <Ionicons color="#C8BEFF" name="download-outline" size={17} />
+              <Text style={styles.batteryButtonText}>INSTALLA MODELLO ITALIANO</Text>
+            </Pressable>
+          ) : null}
           {testTranscript ? (
             <Text style={styles.transcript}>Riconosciuto: “{testTranscript}”</Text>
           ) : null}
