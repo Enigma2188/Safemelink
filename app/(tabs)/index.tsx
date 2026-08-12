@@ -1,5 +1,5 @@
 import { type Href, Link, useFocusEffect, useRouter } from 'expo-router';
-import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
+import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,7 +30,6 @@ import {
 } from '@/services/SOSService';
 import { CheckpointStorage } from '@/storage/CheckpointStorage';
 import { GoHomeStorage, type GoHomeSession, type HomeLocation } from '@/storage/GoHomeStorage';
-import { normalizePassphrase, PassphraseStorage, type SavedPassphrase } from '@/storage/PassphraseStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
 
 const SAFETY_TIMER_SECONDS = 10;
@@ -42,8 +41,6 @@ const GO_HOME_SAFETY_MARGIN = 1.3;
 const GO_HOME_STORAGE_TIMEOUT_MS = 8_000;
 const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
 const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
-const PASSPHRASE_COOLDOWN_MS = 10000;
-const SPEECH_RECOGNITION_LANGUAGE = 'it-IT';
 
 const getPushDeliveryNotice = (result: SOSDeliveryResult) => {
   if (result.notificationsSent > 0) {
@@ -69,8 +66,7 @@ type SOSStatus = 'idle' | 'countdown' | 'sending' | 'active';
 type CheckpointStatus = 'idle' | 'running' | 'confirming';
 type GoHomeStatus = 'idle' | 'estimating' | 'running' | 'confirming';
 type GoHomeErrorAction = 'retry' | 'location-settings' | null;
-type PassphraseMode = 'idle' | 'recording' | 'listening';
-type HomePanel = 'home' | 'checkpoint' | 'goHome' | 'passphrase';
+type HomePanel = 'home' | 'checkpoint' | 'goHome';
 
 const logoImage = require('../../assets/images/occhio safemelink definitivo.png');
 
@@ -145,6 +141,7 @@ const runSOSLocalStepWithTimeout = async <T,>(operation: Promise<T>) => {
 export default function HomeScreen() {
   const { session, isInitializing, isSubmitting, logout } = useAuth();
   const router = useRouter();
+  const isHomeFocused = useIsFocused();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
@@ -164,16 +161,8 @@ export default function HomeScreen() {
   const [goHomeConfirmSeconds, setGoHomeConfirmSeconds] = useState(GO_HOME_CONFIRM_SECONDS);
   const [goHomeError, setGoHomeError] = useState('');
   const [goHomeErrorAction, setGoHomeErrorAction] = useState<GoHomeErrorAction>(null);
-  const [savedPassphrase, setSavedPassphrase] = useState<SavedPassphrase | null>(null);
-  const [passphraseMode, setPassphraseMode] = useState<PassphraseMode>('idle');
-  const [passphraseDraft, setPassphraseDraft] = useState('');
-  const [lastRecognizedPassphraseText, setLastRecognizedPassphraseText] = useState('');
-  const [passphraseError, setPassphraseError] = useState('');
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [activePanel, setActivePanel] = useState<HomePanel>('home');
-  const passphraseModeRef = useRef<PassphraseMode>('idle');
-  const savedPassphraseRef = useRef<SavedPassphrase | null>(null);
-  const passphraseCooldownUntilRef = useRef(0);
   const goHomeEstimateGenerationRef = useRef(0);
   const goHomeEstimateInFlightRef = useRef(false);
   const homeCaptureInFlightRef = useRef(false);
@@ -189,7 +178,6 @@ export default function HomeScreen() {
   const sosGlowPulse = useRef(new Animated.Value(0)).current;
 
   const latestEvent = useMemo(() => lastEvents[0], [lastEvents]);
-  const passphraseIsConfigured = Boolean(savedPassphrase);
   activeUserIdRef.current = userId;
   statusRef.current = status;
 
@@ -262,163 +250,7 @@ export default function HomeScreen() {
     [startSOSCountdown],
   );
 
-  useEffect(() => {
-    passphraseModeRef.current = passphraseMode;
-  }, [passphraseMode]);
-
-  useEffect(() => {
-    savedPassphraseRef.current = savedPassphrase;
-  }, [savedPassphrase]);
-
-  const stopPassphraseRecognition = useCallback(() => {
-    const legacyRecognitionWasActive = passphraseModeRef.current !== 'idle';
-    passphraseModeRef.current = 'idle';
-    setPassphraseMode('idle');
-
-    if (legacyRecognitionWasActive) {
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-    }
-  }, []);
-
-  const startPassphraseRecognition = useCallback(
-    async (mode: Exclude<PassphraseMode, 'idle'>) => {
-      setPassphraseError('');
-
-      if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
-        setPassphraseError('Riconoscimento vocale non disponibile su questo dispositivo.');
-        return;
-      }
-
-      if (mode === 'listening' && !savedPassphraseRef.current) {
-        setPassphraseError('Registra prima una parola d ordine.');
-        return;
-      }
-
-      try {
-        const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-
-        if (permission.status !== 'granted') {
-          setPassphraseError('Permesso microfono o riconoscimento vocale non concesso.');
-          return;
-        }
-
-        try {
-          ExpoSpeechRecognitionModule.abort();
-        } catch {}
-
-        passphraseModeRef.current = mode;
-        setPassphraseMode(mode);
-
-        if (mode === 'recording') {
-          setPassphraseDraft('');
-        }
-
-        ExpoSpeechRecognitionModule.start({
-          lang: SPEECH_RECOGNITION_LANGUAGE,
-          interimResults: true,
-          maxAlternatives: 3,
-          continuous: mode === 'listening',
-          contextualStrings: savedPassphraseRef.current ? [savedPassphraseRef.current.text] : undefined,
-        });
-      } catch (error) {
-        passphraseModeRef.current = 'idle';
-        setPassphraseMode('idle');
-        setPassphraseError(error instanceof Error ? error.message : 'Non riesco ad avviare il riconoscimento vocale.');
-      }
-    },
-    []
-  );
-
-  const triggerPassphraseSOS = useCallback(() => {
-    const now = Date.now();
-
-    if (now < passphraseCooldownUntilRef.current) {
-      return;
-    }
-
-    passphraseCooldownUntilRef.current = now + PASSPHRASE_COOLDOWN_MS;
-    stopPassphraseRecognition();
-    startSOSCountdown();
-  }, [startSOSCountdown, stopPassphraseRecognition]);
-
-  useSpeechRecognitionEvent('result', (event) => {
-    if (passphraseModeRef.current === 'idle') {
-      return;
-    }
-    const transcript = event.results[0]?.transcript?.trim();
-
-    if (!transcript) {
-      return;
-    }
-
-    setLastRecognizedPassphraseText(transcript);
-
-    if (passphraseModeRef.current === 'recording') {
-      setPassphraseDraft(transcript);
-
-      if (event.isFinal) {
-        stopPassphraseRecognition();
-      }
-
-      return;
-    }
-
-    const passphrase = savedPassphraseRef.current;
-
-    if (!passphrase || passphraseModeRef.current !== 'listening') {
-      return;
-    }
-
-    const normalizedTranscript = normalizePassphrase(transcript);
-
-    if (
-      normalizedTranscript === passphrase.normalizedText ||
-      normalizedTranscript.includes(passphrase.normalizedText)
-    ) {
-      triggerPassphraseSOS();
-    }
-  });
-
-  useSpeechRecognitionEvent('error', (event) => {
-    if (passphraseModeRef.current === 'idle' || event.error === 'aborted') {
-      return;
-    }
-
-    setPassphraseError(event.message || 'Errore riconoscimento vocale.');
-    passphraseModeRef.current = 'idle';
-    setPassphraseMode('idle');
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    if (passphraseModeRef.current !== 'listening') {
-      return;
-    }
-
-    setTimeout(() => {
-      if (passphraseModeRef.current === 'listening') {
-        try {
-          ExpoSpeechRecognitionModule.start({
-            lang: SPEECH_RECOGNITION_LANGUAGE,
-            interimResults: true,
-            maxAlternatives: 3,
-            continuous: true,
-            contextualStrings: savedPassphraseRef.current ? [savedPassphraseRef.current.text] : undefined,
-          });
-        } catch (error) {
-          passphraseModeRef.current = 'idle';
-          setPassphraseMode('idle');
-          setPassphraseError(error instanceof Error ? error.message : 'Ascolto interrotto.');
-        }
-      }
-    }, 400);
-  });
-
-  useEffect(() => () => stopPassphraseRecognition(), [stopPassphraseRecognition]);
-
   const resetSensitiveState = useCallback(() => {
-    stopPassphraseRecognition();
     setContacts([]);
     setLastEvents([]);
     setActiveEvent(null);
@@ -441,12 +273,7 @@ export default function HomeScreen() {
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
     setGoHomeError('');
     setGoHomeErrorAction(null);
-    setSavedPassphrase(null);
-    setPassphraseDraft('');
-    setLastRecognizedPassphraseText('');
-    setPassphraseError('');
-    passphraseCooldownUntilRef.current = 0;
-  }, [stopPassphraseRecognition]);
+  }, []);
 
   const loadSOSData = useCallback(async () => {
     const loadUserId = userId;
@@ -458,12 +285,11 @@ export default function HomeScreen() {
     }
 
     try {
-      const [storedContacts, storedEvents, storedHomeLocation, storedPassphrase] =
+      const [storedContacts, storedEvents, storedHomeLocation] =
         await Promise.all([
           ContactsService.list(),
           SOSStorage.listEvents(loadUserId),
           GoHomeStorage.getHomeLocation(loadUserId),
-          PassphraseStorage.get(loadUserId),
         ]);
       let nextEvents = storedEvents;
       let restoredActiveEvent: ActiveSOSEvent | null = null;
@@ -549,7 +375,6 @@ export default function HomeScreen() {
       setContacts(storedContacts);
       setLastEvents(nextEvents);
       setHomeLocation(storedHomeLocation);
-      setSavedPassphrase(storedPassphrase);
       setActiveEvent(restoredActiveEvent);
       setStatus(restoredActiveEvent ? 'active' : 'idle');
     } catch (loadError: unknown) {
@@ -624,36 +449,6 @@ export default function HomeScreen() {
     }, [activePanel, drawerVisible, goHomeStatus, status]),
   );
 
-  const confirmPassphraseDraft = async () => {
-    const normalizedDraft = normalizePassphrase(passphraseDraft);
-
-    if (!normalizedDraft) {
-      Alert.alert('Parola d ordine', 'Registra una parola o frase prima di salvarla.');
-      return;
-    }
-
-    if (!userId) {
-      Alert.alert('Parola d’ordine', 'Accedi prima di salvare una parola d’ordine.');
-      return;
-    }
-
-    try {
-      const actionUserId = userId;
-      const storedPassphrase = await PassphraseStorage.save(actionUserId, passphraseDraft);
-
-      if (activeUserIdRef.current !== actionUserId) {
-        return;
-      }
-
-      setSavedPassphrase(storedPassphrase);
-      setPassphraseDraft('');
-      setLastRecognizedPassphraseText('');
-      Alert.alert('Parola d ordine', 'Frase salvata su questo dispositivo.');
-    } catch {
-      Alert.alert('Parola d ordine', 'Non riesco a salvare la frase sul dispositivo.');
-    }
-  };
-
   const cancelSOS = () => {
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setStatus('idle');
@@ -662,6 +457,10 @@ export default function HomeScreen() {
   const startCheckpoint = (minutes: number) => {
     if (status !== 'idle') {
       Alert.alert('Checkpoint', 'Puoi avviare un checkpoint solo quando non ci sono SOS attivi.');
+      return;
+    }
+    if (goHomeStatus !== 'idle') {
+      Alert.alert('Checkpoint', 'Concludi o annulla Torno a casa prima di avviare un Checkpoint.');
       return;
     }
 
@@ -698,7 +497,6 @@ export default function HomeScreen() {
       Alert.alert('Torno a casa', 'Accedi prima di salvare la posizione Casa.');
       return;
     }
-
     if (homeCaptureInFlightRef.current) {
       return;
     }
@@ -1056,7 +854,7 @@ export default function HomeScreen() {
     const trackedEvent = activeEvent;
     const trackedUserId = userId;
 
-    if (!trackedEvent?.remoteSosId || !trackedUserId || status !== 'active') {
+    if (!isHomeFocused || !trackedEvent?.remoteSosId || !trackedUserId || status !== 'active') {
       return;
     }
 
@@ -1140,7 +938,7 @@ export default function HomeScreen() {
       isCurrent = false;
       clearInterval(refreshInterval);
     };
-  }, [activeEvent, lastEvents, status, userId]);
+  }, [activeEvent, isHomeFocused, lastEvents, status, userId]);
 
   useEffect(() => {
     if (status !== 'countdown') {
@@ -1462,9 +1260,7 @@ export default function HomeScreen() {
         ? 'Checkpoint attivo'
         : goHomeStatus !== 'idle'
           ? 'Torno a casa attivo'
-          : passphraseMode === 'listening'
-            ? "Parola d'ordine in ascolto"
-            : 'Nessuna modalita attiva';
+          : 'Nessuna modalita attiva';
   const logoGlowAnimatedStyle = {
     opacity: logoGlowPulse.interpolate({
       inputRange: [0, 1],
@@ -1699,68 +1495,6 @@ export default function HomeScreen() {
             ) : null}
           </View>
         )}
-      </View>
-      )}
-
-      {activePanel === 'passphrase' && (
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Parola d’ordine</Text>
-        <Text style={styles.passphraseStatus}>
-          {passphraseIsConfigured ? 'Frase configurata' : 'Nessuna parola salvata'}
-        </Text>
-        {savedPassphrase && (
-          <Text style={styles.passphraseSavedText}>
-            {`Salvata: “${savedPassphrase.text}”`}
-          </Text>
-        )}
-        <Text style={styles.goHomeNote}>Il microfono viene usato solo mentre la modalita ascolto e attiva.</Text>
-
-        {lastRecognizedPassphraseText ? (
-          <Text style={styles.passphraseTranscript}>
-            {`Riconosciuto: “${lastRecognizedPassphraseText}”`}
-          </Text>
-        ) : null}
-        {passphraseDraft ? (
-          <Text style={styles.passphraseTranscript}>{`Da salvare: “${passphraseDraft}”`}</Text>
-        ) : null}
-        {passphraseError ? <Text style={styles.passphraseError}>{passphraseError}</Text> : null}
-
-        <View style={styles.passphraseActions}>
-          <Pressable
-            disabled={passphraseMode === 'listening'}
-            style={[styles.secondaryActionButton, passphraseMode === 'listening' && styles.disabledButton]}
-            onPress={() => startPassphraseRecognition('recording')}>
-            <Text style={styles.secondaryActionText}>
-              {passphraseMode === 'recording' ? 'Sto ascoltando...' : 'Registra parola d’ordine'}
-            </Text>
-          </Pressable>
-
-          {passphraseDraft ? (
-            <Pressable style={styles.goHomeStartButton} onPress={confirmPassphraseDraft}>
-              <Text style={styles.goHomeStartText}>Conferma frase</Text>
-            </Pressable>
-          ) : null}
-
-          {passphraseMode === 'listening' ? (
-            <Pressable style={styles.cancelButton} onPress={stopPassphraseRecognition}>
-              <Text style={styles.cancelButtonText}>Disattiva ascolto</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              disabled={!passphraseIsConfigured || passphraseMode === 'recording'}
-              style={[
-                styles.goHomeStartButton,
-                (!passphraseIsConfigured || passphraseMode === 'recording') && styles.disabledButton,
-              ]}
-              onPress={() => startPassphraseRecognition('listening')}>
-              <Text style={styles.goHomeStartText}>Attiva ascolto</Text>
-            </Pressable>
-          )}
-        </View>
-
-        <Text style={styles.passphraseListenState}>
-          {passphraseMode === 'listening' ? 'Ascolto attivo' : 'Ascolto disattivato'}
-        </Text>
       </View>
       )}
 
@@ -2424,43 +2158,6 @@ const styles = StyleSheet.create({
     color: '#9fb5d9',
     fontSize: 13,
     lineHeight: 18,
-    textAlign: 'center',
-  },
-  passphraseStatus: {
-    color: '#f7fbff',
-    fontSize: 15,
-    fontWeight: '800',
-    marginBottom: 8,
-  },
-  passphraseSavedText: {
-    color: '#b8c9e8',
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  passphraseTranscript: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    borderRadius: 12,
-    borderWidth: 1,
-    color: '#f7fbff',
-    fontSize: 14,
-    marginTop: 10,
-    padding: 10,
-  },
-  passphraseError: {
-    color: '#b71c1c',
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 10,
-  },
-  passphraseActions: {
-    gap: 10,
-    marginTop: 12,
-  },
-  passphraseListenState: {
-    color: '#9fb5d9',
-    fontSize: 13,
-    marginTop: 10,
     textAlign: 'center',
   },
   goHomeStartButton: {

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   KeyboardAvoidingView,
@@ -41,6 +42,7 @@ export function RadarScreen() {
     error,
     preferences,
     isSavingPreferences,
+    setRadarScreenActive,
     updatePreferences,
   } = useNearbyUsers();
   const [nicknameDraft, setNicknameDraft] = useState('');
@@ -48,6 +50,13 @@ export function RadarScreen() {
   const isMountedRef = useRef(true);
   const radarPulse = useRef(new Animated.Value(0)).current;
   const nicknameValidation = validateRadarNickname(nicknameDraft);
+
+  useFocusEffect(
+    useCallback(() => {
+      setRadarScreenActive(true);
+      return () => setRadarScreenActive(false);
+    }, [setRadarScreenActive]),
+  );
 
   useEffect(() => {
     setNicknameDraft(preferences?.publicNickname ?? '');

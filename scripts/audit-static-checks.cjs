@@ -43,6 +43,8 @@ const homeScreen = read('app/(tabs)/index.tsx');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
 const voiceProtectionScreen = read('app/voice-protection.tsx');
 const voiceProtectionService = read('services/VoiceProtectionService.ts');
+const voiceProtectionLifecycle = read('components/VoiceProtectionLifecycle.tsx');
+const voiceProtectionRuntime = read('services/VoiceProtectionRuntime.ts');
 const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
@@ -78,7 +80,7 @@ check('Radar OFF performs no location publication or nearby search', () => {
   );
   assert.match(
     radarProvider,
-    /if \(!canParticipate \|\| interval\)[\s\S]*return;/,
+    /if \(!canParticipate \|\| locationSubscription \|\| locationWatchStarting\)[\s\S]*return;/,
   );
   assert.match(
     radarProvider,
@@ -402,7 +404,7 @@ check('Voice Protection foreground service is declared as microphone', () => {
 check('Voice Protection state remains local and account scoped', () => {
   assert.match(accountStorage, /\| 'voice-protection'/);
   assert.match(voiceProtectionScreen, /VoiceProtectionStorage\.save\(userId/);
-  assert.match(voiceProtectionService, /VoiceProtectionStorage\.save\(taskData\.userId/);
+  assert.match(voiceProtectionService, /VoiceProtectionStorage\.save\(taskUserId/);
 });
 
 check('Push token registration retries and follows native token rotation', () => {
@@ -416,16 +418,37 @@ check('Push token registration retries and follows native token rotation', () =>
   );
 });
 
-check('Radar uses foreground GPS updates with periodic fallback', () => {
+check('Radar uses one foreground GPS source with an inactivity fallback', () => {
   assert.match(locationService, /watchPositionAsync/);
   assert.match(locationService, /RADAR_LOCATION_TIME_INTERVAL_MS = 15_000/);
   assert.match(locationService, /RADAR_LOCATION_DISTANCE_INTERVAL_METERS = 10/);
   assert.match(radarProvider, /startLocationWatch/);
   assert.match(
     radarProvider,
-    /setInterval\(\(\) => void runCycle\(\), RADAR_REFRESH_INTERVAL_MS\)/,
+    /setTimeout\(\(\) => \{[\s\S]*void runCycle\(\)\.finally\(scheduleLocationFallback\)/,
   );
+  assert.doesNotMatch(radarProvider, /setInterval\(/);
+  assert.match(radarProvider, /isRadarScreenActive/);
   assert.match(radarProvider, /stopLocationWatch\(\)/);
+});
+
+check('Voice recognition has single continuous ownership and bounded restart', () => {
+  assert.doesNotMatch(homeScreen, /useSpeechRecognitionEvent|ExpoSpeechRecognitionModule/);
+  assert.match(voiceProtectionService, /TASK_MAX_SLEEP_MS = 60_000/);
+  assert.match(voiceProtectionLifecycle, /MAX_CONSECUTIVE_FAILURES = 5/);
+  assert.match(voiceProtectionLifecycle, /VoiceProtectionRuntime\.isRecognitionSuspended\(\)/);
+});
+
+check('Voice keyword reaches the existing SOS countdown exactly once per session', () => {
+  assert.match(voiceProtectionLifecycle, /sosRequestedForSessionRef/);
+  assert.equal(
+    (voiceProtectionLifecycle.match(/VoiceProtectionRuntime\.requestSOS\(/g) ?? []).length,
+    1,
+  );
+  assert.match(voiceProtectionRuntime, /waitForRecognitionStart/);
+  assert.match(voiceProtectionRuntime, /sosRequestListeners\.size === 0/);
+  assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
+  assert.match(homeScreen, /startSOSCountdown\(\)/);
 });
 
 process.stdout.write('All static audit checks passed.\n');

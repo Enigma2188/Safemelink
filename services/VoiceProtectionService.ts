@@ -8,7 +8,7 @@ import {
   VoiceProtectionStorage,
 } from '@/storage/VoiceProtectionStorage';
 
-const TASK_CHECK_INTERVAL_MS = 1000;
+const TASK_MAX_SLEEP_MS = 60_000;
 const RECOGNITION_READINESS_TIMEOUT_MS = 5_000;
 
 type VoiceProtectionTaskData = {
@@ -37,10 +37,14 @@ const sleep = (durationMs: number) =>
 
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
   while (BackgroundService.isRunning()) {
-    if (taskData?.expiresAt && Date.now() >= new Date(taskData.expiresAt).getTime()) {
+    const expiresAtMs = taskData?.expiresAt
+      ? new Date(taskData.expiresAt).getTime()
+      : null;
+    const taskUserId = taskData?.userId ?? null;
+    if (expiresAtMs !== null && taskUserId && Date.now() >= expiresAtMs) {
       try {
-        const storedSettings = await VoiceProtectionStorage.get(taskData.userId);
-        await VoiceProtectionStorage.save(taskData.userId, {
+        const storedSettings = await VoiceProtectionStorage.get(taskUserId);
+        await VoiceProtectionStorage.save(taskUserId, {
           ...storedSettings,
           enabled: false,
           enabledAt: null,
@@ -54,7 +58,8 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       break;
     }
 
-    await sleep(TASK_CHECK_INTERVAL_MS);
+    const remainingMs = expiresAtMs === null ? TASK_MAX_SLEEP_MS : expiresAtMs - Date.now();
+    await sleep(Math.min(TASK_MAX_SLEEP_MS, Math.max(1_000, remainingMs)));
   }
 };
 

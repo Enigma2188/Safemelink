@@ -10,6 +10,7 @@ import {
   type SOSLocation,
 } from '@/services/LocationService';
 import {
+  RADAR_LOCATION_FALLBACK_INTERVAL_MS,
   RADAR_REFRESH_INTERVAL_MS,
   RadarService,
   canParticipateInRadar,
@@ -44,6 +45,7 @@ type RadarContextValue = {
   error: string | null;
   preferences: RadarPreferences | null;
   isSavingPreferences: boolean;
+  setRadarScreenActive: (active: boolean) => void;
   updatePreferences: (changes: RadarPreferenceChanges) => Promise<RadarPreferences>;
 };
 
@@ -66,6 +68,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
   const [preferences, setPreferences] = useState<RadarPreferences | null>(null);
   const [preferencesUserId, setPreferencesUserId] = useState<string | null>(null);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
+  const [isRadarScreenActive, setIsRadarScreenActive] = useState(false);
   const cycleInFlightRef = useRef(false);
   const lastCycleStartedAtRef = useRef(0);
   const preferenceSaveRef = useRef<RadarPreferenceSave | null>(null);
@@ -166,23 +169,25 @@ export function RadarProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let isCurrent = true;
     let appState: AppStateStatus = AppState.currentState;
-    let interval: ReturnType<typeof setInterval> | null = null;
+    let locationFallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let locationSubscription: LocationWatchSubscription | null = null;
     let locationWatchStarting = false;
     const canParticipate = Boolean(
       userId &&
         preferencesUserId === userId &&
-        participationEnabled,
+        participationEnabled &&
+        isRadarScreenActive,
     );
 
-    const stopInterval = () => {
-      if (interval) {
-        clearInterval(interval);
-        interval = null;
+    const stopLocationFallback = () => {
+      if (locationFallbackTimer) {
+        clearTimeout(locationFallbackTimer);
+        locationFallbackTimer = null;
       }
     };
 
     const stopLocationWatch = () => {
+      stopLocationFallback();
       locationSubscription?.remove();
       locationSubscription = null;
       locationWatchStarting = false;
@@ -239,7 +244,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
           lastPublishedRef.current = { location, publishedAt: now };
           console.log('[SafeMeLink Radar] Presenza aggiornata automaticamente.', {
             accuracy: location.accuracy,
-            source: observedLocation ? 'watch' : 'periodic',
+            source: observedLocation ? 'watch' : 'fallback',
           });
         }
 
@@ -280,6 +285,18 @@ export function RadarProvider({ children }: PropsWithChildren) {
       }
     };
 
+    const scheduleLocationFallback = () => {
+      stopLocationFallback();
+      if (!isCurrent || appState !== 'active' || !canParticipate) {
+        return;
+      }
+
+      locationFallbackTimer = setTimeout(() => {
+        locationFallbackTimer = null;
+        void runCycle().finally(scheduleLocationFallback);
+      }, RADAR_LOCATION_FALLBACK_INTERVAL_MS);
+    };
+
     const startLocationWatch = () => {
       if (!canParticipate || locationSubscription || locationWatchStarting) {
         return;
@@ -289,6 +306,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       void LocationService.watchRadarLocation(
         (location) => {
           if (isCurrent && appState === 'active') {
+            scheduleLocationFallback();
             void runCycle(location);
           }
         },
@@ -310,6 +328,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
           }
 
           locationSubscription = subscription;
+          scheduleLocationFallback();
         })
         .catch((watchError: unknown) => {
           locationWatchStarting = false;
@@ -322,14 +341,12 @@ export function RadarProvider({ children }: PropsWithChildren) {
         });
     };
 
-    const startInterval = () => {
-      if (!canParticipate || interval) {
+    const startRadar = () => {
+      if (!canParticipate || locationSubscription || locationWatchStarting) {
         return;
       }
-
-      void runCycle();
-      interval = setInterval(() => void runCycle(), RADAR_REFRESH_INTERVAL_MS);
       startLocationWatch();
+      scheduleLocationFallback();
     };
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
@@ -337,9 +354,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
       appState = nextState;
 
       if (nextState === 'active') {
-        startInterval();
+        startRadar();
       } else if (wasActive) {
-        stopInterval();
         stopLocationWatch();
         lastCycleStartedAtRef.current = 0;
         deactivate();
@@ -352,7 +368,15 @@ export function RadarProvider({ children }: PropsWithChildren) {
       deactivate();
     } else if (!canParticipate) {
       clearRadarState(setUsers, setError);
-      setStatus(userId ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
+      setStatus(
+        userId
+          ? radarEnabled
+            ? participationEnabled
+              ? 'searching'
+              : 'visibility_required'
+            : 'off'
+          : 'unauthenticated',
+      );
 
       if (userId && preferencesUserId === userId && preferences) {
         deactivate();
@@ -360,12 +384,11 @@ export function RadarProvider({ children }: PropsWithChildren) {
         lastPublishedRef.current = null;
       }
     } else if (appState === 'active') {
-      startInterval();
+      startRadar();
     }
 
     return () => {
       isCurrent = false;
-      stopInterval();
       stopLocationWatch();
       lastCycleStartedAtRef.current = 0;
       appStateSubscription.remove();
@@ -381,6 +404,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
     preferences,
     preferencesUserId,
     radarEnabled,
+    isRadarScreenActive,
     userId,
   ]);
 
@@ -445,6 +469,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       error,
       preferences,
       isSavingPreferences,
+      setRadarScreenActive: setIsRadarScreenActive,
       updatePreferences,
     }),
     [error, isSavingPreferences, preferences, status, updatePreferences, users],
