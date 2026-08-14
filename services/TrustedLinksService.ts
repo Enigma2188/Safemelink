@@ -9,6 +9,8 @@ export type TrustedLinkRequest = Awaited<
 >[number];
 
 const maskCode = (code: string) => `${code.slice(0, 4)}••••${code.slice(-2)}`;
+const normalizePhoneIdentity = (phone: string | null | undefined) =>
+  phone?.replace(/[^\d+]/g, '') ?? '';
 
 export const TrustedLinksService = {
   async syncLocalContacts(expectedUserId?: string) {
@@ -24,17 +26,26 @@ export const TrustedLinksService = {
 
     try {
       const remoteContacts = await TrustedContactsRepository.listOwn();
-      const localOnlyContacts = localContacts.filter((contact) => !contact.remoteId);
-      const linkedContacts = remoteContacts
+      const mergedLocalIds = new Set<string>();
+      const linkedContactsByProfile = new Map<string, TrustedContact>();
+      remoteContacts
         .filter((contact) => contact.linked_profile_id)
-        .map<TrustedContact>((remoteContact) => {
+        .forEach((remoteContact) => {
           const existing = localContacts.find(
             (contact) =>
               contact.remoteId === remoteContact.id ||
-              contact.userId === remoteContact.linked_profile_id,
+              contact.userId === remoteContact.linked_profile_id ||
+              Boolean(
+                remoteContact.phone &&
+                  normalizePhoneIdentity(contact.phone) ===
+                    normalizePhoneIdentity(remoteContact.phone),
+              ),
           );
+          if (existing) {
+            mergedLocalIds.add(existing.id);
+          }
 
-          return {
+          const linkedContact: TrustedContact = {
             id: existing?.id ?? `remote:${remoteContact.id}`,
             remoteId: remoteContact.id,
             name: remoteContact.name,
@@ -43,7 +54,12 @@ export const TrustedLinksService = {
             userId: remoteContact.linked_profile_id!,
             preferredChannel: existing?.preferredChannel ?? 'sms',
           };
+          linkedContactsByProfile.set(remoteContact.linked_profile_id!, linkedContact);
         });
+      const linkedContacts = [...linkedContactsByProfile.values()];
+      const localOnlyContacts = localContacts.filter(
+        (contact) => !contact.remoteId && !mergedLocalIds.has(contact.id),
+      );
       const nextContacts = [...localOnlyContacts, ...linkedContacts];
 
       const currentSession = await AuthService.getSession();
@@ -59,7 +75,9 @@ export const TrustedLinksService = {
 
       return nextContacts;
     } catch (error) {
-      console.error('[TrustedLinks] errore collegamento', error);
+      console.error('[TrustedLinks] errore collegamento', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   },
@@ -100,7 +118,9 @@ export const TrustedLinksService = {
       await TrustedLinksRepository.createRequest(publicCode.trim().toUpperCase());
       console.log('[TrustedLinks] richiesta inviata');
     } catch (error) {
-      console.error('[TrustedLinks] errore collegamento', error);
+      console.error('[TrustedLinks] errore collegamento', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   },
@@ -124,7 +144,9 @@ export const TrustedLinksService = {
         await TrustedLinksService.syncLocalContacts(userId);
       }
     } catch (error) {
-      console.error('[TrustedLinks] errore collegamento', error);
+      console.error('[TrustedLinks] errore collegamento', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   },
@@ -133,7 +155,9 @@ export const TrustedLinksService = {
     try {
       await TrustedLinksRepository.cancel(requestId);
     } catch (error) {
-      console.error('[TrustedLinks] errore collegamento', error);
+      console.error('[TrustedLinks] errore collegamento', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       throw error;
     }
   },

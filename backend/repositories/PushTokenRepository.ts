@@ -21,7 +21,6 @@ export const PushTokenRepository = {
 
     if (error) {
       console.error('[SafeMeLink Push] Upsert device_push_tokens non riuscito.', {
-        userId: input.user_id,
         platform: input.platform,
         code: error.code,
         possibleTokenOwnershipConflict:
@@ -31,8 +30,6 @@ export const PushTokenRepository = {
     }
 
     console.log('[SafeMeLink Push] Upsert device_push_tokens completato.', {
-      rowId: data.id,
-      userId: input.user_id,
       platform: input.platform,
       active: data.active,
       updatedAt: data.updated_at,
@@ -55,6 +52,6 @@ export const PushTokenRepository = {
       throw new BackendError('Impossibile disattivare il token push del dispositivo.', error);
     }
 
-    console.log('[SafeMeLink Push] Token disattivato per il logout.', { userId });
+    console.log('[SafeMeLink Push] Token disattivato per il logout.');
   },
 };

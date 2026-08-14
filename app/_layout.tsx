@@ -7,6 +7,7 @@ import 'react-native-reanimated';
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { RadarProvider } from '@/components/RadarProvider';
+import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
 import { VoiceProtectionLifecycle } from '@/components/VoiceProtectionLifecycle';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -40,6 +41,7 @@ export default function RootLayout() {
                 }}
               />
             </Stack>
+            <SOSNotificationCenter />
             <StatusBar style="auto" />
           </View>
         </ThemeProvider>

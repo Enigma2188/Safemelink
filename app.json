@@ -47,6 +47,7 @@
       "expo-router",
       "expo-notifications",
       "./plugins/withVoiceProtectionForegroundService.cjs",
+      "./plugins/withSOSChannelQueries.cjs",
       [
         "expo-speech-recognition",
         {

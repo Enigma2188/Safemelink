@@ -20,18 +20,36 @@ type StoredContact = {
   preferredChannel?: PreferredSosChannel;
 };
 
-const normalizeContacts = (contacts: StoredContact[]) =>
-  contacts
-    .map((contact) => ({
-      id: contact.id ?? `${contact.name}-${contact.phone ?? contact.number ?? Date.now()}`,
+const normalizeContacts = (contacts: StoredContact[]) => {
+  const uniqueContacts = new Map<string, TrustedContact>();
+
+  for (const contact of contacts) {
+    const phone = contact.phone ?? contact.number ?? '';
+    const normalizedPhone = phone.replace(/[^\d+]/g, '');
+    const normalizedContact: TrustedContact = {
+      id: contact.id ?? `${contact.name}-${normalizedPhone || 'linked'}`,
       ...(contact.remoteId ? { remoteId: contact.remoteId } : {}),
       name: contact.name,
-      phone: contact.phone ?? contact.number ?? '',
+      phone,
       hasApp: contact.hasApp ?? false,
       ...(contact.userId ? { userId: contact.userId } : {}),
       preferredChannel: contact.preferredChannel ?? 'sms',
-    }))
-    .filter((contact) => contact.name && (contact.phone || contact.userId))
+    };
+
+    if (!normalizedContact.name || (!normalizedContact.phone && !normalizedContact.userId)) {
+      continue;
+    }
+
+    const identity = normalizedContact.remoteId
+      ? `remote:${normalizedContact.remoteId}`
+      : normalizedContact.userId
+        ? `linked:${normalizedContact.userId}`
+        : `local:${normalizedPhone}`;
+    uniqueContacts.set(identity, normalizedContact);
+  }
+
+  return [...uniqueContacts.values()];
+};
 
 export const ContactsStorage = {
   async getContacts(userId: string): Promise<TrustedContact[]> {

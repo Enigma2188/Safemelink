@@ -42,6 +42,7 @@ export function RadarScreen() {
     error,
     preferences,
     isSavingPreferences,
+    refreshRadar,
     setRadarScreenActive,
     updatePreferences,
   } = useNearbyUsers();
@@ -64,6 +65,7 @@ export function RadarScreen() {
 
   useEffect(
     () => {
+      isMountedRef.current = true;
       const pulseAnimation = Animated.loop(
         Animated.sequence([
           Animated.timing(radarPulse, {
@@ -119,6 +121,11 @@ export function RadarScreen() {
     ],
   };
   const showNetwork = status === 'ready' || status === 'searching' || status === 'empty';
+  const canRetryRadar =
+    status === 'permission_required' ||
+    status === 'position_unavailable' ||
+    status === 'accuracy_insufficient' ||
+    status === 'error';
 
   return (
     <View style={styles.screen}>
@@ -207,6 +214,12 @@ export function RadarScreen() {
                 );
               })}
             </View>
+            {status === 'empty' ? (
+              <Pressable onPress={refreshRadar} style={styles.refreshButton}>
+                <Ionicons color="#DDEEFF" name="refresh" size={17} />
+                <Text style={styles.refreshButtonText}>Aggiorna rete</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -214,6 +227,12 @@ export function RadarScreen() {
           <View style={styles.statusCard}>
             <Text style={styles.statusText}>{statusMessages[status]}</Text>
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {canRetryRadar ? (
+              <Pressable onPress={refreshRadar} style={styles.refreshButton}>
+                <Ionicons color="#DDEEFF" name="refresh" size={17} />
+                <Text style={styles.refreshButtonText}>Riprova</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -713,6 +732,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center',
+  },
+  refreshButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(69, 183, 255, 0.14)',
+    borderColor: 'rgba(69, 183, 255, 0.32)',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  refreshButtonText: {
+    color: '#DDEEFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });
 

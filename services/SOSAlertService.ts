@@ -1,7 +1,20 @@
-import { Alert, Linking, Share } from 'react-native';
+import { Linking, Share } from 'react-native';
 
 import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
 import type { ActiveSOSEvent } from '@/services/SOSService';
+
+export type SOSLocalDeliveryResult = {
+  status: 'not_needed' | 'whatsapp_opened' | 'sms_opened' | 'no_channel' | 'technical_error';
+  channel: 'whatsapp' | 'sms' | null;
+};
+
+type UrlOpenResult = {
+  opened: boolean;
+  technicalFailure: boolean;
+};
+
+const LINKING_OPERATION_TIMEOUT_MS = 6_000;
+const LOCAL_FALLBACK_DEADLINE_MS = 12_000;
 
 const normalizePhoneNumber = (phone: string) => {
   const trimmed = phone.trim();
@@ -23,25 +36,40 @@ const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) =>
       return validContacts;
     }
 
-    return [
-      ...validContacts,
-      {
-        ...contact,
-        phone,
-      },
-    ];
+    return [...validContacts, { ...contact, phone }];
   }, []);
 
-const createSmsUrls = (event: ActiveSOSEvent, contact?: SafeMeLinkContact) => {
+const runLinkingOperation = async <T,>(operation: Promise<T>) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('linking_timeout')),
+          LINKING_OPERATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
+const createSmsUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
   const message = encodeURIComponent(event.message);
-  const phone = contact?.phone;
 
   return [
-    ...(phone ? [`smsto:${phone}?body=${message}`] : []),
-    ...(phone ? [`sms:${phone}?body=${message}`] : []),
-    `sms:?body=${message}`,
+    `smsto:${contact.phone}?body=${message}`,
+    `sms:${contact.phone}?body=${message}`,
   ];
 };
+
+const createGenericSmsUrl = (event: ActiveSOSEvent) =>
+  `sms:?body=${encodeURIComponent(event.message)}`;
 
 const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
   const message = encodeURIComponent(event.message);
@@ -60,34 +88,33 @@ const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) =
 
   return [
     `whatsapp://send?phone=${phone}&text=${message}`,
-    `https://wa.me/${phone}?text=${message}`,
   ];
 };
 
 const getUrlDiagnostics = (url: string) => {
   const rawScheme = url.slice(0, Math.max(0, url.indexOf(':'))).toLowerCase();
-  const scheme = ['sms', 'smsto', 'whatsapp', 'https'].includes(rawScheme)
+  const scheme = ['sms', 'smsto', 'whatsapp'].includes(rawScheme)
     ? rawScheme
     : 'unknown';
-  const channel = scheme === 'sms' || scheme === 'smsto' ? 'sms' : 'whatsapp';
+  const channel = scheme === 'whatsapp' ? 'whatsapp' : 'sms';
 
-  return { channel, scheme };
+  return { channel, scheme } as const;
 };
 
 const getGenericErrorCategory = (error: unknown) =>
   error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : 'UnknownError';
 
-const openUrlWithDiagnostics = async (url: string) => {
+const openUrlWithDiagnostics = async (url: string): Promise<UrlOpenResult> => {
   const diagnostics = getUrlDiagnostics(url);
 
   try {
-    const canOpen = await Linking.canOpenURL(url);
+    const canOpen = await runLinkingOperation(Linking.canOpenURL(url));
     console.log('[SafeMeLink SOS] verifica apertura canale', {
       ...diagnostics,
       outcome: canOpen ? 'success' : 'failure',
     });
     if (!canOpen) {
-      return false;
+      return { opened: false, technicalFailure: false };
     }
   } catch (error) {
     console.log('[SafeMeLink SOS] verifica apertura canale fallita', {
@@ -95,23 +122,23 @@ const openUrlWithDiagnostics = async (url: string) => {
       outcome: 'failure',
       errorCategory: getGenericErrorCategory(error),
     });
-    return false;
+    return { opened: false, technicalFailure: true };
   }
 
   try {
-    await Linking.openURL(url);
+    await runLinkingOperation(Linking.openURL(url));
     console.log('[SafeMeLink SOS] apertura canale completata', {
       ...diagnostics,
       outcome: 'success',
     });
-    return true;
+    return { opened: true, technicalFailure: false };
   } catch (error) {
     console.log('[SafeMeLink SOS] apertura canale fallita', {
       ...diagnostics,
       outcome: 'failure',
       errorCategory: getGenericErrorCategory(error),
     });
-    return false;
+    return { opened: false, technicalFailure: true };
   }
 };
 
@@ -123,16 +150,27 @@ export const shareSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkC
   });
 };
 
-export const sendSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkContact[]) => {
+export const sendSosAlert = async (
+  event: ActiveSOSEvent,
+  contacts: SafeMeLinkContact[],
+): Promise<SOSLocalDeliveryResult> => {
   const contactsWithValidPhones = getContactsWithValidPhones(contacts);
+  const deadlineAt = Date.now() + LOCAL_FALLBACK_DEADLINE_MS;
+  let technicalFailure = false;
   const tryUrls = async (urls: string[]) => {
     for (const url of urls) {
-      if (await openUrlWithDiagnostics(url)) {
-        return true;
+      if (Date.now() >= deadlineAt) {
+        technicalFailure = true;
+        return null;
+      }
+      const result = await openUrlWithDiagnostics(url);
+      technicalFailure ||= result.technicalFailure;
+      if (result.opened) {
+        return getUrlDiagnostics(url).channel;
       }
     }
 
-    return false;
+    return null;
   };
 
   for (const contact of contactsWithValidPhones) {
@@ -144,33 +182,22 @@ export const sendSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkCo
       contact.preferredChannel === 'whatsapp'
         ? createSmsUrls(event, contact)
         : createWhatsAppUrls(event, contact);
+    const channel = (await tryUrls(preferredUrls)) ?? (await tryUrls(fallbackUrls));
 
-    if ((await tryUrls(preferredUrls)) || (await tryUrls(fallbackUrls))) {
-      return;
+    if (channel) {
+      return {
+        status: channel === 'whatsapp' ? 'whatsapp_opened' : 'sms_opened',
+        channel,
+      };
     }
   }
 
-  if (contactsWithValidPhones.length === 0 && (await tryUrls(createSmsUrls(event)))) {
-    return;
+  if ((await tryUrls([createGenericSmsUrl(event)])) === 'sms') {
+    return { status: 'sms_opened', channel: 'sms' };
   }
 
-  Alert.alert(
-    'SOS salvato',
-    'SOS salvato, ma non e stato possibile aprire SMS o WhatsApp. Controlla i numeri dei contatti fidati.'
-  );
+  return {
+    status: technicalFailure ? 'technical_error' : 'no_channel',
+    channel: null,
+  };
 };
-
-export async function sendSosViaBackend(): Promise<void> {
-  // TODO: inviare l'evento SOS al backend SafeMeLink quando sara disponibile.
-  throw new Error('Invio SOS tramite backend non ancora disponibile.');
-}
-
-export async function notifyTrustedAppUsers(): Promise<void> {
-  // TODO: notificare via backend/push i contatti fidati con hasApp === true.
-  throw new Error('Notifiche ai contatti SafeMeLink non ancora disponibili.');
-}
-
-export async function notifyNearbyUsers(): Promise<void> {
-  // TODO: notificare gli utenti SafeMeLink nelle vicinanze quando previsto dal prodotto.
-  throw new Error('Notifiche agli utenti vicini non ancora disponibili.');
-}

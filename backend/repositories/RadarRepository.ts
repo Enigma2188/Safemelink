@@ -34,6 +34,13 @@ const radarErrorMessages = {
 
 const RADAR_REQUEST_TIMEOUT_MS = 12_000;
 
+export class RadarRequestTimeoutError extends Error {
+  constructor() {
+    super('La richiesta Radar non risponde. Riprova tra poco.');
+    this.name = 'RadarRequestTimeoutError';
+  }
+}
+
 const runRadarRequest = async <T,>(
   operation: (signal: AbortSignal) => PromiseLike<T>,
 ): Promise<T> => {
@@ -44,7 +51,7 @@ const runRadarRequest = async <T,>(
     return await operation(controller.signal);
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error('La richiesta Radar non risponde. Riprova tra poco.');
+      throw new RadarRequestTimeoutError();
     }
     throw error;
   } finally {

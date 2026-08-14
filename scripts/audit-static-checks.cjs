@@ -49,8 +49,16 @@ const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
 const pushTokenRegistrar = read('components/PushTokenRegistrar.tsx');
+const sosNotificationCenter = read('components/SOSNotificationCenter.tsx');
+const sosNotificationPayload = read('services/SOSNotificationPayload.ts');
+const pushNotificationService = read('services/PushNotificationService.ts');
+const rootLayout = read('app/_layout.tsx');
 const pushTokenRepository = read('backend/repositories/PushTokenRepository.ts');
 const locationService = read('services/LocationService.ts');
+const sosService = read('services/SOSService.ts');
+const sosAlertService = read('services/SOSAlertService.ts');
+const trustedLinksService = read('services/TrustedLinksService.ts');
+const sosChannelQueriesPlugin = read('plugins/withSOSChannelQueries.cjs');
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
@@ -76,11 +84,12 @@ check('Radar OFF performs no location publication or nearby search', () => {
   assert.match(radarService, /preferences\?\.radarEnabled && preferences\.visibleToNearby/);
   assert.match(
     radarProvider,
-    /!canParticipate[\s\S]*cycleInFlightRef\.current[\s\S]*return;/,
+    /const canParticipate = Boolean\([\s\S]*isRadarScreenActive/,
   );
+  assert.match(radarProvider, /const isActiveRadarContext = \(\) =>[\s\S]*canParticipate/);
   assert.match(
     radarProvider,
-    /if \(!canParticipate \|\| locationSubscription \|\| locationWatchStarting\)[\s\S]*return;/,
+    /!isActiveRadarContext\(\)[\s\S]*locationSubscription[\s\S]*locationWatchStarting/,
   );
   assert.match(
     radarProvider,
@@ -418,18 +427,67 @@ check('Push token registration retries and follows native token rotation', () =>
   );
 });
 
+check('Received SOS notifications use one global event-driven center', () => {
+  assert.match(rootLayout, /<SOSNotificationCenter \/>/);
+  assert.match(sosNotificationCenter, /addNotificationReceivedListener/);
+  assert.match(sosNotificationCenter, /addNotificationResponseReceivedListener/);
+  assert.match(sosNotificationCenter, /getLastNotificationResponseAsync/);
+  assert.match(sosNotificationCenter, /receivedSubscription\.remove\(\)/);
+  assert.match(sosNotificationCenter, /responseSubscription\.remove\(\)/);
+  assert.doesNotMatch(pushTokenRegistrar, /addNotificationReceivedListener/);
+  assert.doesNotMatch(pushTokenRegistrar, /addNotificationResponseReceivedListener/);
+  assert.doesNotMatch(sosNotificationCenter, /setInterval\(/);
+});
+
+check('Received SOS events validate and deduplicate the real SOS identifier', () => {
+  assert.match(sosNotificationPayload, /UUID_PATTERN/);
+  assert.match(sosNotificationPayload, /candidate\.type !== 'sos_alert'/);
+  assert.match(sosNotificationCenter, /eventStatesRef\.current\.has\(payload\.sosId\)/);
+  assert.match(sosNotificationCenter, /eventStatesRef\.current\.set\(payload\.sosId, 'unread'\)/);
+  assert.match(sosNotificationCenter, /SOSLifecycleService\.getStatus\(currentEvent\.sosId\)/);
+  assert.match(sosNotificationCenter, /isUnavailableSOS\(error\)/);
+  assert.match(sosNotificationCenter, /router\.push\(routePath as Href\)/);
+});
+
+check('Foreground SOS uses the in-app alert while preserving one sound', () => {
+  assert.match(pushNotificationService, /isForegroundSOS/);
+  assert.match(pushNotificationService, /shouldPlaySound: true/);
+  assert.match(pushNotificationService, /shouldShowBanner: !isForegroundSOS/);
+  assert.match(sosNotificationCenter, /SOS RICEVUTO/);
+  assert.match(sosNotificationCenter, /APRI EMERGENZA/);
+});
+
 check('Radar uses one foreground GPS source with an inactivity fallback', () => {
   assert.match(locationService, /watchPositionAsync/);
   assert.match(locationService, /RADAR_LOCATION_TIME_INTERVAL_MS = 15_000/);
   assert.match(locationService, /RADAR_LOCATION_DISTANCE_INTERVAL_METERS = 10/);
+  assert.match(locationService, /RADAR_WATCH_STARTUP_TIMEOUT_MS = 15_000/);
+  assert.match(radarService, /RADAR_LOCATION_FALLBACK_INTERVAL_MS = 20_000/);
   assert.match(radarProvider, /startLocationWatch/);
-  assert.match(
-    radarProvider,
-    /setTimeout\(\(\) => \{[\s\S]*void runCycle\(\)\.finally\(scheduleLocationFallback\)/,
-  );
+  assert.match(radarProvider, /armLocationWatchdog/);
+  assert.match(radarProvider, /runSingleLocationFallback/);
+  assert.doesNotMatch(radarProvider, /finally\(scheduleLocationFallback\)/);
   assert.doesNotMatch(radarProvider, /setInterval\(/);
   assert.match(radarProvider, /isRadarScreenActive/);
   assert.match(radarProvider, /stopLocationWatch\(\)/);
+});
+
+check('Radar refreshes results without a second periodic GPS source', () => {
+  assert.match(radarProvider, /scheduleNetworkRefresh/);
+  assert.match(radarProvider, /freshObservation: false/);
+  assert.match(radarProvider, /RADAR_CACHED_LOCATION_MAX_AGE_MS/);
+  assert.match(radarProvider, /shouldPublishRadarPresence/);
+  assert.match(radarProvider, /areNearbyUsersEqual/);
+  assert.match(radarProvider, /current === 'ready' \|\| current === 'empty'/);
+  assert.doesNotMatch(radarProvider, /LocationService\.getCurrentLocation\([\s\S]*setInterval/);
+});
+
+check('Radar stale generations and native watch startup are cleaned up', () => {
+  assert.match(radarProvider, /locationWatchGeneration/);
+  assert.match(radarProvider, /watchGeneration !== locationWatchGeneration/);
+  assert.match(radarProvider, /appStateSubscription\.remove\(\)/);
+  assert.match(locationService, /startupTimedOut[\s\S]*subscription\.remove\(\)/);
+  assert.match(radarProvider, /manualRefreshRef\.current = \(\) => undefined/);
 });
 
 check('Voice recognition has single continuous ownership and bounded restart', () => {
@@ -449,6 +507,31 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(voiceProtectionRuntime, /sosRequestListeners\.size === 0/);
   assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
   assert.match(homeScreen, /startSOSCountdown\(\)/);
+});
+
+check('SOS push remains primary and local fallback is bounded and observable', () => {
+  assert.match(sosService, /if \(pushResult\.notificationsSent === 0\)/);
+  assert.match(sosService, /localDeliveryResult = await sendSosAlert/);
+  assert.match(sosAlertService, /LOCAL_FALLBACK_DEADLINE_MS = 12_000/);
+  assert.match(sosAlertService, /Linking\.canOpenURL/);
+  assert.match(sosAlertService, /contact\.preferredChannel === 'whatsapp'/);
+  assert.doesNotMatch(sosAlertService, /Alert\.alert/);
+});
+
+check('Trusted contacts distinguish and deduplicate local and linked recipients', () => {
+  assert.match(trustedLinksService, /linkedContactsByProfile/);
+  assert.match(trustedLinksService, /mergedLocalIds/);
+  assert.match(contactsScreen, /SafeMeLink collegato \+ numero locale/);
+  assert.match(contactsScreen, /Solo numero locale/);
+  assert.doesNotMatch(homeScreen, /contacts\.length\}\/3/);
+});
+
+check('Android package visibility exposes SOS fallback channels', () => {
+  assert.match(sosChannelQueriesPlugin, /android\.intent\.action\.SENDTO/);
+  assert.match(sosChannelQueriesPlugin, /scheme: 'sms'/);
+  assert.match(sosChannelQueriesPlugin, /scheme: 'smsto'/);
+  assert.match(sosChannelQueriesPlugin, /scheme: 'whatsapp'/);
+  assert.match(sosChannelQueriesPlugin, /com\.whatsapp\.w4b/);
 });
 
 process.stdout.write('All static audit checks passed.\n');

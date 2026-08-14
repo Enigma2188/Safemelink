@@ -60,6 +60,22 @@ assert.match(
   'Il foreground service Protezione Vocale deve dichiarare il tipo microphone.',
 );
 
+for (const scheme of ['sms', 'smsto', 'whatsapp']) {
+  assert.match(
+    manifest,
+    new RegExp(`<data\\b[^>]*android:scheme=["']${scheme}["'][^>]*>`),
+    `Query Android per il canale SOS ${scheme} mancante.`,
+  );
+}
+
+for (const packageName of ['com.whatsapp', 'com.whatsapp.w4b']) {
+  assert.match(
+    manifest,
+    new RegExp(`<package\\b[^>]*android:name=["']${packageName.replaceAll('.', '\\.')}["'][^>]*>`),
+    `Package visibility Android mancante: ${packageName}.`,
+  );
+}
+
 for (const permission of [
   'android.permission.READ_EXTERNAL_STORAGE',
   'android.permission.WRITE_EXTERNAL_STORAGE',

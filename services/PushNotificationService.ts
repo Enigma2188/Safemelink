@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 
 import { AuthService } from '@/backend/auth/AuthService';
 import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository';
+import { parseSOSNotificationPayload } from '@/services/SOSNotificationPayload';
 
 export const SOS_NOTIFICATION_CHANNEL_ID = 'sos-alerts';
 
@@ -22,7 +23,6 @@ export class NotificationPermissionError extends Error {
 const isExpoPushToken = (token: string) =>
   /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(token);
 
-const tokenLabel = (token: string) => `...${token.slice(-10)}`;
 const PUSH_NATIVE_STEP_TIMEOUT_MS = 15_000;
 const PUSH_BACKEND_STEP_TIMEOUT_MS = 15_000;
 const cachedExpoPushTokensByUser = new Map<string, string>();
@@ -62,7 +62,9 @@ async function getCurrentExpoPushToken() {
     throw new Error('EAS projectId non disponibile: impossibile ottenere il token Expo Push.');
   }
 
-  console.log('[SafeMeLink Push] Richiesta Expo Push Token.', { projectId });
+  console.log('[SafeMeLink Push] Richiesta Expo Push Token.', {
+    projectConfigured: Boolean(projectId),
+  });
   const { data: expoPushToken } = await runPushStepWithTimeout(
     Notifications.getExpoPushTokenAsync({ projectId }),
     PUSH_NATIVE_STEP_TIMEOUT_MS,
@@ -77,12 +79,18 @@ async function getCurrentExpoPushToken() {
 }
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const isForegroundSOS = Boolean(
+      parseSOSNotificationPayload(notification.request.content.data),
+    );
+
+    return {
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+      shouldShowBanner: !isForegroundSOS,
+      shouldShowList: !isForegroundSOS,
+    };
+  },
 });
 
 async function registerDevice(userId: string) {
@@ -120,7 +128,6 @@ async function registerDevice(userId: string) {
 
   if (!finalPermissions.granted) {
     console.warn('[SafeMeLink Push] Permesso notifiche non concesso.', {
-      userId,
       status: finalPermissions.status,
       canAskAgain: finalPermissions.canAskAgain,
     });
@@ -128,7 +135,6 @@ async function registerDevice(userId: string) {
   }
 
   console.log('[SafeMeLink Push] Permessi notifiche verificati.', {
-    userId,
     status: finalPermissions.status,
     canAskAgain: finalPermissions.canAskAgain,
   });
@@ -138,8 +144,7 @@ async function registerDevice(userId: string) {
   const platform = Platform.OS;
 
   console.log('[SafeMeLink Push] Expo Push Token ottenuto.', {
-    userId,
-    token: tokenLabel(expoPushToken),
+    tokenValid: true,
     platform,
   });
 
@@ -150,13 +155,12 @@ async function registerDevice(userId: string) {
   );
 
   if (currentSession?.user.id !== userId) {
-    console.warn('[SafeMeLink Push] Registrazione annullata: account non più attivo.', { userId });
+    console.warn('[SafeMeLink Push] Registrazione annullata: account non più attivo.');
     return null;
   }
 
   console.log('[SafeMeLink Push] Upsert token avviato.', {
-    userId,
-    token: tokenLabel(expoPushToken),
+    tokenValid: true,
   });
   await runPushStepWithTimeout(
     PushTokenRepository.upsertForUser({
@@ -172,8 +176,7 @@ async function registerDevice(userId: string) {
   cachedExpoPushTokensByUser.set(userId, expoPushToken);
 
   console.log('[SafeMeLink Push] Token associato all’utente.', {
-    userId,
-    token: tokenLabel(expoPushToken),
+    tokenValid: true,
   });
 
   return expoPushToken;
@@ -189,14 +192,13 @@ async function unregisterDeviceForUser(userId: string) {
       tokenToDeactivate = await getCurrentExpoPushToken();
     } catch (error) {
       console.warn('[SafeMeLink Push] Token corrente non recuperabile durante il logout.', {
-        userId,
-        error,
+        category: error instanceof Error ? error.name : 'unknown',
       });
     }
   }
 
   if (!tokenToDeactivate) {
-    console.warn('[SafeMeLink Push] Nessun token da disattivare durante il logout.', { userId });
+    console.warn('[SafeMeLink Push] Nessun token da disattivare durante il logout.');
     return;
   }
 

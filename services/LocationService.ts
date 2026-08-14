@@ -12,6 +12,7 @@ export type LocationWatchSubscription = {
 
 export const RADAR_LOCATION_TIME_INTERVAL_MS = 15_000;
 export const RADAR_LOCATION_DISTANCE_INTERVAL_METERS = 10;
+export const RADAR_WATCH_STARTUP_TIMEOUT_MS = 15_000;
 export const CURRENT_LOCATION_TIMEOUT_MS = 30_000;
 export const INTERACTIVE_LOCATION_TIMEOUT_MS = 15_000;
 
@@ -33,6 +34,13 @@ export class LocationTimeoutError extends Error {
   constructor() {
     super('La posizione non è arrivata in tempo. Controlla il GPS e riprova.');
     this.name = 'LocationTimeoutError';
+  }
+}
+
+export class LocationWatchStartupTimeoutError extends Error {
+  constructor() {
+    super('Il monitoraggio GPS non si è avviato in tempo. Riprova.');
+    this.name = 'LocationWatchStartupTimeoutError';
   }
 }
 
@@ -79,7 +87,9 @@ export const LocationService = {
         options?.timeoutMs ?? CURRENT_LOCATION_TIMEOUT_MS,
       );
     } catch (error) {
-      console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', error);
+      console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       if (error instanceof LocationTimeoutError) {
         throw error;
       }
@@ -112,7 +122,9 @@ export const LocationService = {
       distanceIntervalMeters: RADAR_LOCATION_DISTANCE_INTERVAL_METERS,
     });
 
-    return Location.watchPositionAsync(
+    let startupTimedOut = false;
+    let startupTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const watchRequest = Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
         distanceInterval: RADAR_LOCATION_DISTANCE_INTERVAL_METERS,
@@ -126,9 +138,35 @@ export const LocationService = {
         });
       },
       (reason) => {
-        console.warn('[SafeMeLink Radar] Monitoraggio posizione interrotto.', reason);
+        console.warn('[SafeMeLink Radar] Monitoraggio posizione interrotto.', {
+          category: reason ? 'native_location_error' : 'unknown',
+        });
         onError(new LocationUnavailableError());
       },
     );
+
+    void watchRequest
+      .then((subscription) => {
+        if (startupTimedOut) {
+          subscription.remove();
+        }
+      })
+      .catch(() => undefined);
+
+    try {
+      return await Promise.race([
+        watchRequest,
+        new Promise<never>((_, reject) => {
+          startupTimeoutId = setTimeout(() => {
+            startupTimedOut = true;
+            reject(new LocationWatchStartupTimeoutError());
+          }, RADAR_WATCH_STARTUP_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (startupTimeoutId) {
+        clearTimeout(startupTimeoutId);
+      }
+    }
   },
 };

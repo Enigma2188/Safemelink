@@ -1,7 +1,10 @@
 import { ContactsStorage } from '@/storage/ContactsStorage';
 import { AuthService } from '@/backend/auth/AuthService';
 import { TrustedContactsRepository } from '@/backend/repositories/TrustedContactsRepository';
-import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
+import type {
+  PreferredSosChannel,
+  SafeMeLinkContact,
+} from '@/services/SafeMeLinkContact';
 import { TrustedLinksService } from '@/services/TrustedLinksService';
 
 export type TrustedContact = SafeMeLinkContact;
@@ -9,12 +12,32 @@ export type TrustedContact = SafeMeLinkContact;
 export type TrustedContactInput = {
   name: string;
   phone: string;
+  preferredChannel?: PreferredSosChannel;
 };
 
 const normalizeContactInput = (input: TrustedContactInput) => ({
   name: input.name.trim(),
   phone: input.phone.trim(),
+  preferredChannel: input.preferredChannel ?? 'sms',
 });
+
+const normalizePhoneIdentity = (phone: string) => phone.replace(/[^\d+]/g, '');
+
+const hasDuplicatePhone = (
+  contacts: TrustedContact[],
+  phone: string,
+  excludedContactId?: string,
+) => {
+  const phoneIdentity = normalizePhoneIdentity(phone);
+  return Boolean(
+    phoneIdentity &&
+      contacts.some(
+        (contact) =>
+          contact.id !== excludedContactId &&
+          normalizePhoneIdentity(contact.phone) === phoneIdentity,
+      ),
+  );
+};
 
 async function getCurrentUserId() {
   return (await AuthService.getSession())?.user.id ?? null;
@@ -45,7 +68,13 @@ export const ContactsService = {
     try {
       return await TrustedLinksService.syncLocalContacts(expectedUserId ?? userId);
     } catch {
-      return ContactsStorage.getContacts(userId);
+      const localContacts = await ContactsStorage.getContacts(userId);
+      return localContacts.map((contact) => ({
+        ...contact,
+        hasApp: false,
+        remoteId: undefined,
+        userId: undefined,
+      }));
     }
   },
 
@@ -58,6 +87,9 @@ export const ContactsService = {
     if (!normalized.name || !normalized.phone) {
       throw new Error('Inserisci nome e numero di telefono.');
     }
+    if (hasDuplicatePhone(contacts, normalized.phone)) {
+      throw new Error('Questo numero è già presente tra i contatti fidati.');
+    }
 
     const nextContacts: TrustedContact[] = [
       ...contacts,
@@ -65,7 +97,6 @@ export const ContactsService = {
         id: `${Date.now()}`,
         ...normalized,
         hasApp: false,
-        preferredChannel: 'sms',
       },
     ];
 
@@ -86,6 +117,9 @@ export const ContactsService = {
     if (!normalized.name || (!normalized.phone && !existing.userId)) {
       throw new Error('Inserisci nome e numero di telefono.');
     }
+    if (normalized.phone && hasDuplicatePhone(contacts, normalized.phone, id)) {
+      throw new Error('Questo numero è già presente tra i contatti fidati.');
+    }
 
     if (existing.remoteId) {
       await TrustedContactsRepository.update(existing.remoteId, {
@@ -95,7 +129,7 @@ export const ContactsService = {
     }
 
     const nextContacts = contacts.map((contact) =>
-      contact.id === id ? { ...contact, ...normalized } : contact
+      contact.id === id ? { ...contact, ...normalized } : contact,
     );
 
     await ContactsStorage.saveContacts(userId, nextContacts);

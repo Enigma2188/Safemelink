@@ -10,6 +10,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
+import type { SOSLocalDeliveryResult } from '@/services/SOSAlertService';
 import {
   INTERACTIVE_LOCATION_TIMEOUT_MS,
   LocationPermissionError,
@@ -42,24 +43,36 @@ const GO_HOME_STORAGE_TIMEOUT_MS = 8_000;
 const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
 const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
 
-const getPushDeliveryNotice = (result: SOSDeliveryResult) => {
+const getSOSDeliveryNotice = (
+  result: SOSDeliveryResult,
+  localResult: SOSLocalDeliveryResult,
+) => {
   if (result.notificationsSent > 0) {
-    return null;
+    return 'SOS attivo. La notifica SafeMeLink è stata accettata per l’invio.';
   }
 
+  const fallbackNotice =
+    localResult.status === 'whatsapp_opened'
+      ? 'Fallback WhatsApp avviato.'
+      : localResult.status === 'sms_opened'
+        ? 'Fallback SMS avviato.'
+        : localResult.status === 'no_channel'
+          ? 'Nessun canale locale utilizzabile. Verifica i contatti fidati e le app disponibili.'
+          : 'Il fallback locale non è disponibile per un problema tecnico.';
+
   if (result.reason === 'no_linked_recipients') {
-    return 'SOS attivo. Nessun contatto SafeMeLink collegato: non è stato possibile inviare notifiche.';
+    return `SOS attivo. Nessun contatto SafeMeLink collegato. ${fallbackNotice}`;
   }
 
   if (result.reason === 'recipients_without_active_tokens') {
-    return 'SOS attivo. I contatti collegati non risultano disponibili per le notifiche.';
+    return `SOS attivo. I contatti SafeMeLink collegati non hanno notifiche disponibili. ${fallbackNotice}`;
   }
 
   if (result.errors.length > 0 || result.notificationsFailed > 0) {
-    return 'SOS attivo, ma si è verificato un problema tecnico durante l’invio della notifica SafeMeLink. Gli altri canali restano disponibili.';
+    return `SOS attivo, ma l’invio SafeMeLink ha incontrato un problema tecnico. ${fallbackNotice}`;
   }
 
-  return 'SOS attivo, ma il servizio Expo non ha accettato alcuna notifica SafeMeLink. Gli altri canali restano disponibili.';
+  return `SOS attivo, ma Expo non ha accettato notifiche SafeMeLink. ${fallbackNotice}`;
 };
 
 type SOSStatus = 'idle' | 'countdown' | 'sending' | 'active';
@@ -818,7 +831,10 @@ export default function HomeScreen() {
 
       setActiveEvent(result.event);
       setLastEvents(result.events);
-      const deliveryNotice = getPushDeliveryNotice(result.pushResult);
+      const deliveryNotice = getSOSDeliveryNotice(
+        result.pushResult,
+        result.localDeliveryResult,
+      );
       const persistenceNotice = result.localPersistenceFailed
         ? 'SOS attivo, ma la cronologia locale non è stata salvata. Mantieni aperta l’app fino alla conclusione.'
         : null;
@@ -1319,7 +1335,7 @@ export default function HomeScreen() {
           <View style={styles.contactsSummary}>
             <View>
               <Text style={styles.summaryLabel}>Contatti fidati</Text>
-              <Text style={styles.summaryValue}>{contacts.length}/3 salvati</Text>
+              <Text style={styles.summaryValue}>{contacts.length} salvati</Text>
             </View>
             <Link href={"/(tabs)/contacts" as any} asChild>
               <Pressable style={styles.manageContactsButton}>

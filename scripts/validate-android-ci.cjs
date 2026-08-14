@@ -112,6 +112,10 @@ for (const permission of [
   assert.ok(appConfig.expo.android.blockedPermissions.includes(permission));
 }
 assert.ok(appConfig.expo.plugins.includes('expo-notifications'));
+assert.ok(
+  appConfig.expo.plugins.includes('./plugins/withSOSChannelQueries.cjs'),
+  'Plugin Android per i canali fallback SOS mancante.',
+);
 pass('configurazione Android, Firebase e privacy');
 
 assert.match(packageJson.dependencies.expo, /^~54\./);

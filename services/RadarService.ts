@@ -7,8 +7,9 @@ import {
 } from '@/backend/repositories/RadarRepository';
 
 export const RADAR_REFRESH_INTERVAL_MS = 30_000;
-export const RADAR_LOCATION_FALLBACK_INTERVAL_MS = 45_000;
+export const RADAR_LOCATION_FALLBACK_INTERVAL_MS = 20_000;
 export const RADAR_PRESENCE_UPDATE_INTERVAL_MS = 60_000;
+export const RADAR_CACHED_LOCATION_MAX_AGE_MS = 90_000;
 export const RADAR_MIN_MOVEMENT_METERS = 50;
 export const RADAR_MAX_ACCURACY_METERS = 100;
 export const RADAR_SEARCH_RADIUS_METERS = 1_000;

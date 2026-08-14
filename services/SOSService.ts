@@ -5,7 +5,11 @@ import {
   type SOSDeliveryResult,
 } from '@/backend/functions/SOSPushService';
 import { LocationService, type SOSLocation } from '@/services/LocationService';
-import { sendSosAlert, shareSosAlert } from '@/services/SOSAlertService';
+import {
+  sendSosAlert,
+  shareSosAlert,
+  type SOSLocalDeliveryResult,
+} from '@/services/SOSAlertService';
 import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
 import { SOSStorage } from '@/storage/SOSStorage';
 
@@ -155,11 +159,16 @@ export const SOSService = {
         category: 'local_storage_unavailable',
       });
     }
+    let localDeliveryResult: SOSLocalDeliveryResult = {
+      status: 'not_needed',
+      channel: null,
+    };
     if (pushResult.notificationsSent === 0) {
-      void sendSosAlert(completedEvent, contacts).catch(() => {
+      localDeliveryResult = await sendSosAlert(completedEvent, contacts).catch(() => {
         console.warn('[SafeMeLink SOS] Fallback locale non completato.', {
           category: 'local_fallback_unavailable',
         });
+        return { status: 'technical_error' as const, channel: null };
       });
     }
 
@@ -167,6 +176,7 @@ export const SOSService = {
       event: completedEvent,
       events,
       pushResult,
+      localDeliveryResult,
       localPersistenceFailed,
     };
   },

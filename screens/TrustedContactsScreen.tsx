@@ -15,6 +15,7 @@ import QRCode from 'react-native-qrcode-svg';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
+import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
 import {
   TrustedLinksService,
   type TrustedLinkRequest,
@@ -23,11 +24,13 @@ import {
 type ContactForm = {
   name: string;
   phone: string;
+  preferredChannel: PreferredSosChannel;
 };
 
 const emptyForm: ContactForm = {
   name: '',
   phone: '',
+  preferredChannel: 'sms',
 };
 
 export function TrustedContactsScreen() {
@@ -131,6 +134,7 @@ export function TrustedContactsScreen() {
     setForm({
       name: contact.name,
       phone: contact.phone,
+      preferredChannel: contact.preferredChannel,
     });
   };
 
@@ -389,6 +393,26 @@ export function TrustedContactsScreen() {
           value={form.name}
           onChangeText={(name) => setForm((current) => ({ ...current, name }))}
         />
+        <Text style={styles.channelLabel}>Canale locale preferito</Text>
+        <View style={styles.channelRow}>
+          {(['sms', 'whatsapp'] as const).map((channel) => (
+            <Pressable
+              key={channel}
+              onPress={() => setForm((current) => ({ ...current, preferredChannel: channel }))}
+              style={[
+                styles.channelButton,
+                form.preferredChannel === channel && styles.channelButtonSelected,
+              ]}>
+              <Text
+                style={[
+                  styles.channelButtonText,
+                  form.preferredChannel === channel && styles.channelButtonTextSelected,
+                ]}>
+                {channel === 'sms' ? 'SMS' : 'WhatsApp'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
         <TextInput
           style={styles.input}
           placeholder="Numero di telefono"
@@ -420,6 +444,16 @@ export function TrustedContactsScreen() {
                 <Text style={styles.contactName}>{contact.name}</Text>
                 <Text style={styles.contactPhone}>
                   {contact.phone || 'Contatto SafeMeLink collegato'}
+                </Text>
+                <Text style={styles.contactMeta}>
+                  {contact.userId
+                    ? contact.phone
+                      ? 'SafeMeLink collegato + numero locale'
+                      : 'SafeMeLink collegato'
+                    : 'Solo numero locale'}
+                  {contact.phone
+                    ? ` · Fallback ${contact.preferredChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'}`
+                    : ''}
                 </Text>
               </View>
               <View style={styles.actions}>
@@ -499,6 +533,36 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     padding: 12,
   },
+  channelLabel: {
+    color: '#52616b',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  channelRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  channelButton: {
+    borderColor: '#c8d2da',
+    borderRadius: 6,
+    borderWidth: 1,
+    flex: 1,
+    padding: 10,
+  },
+  channelButtonSelected: {
+    backgroundColor: '#0a7ea4',
+    borderColor: '#0a7ea4',
+  },
+  channelButtonText: {
+    color: '#52616b',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  channelButtonTextSelected: {
+    color: '#fff',
+  },
   primaryButton: {
     backgroundColor: '#0a7ea4',
     borderRadius: 6,
@@ -530,6 +594,11 @@ const styles = StyleSheet.create({
     borderTopColor: '#edf1f4',
     borderTopWidth: 1,
     paddingVertical: 12,
+  },
+  contactMeta: {
+    color: '#687076',
+    fontSize: 12,
+    marginTop: 4,
   },
   requestRow: {
     borderTopColor: '#edf1f4',
