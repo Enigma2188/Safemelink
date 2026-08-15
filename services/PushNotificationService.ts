@@ -202,7 +202,7 @@ async function unregisterDeviceForUser(userId: string) {
     return;
   }
 
-  await PushTokenRepository.deactivateForUserAndToken(userId, tokenToDeactivate);
+  await PushTokenRepository.removeForUserAndToken(userId, tokenToDeactivate);
   cachedExpoPushTokensByUser.delete(userId);
 }
 

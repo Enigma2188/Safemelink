@@ -54,6 +54,12 @@ const sosNotificationPayload = read('services/SOSNotificationPayload.ts');
 const pushNotificationService = read('services/PushNotificationService.ts');
 const rootLayout = read('app/_layout.tsx');
 const pushTokenRepository = read('backend/repositories/PushTokenRepository.ts');
+const pushTokenOwnershipMigration = read(
+  'supabase/migrations/20260815120000_push_token_ownership.sql',
+);
+const trustedLinksHardeningMigration = read(
+  'supabase/migrations/20260815121000_trusted_links_hardening.sql',
+);
 const locationService = read('services/LocationService.ts');
 const sosService = read('services/SOSService.ts');
 const sosAlertService = read('services/SOSAlertService.ts');
@@ -93,7 +99,7 @@ check('Radar OFF performs no location publication or nearby search', () => {
   );
   assert.match(
     radarProvider,
-    /if \(userId && preferencesUserId === userId && preferences\)[\s\S]*deactivate\(\)/,
+    /preferencesUserId === userId[\s\S]*!participationEnabled[\s\S]*deactivate\(\)/,
   );
 });
 
@@ -427,6 +433,20 @@ check('Push token registration retries and follows native token rotation', () =>
   );
 });
 
+check('Push token ownership supports account changes without affecting other devices', () => {
+  assert.match(pushTokenRepository, /\.rpc\('claim_my_device_push_token'/);
+  assert.match(pushTokenRepository, /removeForUserAndToken/);
+  assert.match(
+    pushTokenOwnershipMigration,
+    /delete from public\.device_push_tokens tokens[\s\S]*tokens\.user_id <> current_user_id/,
+  );
+  assert.match(
+    pushTokenOwnershipMigration,
+    /on conflict \(expo_push_token\) do update[\s\S]*user_id = excluded\.user_id/,
+  );
+  assert.doesNotMatch(pushTokenOwnershipMigration, /delete from public\.device_push_tokens\s*;/);
+});
+
 check('Received SOS notifications use one global event-driven center', () => {
   assert.match(rootLayout, /<SOSNotificationCenter \/>/);
   assert.match(sosNotificationCenter, /addNotificationReceivedListener/);
@@ -490,6 +510,22 @@ check('Radar stale generations and native watch startup are cleaned up', () => {
   assert.match(radarProvider, /manualRefreshRef\.current = \(\) => undefined/);
 });
 
+check('Radar keeps a TTL presence after screen blur without keeping GPS active', () => {
+  const cleanupMarker = radarProvider.indexOf(
+    'manualRefreshRef.current = () => undefined;',
+  );
+  const cleanupStart = radarProvider.lastIndexOf('return () => {', cleanupMarker);
+  const cleanupEnd = radarProvider.indexOf('\n    };', cleanupMarker);
+  assert.ok(cleanupMarker >= 0 && cleanupStart >= 0 && cleanupEnd >= 0);
+  const cleanup = radarProvider.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /stopLocationWatch\(\)/);
+  assert.doesNotMatch(cleanup, /deactivate\(\)/);
+  assert.match(
+    radarProvider,
+    /preferences[\s\S]*!participationEnabled[\s\S]*deactivate\(\)/,
+  );
+});
+
 check('Voice recognition has single continuous ownership and bounded restart', () => {
   assert.doesNotMatch(homeScreen, /useSpeechRecognitionEvent|ExpoSpeechRecognitionModule/);
   assert.match(voiceProtectionService, /TASK_MAX_SLEEP_MS = 60_000/);
@@ -519,11 +555,25 @@ check('SOS push remains primary and local fallback is bounded and observable', (
 });
 
 check('Trusted contacts distinguish and deduplicate local and linked recipients', () => {
-  assert.match(trustedLinksService, /linkedContactsByProfile/);
+  assert.match(trustedLinksService, /remoteContactsByIdentity/);
   assert.match(trustedLinksService, /mergedLocalIds/);
   assert.match(contactsScreen, /SafeMeLink collegato \+ numero locale/);
   assert.match(contactsScreen, /Solo numero locale/);
   assert.doesNotMatch(homeScreen, /contacts\.length\}\/3/);
+});
+
+check('Trusted contacts migrate phone fallbacks but links require accepted requests', () => {
+  assert.match(trustedLinksService, /initialMerge\.localOnlyContacts/);
+  assert.match(trustedLinksService, /linked_profile_id: null/);
+  assert.match(trustedLinksService, /trusted_contacts confermati/);
+  assert.match(
+    trustedLinksHardeningMigration,
+    /linked_profile_id is null/,
+  );
+  assert.match(
+    trustedLinksHardeningMigration,
+    /prevent_direct_trusted_link_change/,
+  );
 });
 
 check('Android package visibility exposes SOS fallback channels', () => {

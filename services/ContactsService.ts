@@ -23,6 +23,25 @@ const normalizeContactInput = (input: TrustedContactInput) => ({
 
 const normalizePhoneIdentity = (phone: string) => phone.replace(/[^\d+]/g, '');
 
+const getNextPriority = (
+  contacts: Awaited<ReturnType<typeof TrustedContactsRepository.listOwn>>,
+) => contacts.reduce((highest, contact) => Math.max(highest, contact.priority), 0) + 1;
+
+async function createRemotePhoneContact(
+  userId: string,
+  input: ReturnType<typeof normalizeContactInput>,
+) {
+  const remoteContacts = await TrustedContactsRepository.listOwn();
+
+  return TrustedContactsRepository.create({
+    user_id: userId,
+    name: input.name,
+    phone: input.phone,
+    priority: getNextPriority(remoteContacts),
+    linked_profile_id: null,
+  });
+}
+
 const hasDuplicatePhone = (
   contacts: TrustedContact[],
   phone: string,
@@ -91,10 +110,15 @@ export const ContactsService = {
       throw new Error('Questo numero è già presente tra i contatti fidati.');
     }
 
+    console.log('[TrustedContacts] sincronizzazione avviata');
+    const remoteContact = await createRemotePhoneContact(userId, normalized);
+    console.log('[TrustedContacts] contatto creato');
+
     const nextContacts: TrustedContact[] = [
       ...contacts,
       {
         id: `${Date.now()}`,
+        remoteId: remoteContact.id,
         ...normalized,
         hasApp: false,
       },
@@ -121,15 +145,22 @@ export const ContactsService = {
       throw new Error('Questo numero è già presente tra i contatti fidati.');
     }
 
+    console.log('[TrustedContacts] sincronizzazione avviata');
+    let remoteId = existing.remoteId;
     if (existing.remoteId) {
       await TrustedContactsRepository.update(existing.remoteId, {
         name: normalized.name,
         phone: normalized.phone || null,
       });
+      console.log('[TrustedContacts] contatto aggiornato');
+    } else {
+      const remoteContact = await createRemotePhoneContact(userId, normalized);
+      remoteId = remoteContact.id;
+      console.log('[TrustedContacts] contatto creato');
     }
 
     const nextContacts = contacts.map((contact) =>
-      contact.id === id ? { ...contact, ...normalized } : contact,
+      contact.id === id ? { ...contact, ...normalized, remoteId } : contact,
     );
 
     await ContactsStorage.saveContacts(userId, nextContacts);
@@ -142,7 +173,9 @@ export const ContactsService = {
     const existing = contacts.find((contact) => contact.id === id);
 
     if (existing?.remoteId) {
+      console.log('[TrustedContacts] sincronizzazione avviata');
       await TrustedContactsRepository.remove(existing.remoteId);
+      console.log('[TrustedContacts] contatto eliminato');
     }
 
     const nextContacts = contacts.filter((contact) => contact.id !== id);

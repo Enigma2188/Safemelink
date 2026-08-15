@@ -304,6 +304,19 @@ export type Database = {
         Args: { target_request_id: string };
         Returns: undefined;
       };
+      claim_my_device_push_token: {
+        Args: {
+          target_expo_push_token: string;
+          target_platform: 'android' | 'ios';
+          target_device_name: string | null;
+        };
+        Returns: {
+          id: string;
+          user_id: string;
+          active: boolean;
+          updated_at: string;
+        }[];
+      };
       get_received_sos: {
         Args: { target_sos_id: string };
         Returns: {

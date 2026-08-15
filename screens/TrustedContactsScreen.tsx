@@ -317,6 +317,9 @@ export function TrustedContactsScreen() {
       {publicCode && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Aggiungi tramite codice</Text>
+          <Text style={styles.sectionHelp}>
+            Solo una richiesta accettata crea il collegamento SafeMeLink per gli SOS push.
+          </Text>
           <TextInput
             autoCapitalize="characters"
             autoCorrect={false}
@@ -386,6 +389,10 @@ export function TrustedContactsScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
+        <Text style={styles.sectionHelp}>
+          Il numero telefonico viene sincronizzato come fallback SMS/WhatsApp, ma non collega un
+          account SafeMeLink.
+        </Text>
         <TextInput
           style={styles.input}
           placeholder="Nome"
@@ -542,6 +549,12 @@ const styles = StyleSheet.create({
   channelRow: {
     flexDirection: 'row',
     gap: 8,
+    marginBottom: 12,
+  },
+  sectionHelp: {
+    color: '#52616b',
+    fontSize: 13,
+    lineHeight: 18,
     marginBottom: 12,
   },
   channelButton: {

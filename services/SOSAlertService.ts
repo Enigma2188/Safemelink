@@ -28,16 +28,26 @@ const normalizePhoneNumber = (phone: string) => {
   return `${startsWithPlus ? '+' : ''}${digits}`;
 };
 
-const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) =>
-  contacts.reduce<SafeMeLinkContact[]>((validContacts, contact) => {
+const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) => {
+  const uniqueContacts = new Map<string, SafeMeLinkContact>();
+  const orderedContacts = [...contacts].sort(
+    (first, second) => Number(second.hasApp) - Number(first.hasApp),
+  );
+
+  for (const contact of orderedContacts) {
     const phone = normalizePhoneNumber(contact.phone);
 
     if (!phone) {
-      return validContacts;
+      continue;
     }
 
-    return [...validContacts, { ...contact, phone }];
-  }, []);
+    if (!uniqueContacts.has(phone)) {
+      uniqueContacts.set(phone, { ...contact, phone });
+    }
+  }
+
+  return [...uniqueContacts.values()];
+};
 
 const runLinkingOperation = async <T,>(operation: Promise<T>) => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -87,16 +97,20 @@ const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) =
   const phone = compactPhone.slice(1);
 
   return [
+    `https://wa.me/${phone}?text=${message}`,
     `whatsapp://send?phone=${phone}&text=${message}`,
   ];
 };
 
 const getUrlDiagnostics = (url: string) => {
   const rawScheme = url.slice(0, Math.max(0, url.indexOf(':'))).toLowerCase();
-  const scheme = ['sms', 'smsto', 'whatsapp'].includes(rawScheme)
-    ? rawScheme
-    : 'unknown';
-  const channel = scheme === 'whatsapp' ? 'whatsapp' : 'sms';
+  const isWhatsAppWebLink = rawScheme === 'https' && /^https:\/\/wa\.me\//i.test(url);
+  const scheme = isWhatsAppWebLink
+    ? 'https'
+    : ['sms', 'smsto', 'whatsapp'].includes(rawScheme)
+      ? rawScheme
+      : 'unknown';
+  const channel = scheme === 'whatsapp' || isWhatsAppWebLink ? 'whatsapp' : 'sms';
 
   return { channel, scheme } as const;
 };
@@ -106,9 +120,11 @@ const getGenericErrorCategory = (error: unknown) =>
 
 const openUrlWithDiagnostics = async (url: string): Promise<UrlOpenResult> => {
   const diagnostics = getUrlDiagnostics(url);
+  const availabilityUrl =
+    diagnostics.channel === 'whatsapp' ? 'whatsapp://send' : url;
 
   try {
-    const canOpen = await runLinkingOperation(Linking.canOpenURL(url));
+    const canOpen = await runLinkingOperation(Linking.canOpenURL(availabilityUrl));
     console.log('[SafeMeLink SOS] verifica apertura canale', {
       ...diagnostics,
       outcome: canOpen ? 'success' : 'failure',

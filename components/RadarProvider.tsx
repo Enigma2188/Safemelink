@@ -275,13 +275,26 @@ export function RadarProvider({ children }: PropsWithChildren) {
 
       networkRefreshTimer = setTimeout(() => {
         networkRefreshTimer = null;
-        if (lastKnownLocation) {
-          void runCycle(lastKnownLocation, {
-            force: true,
-            freshObservation: false,
-            source: 'refresh',
-          });
+        if (!lastKnownLocation) {
+          return;
         }
+
+        if (
+          Date.now() - lastLocationObservedAt >
+          RADAR_CACHED_LOCATION_MAX_AGE_MS
+        ) {
+          lastKnownLocation = null;
+          lastLocationObservedAt = 0;
+          fallbackUsed = false;
+          runSingleLocationFallback();
+          return;
+        }
+
+        void runCycle(lastKnownLocation, {
+          force: true,
+          freshObservation: false,
+          source: 'refresh',
+        });
       }, delayMs);
     }
 
@@ -308,6 +321,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
 
         lastKnownLocation = suppliedLocation;
         lastLocationObservedAt = Date.now();
+        fallbackUsed = false;
+        watchRestartAttempted = false;
         stopLocationWatchdog();
       }
 
@@ -505,9 +520,15 @@ export function RadarProvider({ children }: PropsWithChildren) {
           locationSubscription = null;
           locationWatchStarting = false;
           locationWatchGeneration += 1;
-          const fallbackAlreadyUsed = fallbackUsed;
-          runSingleLocationFallback();
-          if (fallbackAlreadyUsed && !activeCycleToken) {
+          const fallbackRequest = runSingleLocationFallback();
+          if (fallbackRequest && !watchRestartAttempted) {
+            watchRestartAttempted = true;
+            void fallbackRequest.finally(() => {
+              if (isActiveRadarContext()) {
+                startLocationWatch();
+              }
+            });
+          } else if (!fallbackRequest && !activeCycleToken) {
             setLocationFailure(watchError);
           }
           console.warn('[SafeMeLink Radar] Watcher GPS interrotto.', {
@@ -649,9 +670,14 @@ export function RadarProvider({ children }: PropsWithChildren) {
           : 'unauthenticated',
       );
 
-      if (userId && preferencesUserId === userId && preferences) {
+      if (
+        userId &&
+        preferencesUserId === userId &&
+        preferences &&
+        !participationEnabled
+      ) {
         deactivate();
-      } else {
+      } else if (!participationEnabled) {
         lastPublishedRef.current = null;
       }
     } else if (appState === 'active') {
@@ -663,10 +689,6 @@ export function RadarProvider({ children }: PropsWithChildren) {
       manualRefreshRef.current = () => undefined;
       stopLocationWatch();
       appStateSubscription.remove();
-
-      if (canParticipate && activeUserIdRef.current === userId) {
-        void deactivate();
-      }
     };
   }, [
     deactivate,

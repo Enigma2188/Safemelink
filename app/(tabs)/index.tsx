@@ -53,7 +53,7 @@ const getSOSDeliveryNotice = (
 
   const fallbackNotice =
     localResult.status === 'whatsapp_opened'
-      ? 'Fallback WhatsApp avviato.'
+      ? 'WhatsApp aperto: verifica il destinatario prima di inviare.'
       : localResult.status === 'sms_opened'
         ? 'Fallback SMS avviato.'
         : localResult.status === 'no_channel'
