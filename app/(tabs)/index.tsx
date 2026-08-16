@@ -259,8 +259,9 @@ export default function HomeScreen() {
 
         console.info('[VoiceProtection] avvio countdown SOS esistente');
         startSOSCountdown();
+        router.dismissTo('/(tabs)');
       }),
-    [startSOSCountdown],
+    [router, startSOSCountdown],
   );
 
   const resetSensitiveState = useCallback(() => {

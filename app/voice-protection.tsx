@@ -1,9 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -42,14 +39,12 @@ const DURATION_OPTIONS: {
 ];
 const VOICE_SETTINGS_LOAD_TIMEOUT_MS = 8_000;
 const VOICE_SETTINGS_SAVE_TIMEOUT_MS = 8_000;
-const VOICE_TEST_TIMEOUT_MS = 12_000;
 
-type MicrophoneState = 'off' | 'ready' | 'testing' | 'recognized' | 'error';
+type MicrophoneState = 'off' | 'ready' | 'error';
 type PassphraseSaveFeedback = {
   status: 'pending' | 'success' | 'error';
   text: string;
 };
-type VoiceTestFinishReason = 'result' | 'end' | 'nomatch' | 'timeout' | 'lifecycle';
 
 const formatRemainingTime = (expiresAt: string | null, now: number) => {
   if (!expiresAt) {
@@ -126,101 +121,16 @@ export default function VoiceProtectionScreen() {
   const [italianModelDownloadRequired, setItalianModelDownloadRequired] = useState(false);
   const [passphraseSaveFeedback, setPassphraseSaveFeedback] =
     useState<PassphraseSaveFeedback | null>(null);
-  const [testTranscript, setTestTranscript] = useState('');
   const [now, setNow] = useState(Date.now());
-  const testingRef = useRef(false);
-  const testStartInFlightRef = useRef(false);
-  const testTranscriptRef = useRef('');
-  const testResultReceivedRef = useRef(false);
-  const testLifecycleInterruptionRef = useRef(false);
-  const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const releaseTestRecognitionRef = useRef<(() => void) | null>(null);
   const screenActiveRef = useRef(false);
   const screenGenerationRef = useRef(0);
   const refreshInFlightRef = useRef(false);
   const refreshGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const activationInFlightRef = useRef(false);
+  const settingsRefreshPendingRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
-
-  const clearTestTimeout = useCallback(() => {
-    if (testTimeoutRef.current) {
-      clearTimeout(testTimeoutRef.current);
-      testTimeoutRef.current = null;
-    }
-  }, []);
-
-  const releaseTestRecognition = useCallback(() => {
-    releaseTestRecognitionRef.current?.();
-    releaseTestRecognitionRef.current = null;
-  }, []);
-
-  const finishVoiceTest = useCallback((reason: VoiceTestFinishReason) => {
-    if (!testingRef.current) {
-      return;
-    }
-
-    testingRef.current = false;
-    testLifecycleInterruptionRef.current = false;
-    clearTestTimeout();
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {}
-    releaseTestRecognition();
-    const transcript = testTranscriptRef.current.trim();
-    const expected = normalizePassphrase(settingsRef.current.passphrase);
-    const recognizedText = normalizePassphrase(transcript);
-    const matches =
-      Boolean(expected && recognizedText) &&
-      (recognizedText === expected || ` ${recognizedText} `.includes(` ${expected} `));
-
-    console.info('[VoiceProtection Test] test terminato', {
-      event: reason,
-      hasResult: testResultReceivedRef.current,
-      outcome: matches ? 'success' : 'failure',
-    });
-
-    if (matches) {
-      setMicrophoneState('recognized');
-      setMessage('Test completato: parola d’ordine riconosciuta.');
-      return;
-    }
-
-    setMicrophoneState('ready');
-    if (reason === 'timeout') {
-      setMessage('Tempo massimo raggiunto. Nessuna parola riconosciuta.');
-    } else if (reason === 'lifecycle') {
-      setMessage('Riconoscimento interrotto perché l’app non è più attiva.');
-    } else if (reason === 'nomatch') {
-      setMessage('Nessuna parola riconosciuta. Controlla il microfono e riprova.');
-    } else if (reason === 'end' && !transcript) {
-      setMessage(
-        'Riconoscimento interrotto senza risultati. Verifica il modello italiano offline.',
-      );
-    } else {
-      setMessage('Test completato: la parola pronunciata non corrisponde.');
-    }
-  }, [clearTestTimeout, releaseTestRecognition]);
-
-  useEffect(() => {
-    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' || !testingRef.current) {
-        return;
-      }
-
-      console.info('[VoiceProtection Test] riconoscimento interrotto', {
-        event: 'lifecycle',
-      });
-      testLifecycleInterruptionRef.current = true;
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-      finishVoiceTest('lifecycle');
-    });
-
-    return () => appStateSubscription.remove();
-  }, [finishVoiceTest]);
 
   useEffect(() => {
     if (!italianModelDownloadRequired) {
@@ -342,6 +252,21 @@ export default function VoiceProtectionScreen() {
     }
   }, [userId]);
 
+  useEffect(
+    () =>
+      VoiceProtectionRuntime.onSettingsChanged((changedUserId) => {
+        if (changedUserId !== userId || !screenActiveRef.current) {
+          return;
+        }
+        if (activationInFlightRef.current) {
+          settingsRefreshPendingRef.current = true;
+          return;
+        }
+        void refreshState(false);
+      }),
+    [refreshState, userId],
+  );
+
   useFocusEffect(
     useCallback(() => {
       screenActiveRef.current = true;
@@ -351,20 +276,9 @@ export default function VoiceProtectionScreen() {
 
       return () => {
         refreshGenerationRef.current += 1;
-        if (testingRef.current) {
-          console.info('[VoiceProtection Test] riconoscimento interrotto', {
-            event: 'screen_cleanup',
-          });
-        }
         screenActiveRef.current = false;
-        testingRef.current = false;
-        clearTestTimeout();
-        releaseTestRecognition();
-        try {
-          ExpoSpeechRecognitionModule.abort();
-        } catch {}
       };
-    }, [clearTestTimeout, refreshState, releaseTestRecognition]),
+    }, [refreshState]),
   );
 
   useEffect(() => {
@@ -393,87 +307,6 @@ export default function VoiceProtectionScreen() {
       clearInterval(clock);
     };
   }, [refreshState, settings.enabled, settings.expiresAt]);
-
-  useSpeechRecognitionEvent('result', (event) => {
-    if (!testingRef.current) {
-      return;
-    }
-
-    const expected = normalizePassphrase(settingsRef.current.passphrase);
-    const matchingResult = event.results.find((result) => {
-      const recognized = normalizePassphrase(result.transcript ?? '');
-      return Boolean(
-        expected &&
-        recognized &&
-        (recognized === expected || ` ${recognized} `.includes(` ${expected} `)),
-      );
-    });
-    const transcript = (matchingResult ?? event.results[0])?.transcript?.trim();
-    if (!transcript) {
-      return;
-    }
-
-    setTestTranscript(transcript);
-    testTranscriptRef.current = transcript;
-    testResultReceivedRef.current = true;
-    console.info('[VoiceProtection Test] risultato ricevuto', {
-      event: 'result',
-      isFinal: event.isFinal,
-    });
-    if (!event.isFinal) {
-      return;
-    }
-
-    finishVoiceTest('result');
-  });
-
-  useSpeechRecognitionEvent('error', (event) => {
-    if (!testingRef.current) {
-      return;
-    }
-
-    if (event.error === 'aborted') {
-      const finishReason = testLifecycleInterruptionRef.current ? 'lifecycle' : 'end';
-      console.info('[VoiceProtection Test] riconoscimento interrotto', {
-        event: 'error',
-        code: 'aborted',
-        reason: finishReason,
-      });
-      finishVoiceTest(finishReason);
-      return;
-    }
-
-    testingRef.current = false;
-    clearTestTimeout();
-    releaseTestRecognition();
-    setMicrophoneState('error');
-    console.warn('[VoiceProtection Test] errore motore vocale', {
-      event: 'error',
-      code: event.error,
-    });
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      setMessage('Permesso microfono negato.');
-    } else if (event.error === 'language-not-supported') {
-      setMessage('Modello italiano non disponibile.');
-    } else {
-      setMessage('Riconoscimento interrotto. Riprova.');
-    }
-  });
-
-  useSpeechRecognitionEvent('nomatch', () => {
-    console.info('[VoiceProtection Test] nessuna corrispondenza', {
-      event: 'nomatch',
-    });
-    finishVoiceTest('nomatch');
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    console.info('[VoiceProtection Test] riconoscimento terminato', {
-      event: 'end',
-      hasResult: testResultReceivedRef.current,
-    });
-    finishVoiceTest('end');
-  });
 
   const durationLabel = useMemo(
     () =>
@@ -744,8 +577,7 @@ export default function VoiceProtectionScreen() {
       }
       setSettings(activeSettings);
       setMicrophoneState('ready');
-      const feedback =
-        'Protezione attiva. Il servizio di protezione è correttamente in esecuzione.';
+      const feedback = 'Protezione attiva. SafeMeLink sta ascoltando la parola d’ordine.';
       setActivationFeedback(feedback);
       setMessage(feedback);
     } catch {
@@ -758,6 +590,10 @@ export default function VoiceProtectionScreen() {
     } finally {
       activationInFlightRef.current = false;
       setIsSaving(false);
+      if (settingsRefreshPendingRef.current) {
+        settingsRefreshPendingRef.current = false;
+        void refreshState(false);
+      }
     }
   };
 
@@ -770,9 +606,6 @@ export default function VoiceProtectionScreen() {
     refreshGenerationRef.current += 1;
     setIsSaving(true);
     try {
-      testingRef.current = false;
-      clearTestTimeout();
-      releaseTestRecognition();
       try {
         ExpoSpeechRecognitionModule.abort();
       } catch {}
@@ -806,116 +639,6 @@ export default function VoiceProtectionScreen() {
     }
   };
 
-  const runVoiceTestOperation = async () => {
-    if (!normalizePassphrase(settings.passphrase)) {
-      setMessage('Configura e salva prima una parola d’ordine.');
-      return;
-    }
-    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
-      setMicrophoneState('error');
-      setMessage('Il riconoscimento vocale locale non è supportato dal dispositivo.');
-      return;
-    }
-    const recognitionReadiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
-    if (recognitionReadiness === 'recognition_unavailable') {
-      setMicrophoneState('error');
-      setMessage('Riconoscimento vocale non disponibile su questo dispositivo.');
-      return;
-    }
-    if (recognitionReadiness === 'on_device_unavailable') {
-      setMicrophoneState('error');
-      setMessage(
-        'Il riconoscimento vocale locale non è supportato dal dispositivo.',
-      );
-      return;
-    }
-    if (recognitionReadiness === 'italian_model_missing') {
-      setItalianModelDownloadRequired(true);
-      setMicrophoneState('error');
-      setMessage('Modello italiano offline non installato. Usa il pulsante qui sotto.');
-      return;
-    }
-    if (settings.enabled) {
-      setMessage('Disattiva temporaneamente la modalità protetta prima di eseguire il test.');
-      return;
-    }
-
-    try {
-      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!permission.granted) {
-        setMicrophoneState('error');
-        setMessage('Permesso microfono negato.');
-        console.info('[VoiceProtection Test] avvio non consentito', {
-          event: 'permission',
-          outcome: 'denied',
-        });
-        return;
-      }
-
-      console.info('[VoiceProtection Test] arresto sessione precedente', {
-        event: 'manual_cleanup',
-      });
-      releaseTestRecognition();
-      releaseTestRecognitionRef.current = VoiceProtectionRuntime.suspendRecognition('voice-test');
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
-      testingRef.current = true;
-      testLifecycleInterruptionRef.current = false;
-      testTranscriptRef.current = '';
-      testResultReceivedRef.current = false;
-      setTestTranscript('');
-      setMessage('Microfono attivato. Pronuncia la parola d’ordine.');
-      setMicrophoneState('testing');
-      ExpoSpeechRecognitionModule.start({
-        lang: 'it-IT',
-        interimResults: true,
-        maxAlternatives: 3,
-        continuous: false,
-        contextualStrings: [settings.passphrase],
-        requiresOnDeviceRecognition: true,
-      });
-      console.info('[VoiceProtection Test] riconoscimento avviato', {
-        event: 'start',
-        mode: 'on_device',
-        language: 'it-IT',
-      });
-      clearTestTimeout();
-      testTimeoutRef.current = setTimeout(() => {
-        console.info('[VoiceProtection Test] tempo massimo raggiunto', {
-          event: 'timeout',
-        });
-        try {
-          ExpoSpeechRecognitionModule.stop();
-        } catch {}
-        finishVoiceTest('timeout');
-      }, VOICE_TEST_TIMEOUT_MS);
-    } catch {
-      testingRef.current = false;
-      clearTestTimeout();
-      releaseTestRecognition();
-      setMicrophoneState('error');
-      setMessage('Riconoscimento interrotto. Non è stato possibile avviare il test.');
-      console.warn('[VoiceProtection Test] avvio fallito', {
-        event: 'start',
-        outcome: 'failure',
-      });
-    }
-  };
-
-  const runVoiceTest = async () => {
-    if (testStartInFlightRef.current || testingRef.current) {
-      return;
-    }
-
-    testStartInFlightRef.current = true;
-    try {
-      await runVoiceTestOperation();
-    } finally {
-      testStartInFlightRef.current = false;
-    }
-  };
-
   const requestItalianModelDownload = async () => {
     if (isSaving) {
       return;
@@ -931,7 +654,7 @@ export default function VoiceProtectionScreen() {
         setItalianModelDownloadRequired(!modelReady);
         setMessage(
           modelReady
-            ? 'Modello italiano offline installato. Ora puoi eseguire il TEST.'
+            ? 'Modello italiano offline installato. Ora puoi attivare la protezione.'
             : 'Download completato, ma il modello italiano non è ancora verificabile. Riprova la verifica.',
         );
       } else if (result.status === 'opened_dialog') {
@@ -977,15 +700,11 @@ export default function VoiceProtectionScreen() {
   };
 
   const microphoneLabel =
-    microphoneState === 'testing'
-      ? 'In ascolto per il test'
-      : microphoneState === 'recognized'
-        ? 'Parola riconosciuta'
-        : microphoneState === 'error'
-          ? 'Richiede attenzione'
-          : microphoneState === 'ready'
-            ? 'Pronto per il motore locale'
-            : 'Non in uso';
+    microphoneState === 'error'
+      ? 'Richiede attenzione'
+      : microphoneState === 'ready'
+        ? 'Ascolto locale attivo'
+        : 'Non in uso';
 
   const toggleUnavailableFeedback = isSaving
     ? 'Operazione in corso…'
@@ -1059,9 +778,7 @@ export default function VoiceProtectionScreen() {
             <View
               style={[
                 styles.microphoneDot,
-                microphoneState === 'testing' && styles.microphoneTesting,
                 microphoneState === 'ready' && styles.microphoneReady,
-                microphoneState === 'recognized' && styles.microphoneRecognized,
                 microphoneState === 'error' && styles.microphoneError,
               ]}
             />
@@ -1170,26 +887,12 @@ export default function VoiceProtectionScreen() {
           ) : null}
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Test locale</Text>
-          <Text style={styles.cardDescription}>
-            Il test ascolta una sola volta e verifica la frase esclusivamente sul dispositivo.
-          </Text>
-          <Pressable
-            disabled={isSaving || microphoneState === 'testing' || settings.enabled || !userId}
-            onPress={() => void runVoiceTest()}
-            style={({ pressed }) => [
-              styles.testButton,
-              pressed && styles.buttonPressed,
-              (isSaving || microphoneState === 'testing' || settings.enabled || !userId) &&
-                styles.disabled,
-            ]}>
-            <Ionicons color="#FFFFFF" name="mic" size={20} />
-            <Text style={styles.testButtonText}>
-              {microphoneState === 'testing' ? 'ASCOLTO…' : 'TEST'}
+        {italianModelDownloadRequired ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Modello italiano offline</Text>
+            <Text style={styles.cardDescription}>
+              Installa il modello locale richiesto prima di attivare la protezione.
             </Text>
-          </Pressable>
-          {italianModelDownloadRequired ? (
             <Pressable
               disabled={isSaving}
               onPress={() => void requestItalianModelDownload()}
@@ -1197,11 +900,8 @@ export default function VoiceProtectionScreen() {
               <Ionicons color="#C8BEFF" name="download-outline" size={17} />
               <Text style={styles.batteryButtonText}>INSTALLA MODELLO ITALIANO</Text>
             </Pressable>
-          ) : null}
-          {testTranscript ? (
-            <Text style={styles.transcript}>Riconosciuto: “{testTranscript}”</Text>
-          ) : null}
-        </View>
+          </View>
+        ) : null}
 
         {message ? (
           <View style={styles.messageCard}>
@@ -1300,8 +1000,6 @@ const styles = StyleSheet.create({
   },
   microphoneDot: { backgroundColor: '#58647E', borderRadius: 6, height: 12, width: 12 },
   microphoneReady: { backgroundColor: '#45D6A5' },
-  microphoneTesting: { backgroundColor: '#45B7FF' },
-  microphoneRecognized: { backgroundColor: '#A78BFA' },
   microphoneError: { backgroundColor: '#FF607A' },
   microphoneText: { color: '#C8D3EA', fontSize: 13, fontWeight: '700' },
   warningCard: {
@@ -1373,27 +1071,6 @@ const styles = StyleSheet.create({
   durationChipTextSelected: { color: '#E9E5FF' },
   remainingRow: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 15 },
   remainingText: { color: '#78D8FF', fontSize: 14, fontWeight: '800' },
-  testButton: {
-    alignItems: 'center',
-    backgroundColor: '#7868FF',
-    borderRadius: 15,
-    flexDirection: 'row',
-    gap: 9,
-    justifyContent: 'center',
-    marginTop: 14,
-    padding: 14,
-    shadowColor: '#7868FF',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-  },
-  testButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  transcript: { color: '#C8D3EA', fontSize: 13, fontStyle: 'italic', marginTop: 12 },
   buttonPressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.45 },
   messageCard: {

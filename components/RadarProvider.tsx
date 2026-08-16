@@ -1,4 +1,13 @@
-import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  type PropsWithChildren,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
@@ -9,20 +18,12 @@ import {
   LocationService,
   LocationTimeoutError,
   LocationUnavailableError,
-  LocationWatchStartupTimeoutError,
-  type LocationWatchSubscription,
-  type SOSLocation,
 } from '@/services/LocationService';
 import {
-  RADAR_CACHED_LOCATION_MAX_AGE_MS,
-  RADAR_LOCATION_FALLBACK_INTERVAL_MS,
-  RADAR_REFRESH_INTERVAL_MS,
   RadarService,
   canParticipateInRadar,
-  shouldPublishRadarPresence,
   type NearbyUser,
   type RadarPreferences,
-  type RadarPresenceSnapshot,
 } from '@/services/RadarService';
 
 export type RadarViewStatus =
@@ -93,7 +94,6 @@ export function RadarProvider({ children }: PropsWithChildren) {
   const deactivationInFlightRef = useRef<Promise<void> | null>(null);
   const presenceMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeUserIdRef = useRef<string | null>(userId);
-  const lastPublishedRef = useRef<RadarPresenceSnapshot | null>(null);
   const manualRefreshRef = useRef<() => void>(() => undefined);
   const radarEnabled = preferences?.radarEnabled ?? false;
   const participationEnabled = canParticipateInRadar(preferences);
@@ -115,7 +115,6 @@ export function RadarProvider({ children }: PropsWithChildren) {
   }, []);
 
   const deactivate = useCallback(() => {
-    lastPublishedRef.current = null;
     if (deactivationInFlightRef.current) {
       return deactivationInFlightRef.current;
     }
@@ -194,218 +193,60 @@ export function RadarProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let isCurrent = true;
     let appState: AppStateStatus = AppState.currentState;
-    let locationWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
-    let networkRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-    let locationSubscription: LocationWatchSubscription | null = null;
-    let locationWatchStarting = false;
-    let locationWatchGeneration = 0;
-    let fallbackUsed = false;
-    let fallbackPending = false;
-    let watchRestartAttempted = false;
-    let activityGeneration = 0;
-    let activeCycleToken: symbol | null = null;
-    let lastCycleStartedAt = 0;
-    let lastKnownLocation: SOSLocation | null = null;
-    let lastLocationObservedAt = 0;
-    const canParticipate = Boolean(
+    let attemptInFlight = false;
+    let attemptGeneration = 0;
+    const canRunRadar = Boolean(
       userId &&
         preferencesUserId === userId &&
         participationEnabled &&
         isRadarScreenActive,
     );
 
-    const isActiveRadarContext = () =>
+    const isAttemptCurrent = (generation: number) =>
       isCurrent &&
+      generation === attemptGeneration &&
       appState === 'active' &&
-      canParticipate &&
+      canRunRadar &&
       activeUserIdRef.current === userId;
 
-    const stopLocationWatchdog = () => {
-      if (locationWatchdogTimer) {
-        clearTimeout(locationWatchdogTimer);
-        locationWatchdogTimer = null;
-      }
-    };
-
-    const stopNetworkRefresh = () => {
-      if (networkRefreshTimer) {
-        clearTimeout(networkRefreshTimer);
-        networkRefreshTimer = null;
-      }
-    };
-
-    const stopLocationWatch = () => {
-      locationWatchGeneration += 1;
-      stopLocationWatchdog();
-      stopNetworkRefresh();
-      locationSubscription?.remove();
-      locationSubscription = null;
-      locationWatchStarting = false;
-    };
-
-    const setLocationFailure = (locationError: unknown) => {
-      if (!isActiveRadarContext()) {
-        return;
-      }
-
-      stopNetworkRefresh();
-      lastKnownLocation = null;
-      lastLocationObservedAt = 0;
-      setUsers([]);
-      if (locationError instanceof LocationPermissionError) {
-        setStatus('permission_required');
-        setError(null);
-      } else {
-        setStatus('position_unavailable');
-        setError(
-          locationError instanceof LocationTimeoutError ||
-            locationError instanceof LocationUnavailableError ||
-            locationError instanceof LocationWatchStartupTimeoutError
-            ? locationError.message
-            : 'Posizione temporaneamente non disponibile. Riprova.',
-        );
-      }
-      void deactivate();
-    };
-
-    function scheduleNetworkRefresh(delayMs = RADAR_REFRESH_INTERVAL_MS) {
-      if (networkRefreshTimer || !lastKnownLocation || !isActiveRadarContext()) {
-        return;
-      }
-
-      networkRefreshTimer = setTimeout(() => {
-        networkRefreshTimer = null;
-        if (!lastKnownLocation) {
-          return;
-        }
-
-        if (
-          Date.now() - lastLocationObservedAt >
-          RADAR_CACHED_LOCATION_MAX_AGE_MS
-        ) {
-          lastKnownLocation = null;
-          lastLocationObservedAt = 0;
-          fallbackUsed = false;
-          runSingleLocationFallback();
-          return;
-        }
-
-        void runCycle(lastKnownLocation, {
-          force: true,
-          freshObservation: false,
-          source: 'refresh',
-        });
-      }, delayMs);
-    }
-
-    async function runCycle(
-      suppliedLocation?: SOSLocation,
-      options: {
-        force?: boolean;
-        freshObservation?: boolean;
-        source: 'watch' | 'fallback' | 'refresh' | 'manual';
-      } = { source: 'watch' },
-    ) {
-      if (!isActiveRadarContext()) {
-        return;
-      }
-
-      if (suppliedLocation && options.freshObservation) {
-        if (!RadarService.isLocationAccurateEnough(suppliedLocation)) {
-          if (!lastKnownLocation) {
-            clearRadarState(setUsers, setError);
-            setStatus('accuracy_insufficient');
-          }
-          return;
-        }
-
-        lastKnownLocation = suppliedLocation;
-        lastLocationObservedAt = Date.now();
-        fallbackUsed = false;
-        watchRestartAttempted = false;
-        stopLocationWatchdog();
-      }
-
-      const cycleStartedAt = Date.now();
-      if (activeCycleToken) {
-        scheduleNetworkRefresh();
-        return;
-      }
-
+    const runOneShotRadar = async () => {
       if (
-        !options.force &&
-        lastCycleStartedAt > 0 &&
-        cycleStartedAt - lastCycleStartedAt < RADAR_REFRESH_INTERVAL_MS
+        attemptInFlight ||
+        !isCurrent ||
+        appState !== 'active' ||
+        !canRunRadar ||
+        activeUserIdRef.current !== userId
       ) {
-        scheduleNetworkRefresh(
-          RADAR_REFRESH_INTERVAL_MS - (cycleStartedAt - lastCycleStartedAt),
-        );
         return;
       }
 
-      const cycleToken = Symbol('radar-cycle');
-      const cycleGeneration = activityGeneration;
-      const isCycleCurrent = () =>
-        activeCycleToken === cycleToken &&
-        cycleGeneration === activityGeneration &&
-        isActiveRadarContext();
-
-      activeCycleToken = cycleToken;
-      lastCycleStartedAt = cycleStartedAt;
-      setStatus((current) =>
-        current === 'ready' || current === 'empty' ? current : 'searching',
-      );
+      attemptInFlight = true;
+      const generation = ++attemptGeneration;
+      setStatus('searching');
       setError(null);
 
       try {
-        await deactivationInFlightRef.current;
-        if (!isCycleCurrent()) {
-          return;
-        }
-
-        const location =
-          suppliedLocation ??
-          (await LocationService.getCurrentLocation({ timeoutMs: 15_000 }));
-        if (!isCycleCurrent()) {
+        const location = await LocationService.getCurrentLocation({
+          timeoutMs: 15_000,
+          accuracy: 'balanced',
+        });
+        if (!isAttemptCurrent(generation)) {
           return;
         }
 
         if (!RadarService.isLocationAccurateEnough(location)) {
-          if (!lastKnownLocation) {
-            clearRadarState(setUsers, setError);
-            setStatus('accuracy_insufficient');
-            void deactivate();
-          }
+          setUsers([]);
+          setStatus('accuracy_insufficient');
           return;
         }
 
-        if (!suppliedLocation) {
-          lastKnownLocation = location;
-          lastLocationObservedAt = Date.now();
-          stopLocationWatchdog();
-        }
-
-        const now = Date.now();
-        const cachedLocationIsFresh =
-          now - lastLocationObservedAt <= RADAR_CACHED_LOCATION_MAX_AGE_MS;
-
-        if (
-          cachedLocationIsFresh &&
-          shouldPublishRadarPresence(lastPublishedRef.current, location, now)
-        ) {
-          await enqueuePresenceMutation(() => RadarService.publishPresence(location));
-          if (!isCycleCurrent()) {
-            return;
-          }
-
-          lastPublishedRef.current = { location, publishedAt: now };
-          console.info('[SafeMeLink Radar] Presenza pubblicata.', {
-            source: options.source,
-          });
+        await enqueuePresenceMutation(() => RadarService.publishPresence(location));
+        if (!isAttemptCurrent(generation)) {
+          return;
         }
 
         const nearbyUsers = await RadarService.findNearbyUsers();
-        if (!isCycleCurrent()) {
+        if (!isAttemptCurrent(generation)) {
           return;
         }
 
@@ -414,242 +255,53 @@ export function RadarProvider({ children }: PropsWithChildren) {
         );
         setStatus(nearbyUsers.length > 0 ? 'ready' : 'empty');
         setError(null);
-      } catch (cycleError: unknown) {
-        if (!isCycleCurrent()) {
+        console.info('[SafeMeLink Radar] Ricerca one-shot completata.', {
+          nearbyUserCount: nearbyUsers.length,
+        });
+      } catch (attemptError: unknown) {
+        if (!isAttemptCurrent(generation)) {
           return;
         }
 
-        if (
-          cycleError instanceof LocationPermissionError ||
-          cycleError instanceof LocationTimeoutError ||
-          cycleError instanceof LocationUnavailableError ||
-          cycleError instanceof LocationWatchStartupTimeoutError
+        setUsers([]);
+        if (attemptError instanceof LocationPermissionError) {
+          setStatus('permission_required');
+          setError(null);
+        } else if (
+          attemptError instanceof LocationTimeoutError ||
+          attemptError instanceof LocationUnavailableError
         ) {
-          setLocationFailure(cycleError);
+          setStatus('position_unavailable');
+          setError(attemptError.message);
         } else {
-          setUsers([]);
           setStatus('error');
           setError(
-            cycleError instanceof BackendError ||
-              cycleError instanceof RadarRequestTimeoutError
-              ? cycleError.message
+            attemptError instanceof BackendError ||
+              attemptError instanceof RadarRequestTimeoutError
+              ? attemptError.message
               : 'Errore temporaneo durante la ricerca Radar.',
           );
         }
       } finally {
-        if (activeCycleToken === cycleToken) {
-          const cycleContextStillActive =
-            cycleGeneration === activityGeneration && isActiveRadarContext();
-          activeCycleToken = null;
-          if (fallbackPending && cycleContextStillActive) {
-            fallbackPending = false;
-            fallbackUsed = false;
-            runSingleLocationFallback();
-          } else if (cycleContextStillActive && lastKnownLocation) {
-            scheduleNetworkRefresh();
-          }
+        if (generation === attemptGeneration) {
+          attemptInFlight = false;
         }
-      }
-    }
-
-    function runSingleLocationFallback() {
-      if (fallbackUsed || !isActiveRadarContext()) {
-        return;
-      }
-
-      fallbackUsed = true;
-      stopLocationWatchdog();
-      if (activeCycleToken) {
-        fallbackPending = true;
-        return;
-      }
-
-      return runCycle(undefined, {
-        force: true,
-        freshObservation: true,
-        source: 'fallback',
-      });
-    }
-
-    const armLocationWatchdog = () => {
-      if (
-        locationWatchdogTimer ||
-        fallbackUsed ||
-        lastKnownLocation ||
-        !isActiveRadarContext()
-      ) {
-        return;
-      }
-
-      locationWatchdogTimer = setTimeout(() => {
-        locationWatchdogTimer = null;
-        runSingleLocationFallback();
-      }, RADAR_LOCATION_FALLBACK_INTERVAL_MS);
-    };
-
-    const startLocationWatch = () => {
-      if (
-        !isActiveRadarContext() ||
-        locationSubscription ||
-        locationWatchStarting
-      ) {
-        return;
-      }
-
-      locationWatchStarting = true;
-      const watchGeneration = ++locationWatchGeneration;
-      armLocationWatchdog();
-
-      void LocationService.watchRadarLocation(
-        (location) => {
-          if (!isActiveRadarContext() || watchGeneration !== locationWatchGeneration) {
-            return;
-          }
-
-          void runCycle(location, {
-            freshObservation: true,
-            source: 'watch',
-          });
-        },
-        (watchError) => {
-          if (!isActiveRadarContext() || watchGeneration !== locationWatchGeneration) {
-            return;
-          }
-
-          locationSubscription?.remove();
-          locationSubscription = null;
-          locationWatchStarting = false;
-          locationWatchGeneration += 1;
-          const fallbackRequest = runSingleLocationFallback();
-          if (fallbackRequest && !watchRestartAttempted) {
-            watchRestartAttempted = true;
-            void fallbackRequest.finally(() => {
-              if (isActiveRadarContext()) {
-                startLocationWatch();
-              }
-            });
-          } else if (!fallbackRequest && !activeCycleToken) {
-            setLocationFailure(watchError);
-          }
-          console.warn('[SafeMeLink Radar] Watcher GPS interrotto.', {
-            category: watchError.name,
-          });
-        },
-      )
-        .then((subscription) => {
-          if (
-            !isActiveRadarContext() ||
-            watchGeneration !== locationWatchGeneration
-          ) {
-            subscription.remove();
-            return;
-          }
-
-          locationWatchStarting = false;
-          locationSubscription = subscription;
-          armLocationWatchdog();
-        })
-        .catch((watchError: unknown) => {
-          if (
-            !isActiveRadarContext() ||
-            watchGeneration !== locationWatchGeneration
-          ) {
-            return;
-          }
-
-          locationWatchStarting = false;
-          console.warn('[SafeMeLink Radar] Avvio monitoraggio GPS non riuscito.', {
-            category: watchError instanceof Error ? watchError.name : 'unknown',
-          });
-
-          if (
-            watchError instanceof LocationPermissionError ||
-            watchError instanceof LocationUnavailableError
-          ) {
-            stopLocationWatchdog();
-            setLocationFailure(watchError);
-          } else {
-            const fallbackRequest = runSingleLocationFallback();
-            if (
-              fallbackRequest &&
-              watchError instanceof LocationWatchStartupTimeoutError &&
-              !watchRestartAttempted
-            ) {
-              watchRestartAttempted = true;
-              void fallbackRequest.finally(() => {
-                if (isActiveRadarContext()) {
-                  startLocationWatch();
-                }
-              });
-            }
-          }
-        });
-    };
-
-    const startRadar = () => {
-      if (!isActiveRadarContext()) {
-        return;
-      }
-
-      startLocationWatch();
-      if (
-        lastKnownLocation &&
-        Date.now() - lastLocationObservedAt <= RADAR_CACHED_LOCATION_MAX_AGE_MS
-      ) {
-        void runCycle(lastKnownLocation, {
-          force: true,
-          freshObservation: false,
-          source: 'refresh',
-        });
       }
     };
 
     manualRefreshRef.current = () => {
-      if (!isActiveRadarContext()) {
-        return;
-      }
-
-      fallbackUsed = false;
-      stopNetworkRefresh();
-      setStatus('searching');
-      setError(null);
-
-      if (lastKnownLocation) {
-        void runCycle(lastKnownLocation, {
-          force: true,
-          freshObservation: false,
-          source: 'manual',
-        });
-        startLocationWatch();
-        return;
-      }
-
-      stopLocationWatch();
-      void runCycle(undefined, {
-        force: true,
-        freshObservation: true,
-        source: 'manual',
-      }).finally(() => {
-        if (isActiveRadarContext()) {
-          startLocationWatch();
-        }
-      });
+      void runOneShotRadar();
     };
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       const wasActive = appState === 'active';
       appState = nextState;
-      activityGeneration += 1;
-      activeCycleToken = null;
+      attemptGeneration += 1;
+      attemptInFlight = false;
 
       if (nextState === 'active') {
-        lastCycleStartedAt = 0;
-        startRadar();
-      } else if (wasActive) {
-        stopLocationWatch();
-        fallbackUsed = false;
-        fallbackPending = false;
-        lastCycleStartedAt = 0;
+        void runOneShotRadar();
+      } else if (wasActive && participationEnabled) {
         void deactivate();
       }
     });
@@ -657,37 +309,22 @@ export function RadarProvider({ children }: PropsWithChildren) {
     if (userId && preferencesUserId !== userId) {
       clearRadarState(setUsers, setError);
       setStatus('loading_preferences');
-      deactivate();
-    } else if (!canParticipate) {
+    } else if (!participationEnabled) {
       clearRadarState(setUsers, setError);
-      setStatus(
-        userId
-          ? radarEnabled
-            ? participationEnabled
-              ? 'searching'
-              : 'visibility_required'
-            : 'off'
-          : 'unauthenticated',
-      );
+      setStatus(userId ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
 
-      if (
-        userId &&
-        preferencesUserId === userId &&
-        preferences &&
-        !participationEnabled
-      ) {
-        deactivate();
-      } else if (!participationEnabled) {
-        lastPublishedRef.current = null;
+      if (userId && preferencesUserId === userId && preferences) {
+        void deactivate();
       }
-    } else if (appState === 'active') {
-      startRadar();
+    } else if (isRadarScreenActive && appState === 'active') {
+      void runOneShotRadar();
     }
 
     return () => {
       isCurrent = false;
+      attemptGeneration += 1;
+      attemptInFlight = false;
       manualRefreshRef.current = () => undefined;
-      stopLocationWatch();
       appStateSubscription.remove();
     };
   }, [

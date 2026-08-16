@@ -1,40 +1,14 @@
 type SettingsChangedListener = (userId: string) => void;
 type SOSRequestListener = (userId: string) => void;
-type RecognitionAvailabilityListener = () => void;
 type RecognitionStartedListener = (userId: string) => void;
 
 const settingsChangedListeners = new Set<SettingsChangedListener>();
 const sosRequestListeners = new Set<SOSRequestListener>();
-const recognitionAvailabilityListeners = new Set<RecognitionAvailabilityListener>();
 const recognitionStartedListeners = new Set<RecognitionStartedListener>();
-const recognitionSuspensions = new Set<symbol>();
 let sosRequestLockedUntil = 0;
+let pendingSOSUserId: string | null = null;
 
 export const VoiceProtectionRuntime = {
-  isRecognitionSuspended() {
-    return recognitionSuspensions.size > 0;
-  },
-
-  suspendRecognition(owner: string) {
-    const suspension = Symbol(owner);
-    recognitionSuspensions.add(suspension);
-    recognitionAvailabilityListeners.forEach((listener) => listener());
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      recognitionSuspensions.delete(suspension);
-      recognitionAvailabilityListeners.forEach((listener) => listener());
-    };
-  },
-
-  onRecognitionAvailabilityChanged(listener: RecognitionAvailabilityListener) {
-    recognitionAvailabilityListeners.add(listener);
-    return () => recognitionAvailabilityListeners.delete(listener);
-  },
-
   notifyRecognitionStarted(userId: string) {
     recognitionStartedListeners.forEach((listener) => listener(userId));
   },
@@ -79,10 +53,13 @@ export const VoiceProtectionRuntime = {
       return false;
     }
     if (sosRequestListeners.size === 0) {
-      console.warn('[VoiceProtection] richiesta SOS non inoltrata: listener non disponibile');
-      return false;
+      pendingSOSUserId = userId;
+      sosRequestLockedUntil = now + 15_000;
+      console.info('[VoiceProtection] richiesta SOS in attesa del listener applicativo');
+      return true;
     }
 
+    pendingSOSUserId = null;
     sosRequestLockedUntil = now + 15_000;
     console.info('[VoiceProtection] parola riconosciuta: richiesta SOS inoltrata');
     sosRequestListeners.forEach((listener) => listener(userId));
@@ -91,6 +68,15 @@ export const VoiceProtectionRuntime = {
 
   onSOSRequested(listener: SOSRequestListener) {
     sosRequestListeners.add(listener);
+    const pendingUserId = pendingSOSUserId;
+    if (pendingUserId) {
+      pendingSOSUserId = null;
+      queueMicrotask(() => {
+        if (sosRequestListeners.has(listener)) {
+          listener(pendingUserId);
+        }
+      });
+    }
     return () => {
       sosRequestListeners.delete(listener);
     };

@@ -90,16 +90,15 @@ check('Radar OFF performs no location publication or nearby search', () => {
   assert.match(radarService, /preferences\?\.radarEnabled && preferences\.visibleToNearby/);
   assert.match(
     radarProvider,
-    /const canParticipate = Boolean\([\s\S]*isRadarScreenActive/,
-  );
-  assert.match(radarProvider, /const isActiveRadarContext = \(\) =>[\s\S]*canParticipate/);
-  assert.match(
-    radarProvider,
-    /!isActiveRadarContext\(\)[\s\S]*locationSubscription[\s\S]*locationWatchStarting/,
+    /const canRunRadar = Boolean\([\s\S]*isRadarScreenActive/,
   );
   assert.match(
     radarProvider,
-    /preferencesUserId === userId[\s\S]*!participationEnabled[\s\S]*deactivate\(\)/,
+    /!canRunRadar[\s\S]*activeUserIdRef\.current !== userId/,
+  );
+  assert.match(
+    radarProvider,
+    /!participationEnabled[\s\S]*preferencesUserId === userId[\s\S]*deactivate\(\)/,
   );
 });
 
@@ -391,14 +390,15 @@ check('Closed or cancelled SOS expose neither coordinates nor medical data', () 
   assert.match(homeScreen, /message: null/);
 });
 
-check('Voice Protection recognition is local and does not invoke SOS', () => {
-  assert.match(voiceProtectionScreen, /requiresOnDeviceRecognition: true/);
+check('Voice Protection recognition stays local and delegates SOS through runtime', () => {
+  assert.match(voiceProtectionLifecycle, /requiresOnDeviceRecognition: true/);
   assert.match(
     voiceProtectionScreen,
     /supportsOnDeviceRecognition\(\)/,
   );
   assert.doesNotMatch(voiceProtectionScreen, /SOSService|SOSLifecycleService|completeSOS/);
   assert.doesNotMatch(voiceProtectionService, /supabase|functions\.invoke|fetch\(/);
+  assert.match(voiceProtectionLifecycle, /VoiceProtectionRuntime\.requestSOS\(/);
 });
 
 check('Voice Protection foreground service is declared as microphone', () => {
@@ -477,36 +477,33 @@ check('Foreground SOS uses the in-app alert while preserving one sound', () => {
   assert.match(sosNotificationCenter, /APRI EMERGENZA/);
 });
 
-check('Radar uses one foreground GPS source with an inactivity fallback', () => {
-  assert.match(locationService, /watchPositionAsync/);
-  assert.match(locationService, /RADAR_LOCATION_TIME_INTERVAL_MS = 15_000/);
-  assert.match(locationService, /RADAR_LOCATION_DISTANCE_INTERVAL_METERS = 10/);
-  assert.match(locationService, /RADAR_WATCH_STARTUP_TIMEOUT_MS = 15_000/);
-  assert.match(radarService, /RADAR_LOCATION_FALLBACK_INTERVAL_MS = 20_000/);
-  assert.match(radarProvider, /startLocationWatch/);
-  assert.match(radarProvider, /armLocationWatchdog/);
-  assert.match(radarProvider, /runSingleLocationFallback/);
-  assert.doesNotMatch(radarProvider, /finally\(scheduleLocationFallback\)/);
-  assert.doesNotMatch(radarProvider, /setInterval\(/);
-  assert.match(radarProvider, /isRadarScreenActive/);
-  assert.match(radarProvider, /stopLocationWatch\(\)/);
+check('Radar uses one bounded foreground location acquisition per attempt', () => {
+  assert.match(radarProvider, /runOneShotRadar/);
+  assert.match(
+    radarProvider,
+    /LocationService\.getCurrentLocation\(\{[\s\S]*timeoutMs: 15_000,[\s\S]*accuracy: 'balanced'/,
+  );
+  assert.match(
+    radarProvider,
+    /RadarService\.publishPresence\(location\)[\s\S]*RadarService\.findNearbyUsers\(\)/,
+  );
+  assert.doesNotMatch(locationService, /watchPositionAsync|watchRadarLocation/);
+  assert.doesNotMatch(radarProvider, /startLocationWatch|watchdog|fallbackPending/);
 });
 
-check('Radar refreshes results without a second periodic GPS source', () => {
-  assert.match(radarProvider, /scheduleNetworkRefresh/);
-  assert.match(radarProvider, /freshObservation: false/);
-  assert.match(radarProvider, /RADAR_CACHED_LOCATION_MAX_AGE_MS/);
-  assert.match(radarProvider, /shouldPublishRadarPresence/);
-  assert.match(radarProvider, /areNearbyUsersEqual/);
-  assert.match(radarProvider, /current === 'ready' \|\| current === 'empty'/);
-  assert.doesNotMatch(radarProvider, /LocationService\.getCurrentLocation\([\s\S]*setInterval/);
+check('Radar has no automatic polling, retry, or recurring timer', () => {
+  assert.doesNotMatch(radarProvider, /setInterval\(|setTimeout\(/);
+  assert.doesNotMatch(radarProvider, /scheduleNetworkRefresh|runSingleLocationFallback/);
+  assert.doesNotMatch(radarService, /RADAR_REFRESH_INTERVAL_MS|RADAR_LOCATION_FALLBACK_INTERVAL_MS/);
+  assert.match(radarProvider, /manualRefreshRef\.current = \(\) =>/);
+  assert.match(radarProvider, /attemptInFlight/);
 });
 
-check('Radar stale generations and native watch startup are cleaned up', () => {
-  assert.match(radarProvider, /locationWatchGeneration/);
-  assert.match(radarProvider, /watchGeneration !== locationWatchGeneration/);
+check('Radar ignores stale async results and cleans up screen lifecycle', () => {
+  assert.match(radarProvider, /attemptGeneration/);
+  assert.match(radarProvider, /isAttemptCurrent\(generation\)/);
+  assert.match(radarProvider, /attemptGeneration \+= 1/);
   assert.match(radarProvider, /appStateSubscription\.remove\(\)/);
-  assert.match(locationService, /startupTimedOut[\s\S]*subscription\.remove\(\)/);
   assert.match(radarProvider, /manualRefreshRef\.current = \(\) => undefined/);
 });
 
@@ -518,7 +515,6 @@ check('Radar keeps a TTL presence after screen blur without keeping GPS active',
   const cleanupEnd = radarProvider.indexOf('\n    };', cleanupMarker);
   assert.ok(cleanupMarker >= 0 && cleanupStart >= 0 && cleanupEnd >= 0);
   const cleanup = radarProvider.slice(cleanupStart, cleanupEnd);
-  assert.match(cleanup, /stopLocationWatch\(\)/);
   assert.doesNotMatch(cleanup, /deactivate\(\)/);
   assert.match(
     radarProvider,
@@ -528,9 +524,27 @@ check('Radar keeps a TTL presence after screen blur without keeping GPS active',
 
 check('Voice recognition has single continuous ownership and bounded restart', () => {
   assert.doesNotMatch(homeScreen, /useSpeechRecognitionEvent|ExpoSpeechRecognitionModule/);
+  assert.doesNotMatch(voiceProtectionScreen, /useSpeechRecognitionEvent|runVoiceTest|testTranscript/);
+  assert.equal(
+    (voiceProtectionLifecycle.match(/useSpeechRecognitionEvent\(/g) ?? []).length,
+    4,
+  );
   assert.match(voiceProtectionService, /TASK_MAX_SLEEP_MS = 60_000/);
   assert.match(voiceProtectionLifecycle, /MAX_CONSECUTIVE_FAILURES = 5/);
-  assert.match(voiceProtectionLifecycle, /VoiceProtectionRuntime\.isRecognitionSuspended\(\)/);
+  assert.match(voiceProtectionLifecycle, /disableProtection\(currentUserId, 'circuit_breaker'\)/);
+  assert.doesNotMatch(voiceProtectionRuntime, /suspendRecognition|isRecognitionSuspended/);
+});
+
+check('Voice activation waits for a confirmed native recognition start', () => {
+  assert.match(
+    voiceProtectionScreen,
+    /waitForRecognitionStart\(userId, 8_000\)[\s\S]*notifySettingsChanged\(userId\)[\s\S]*await recognitionStarted[\s\S]*setSettings\(activeSettings\)/,
+  );
+  assert.match(
+    voiceProtectionLifecycle,
+    /useSpeechRecognitionEvent\('start',[\s\S]*notifyRecognitionStarted\(currentUserId\)/,
+  );
+  assert.match(voiceProtectionScreen, /settingsRefreshPendingRef/);
 });
 
 check('Voice keyword reaches the existing SOS countdown exactly once per session', () => {
@@ -541,8 +555,10 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   );
   assert.match(voiceProtectionRuntime, /waitForRecognitionStart/);
   assert.match(voiceProtectionRuntime, /sosRequestListeners\.size === 0/);
+  assert.match(voiceProtectionRuntime, /pendingSOSUserId/);
   assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
   assert.match(homeScreen, /startSOSCountdown\(\)/);
+  assert.match(homeScreen, /router\.dismissTo\('\/\(tabs\)'\)/);
 });
 
 check('SOS push remains primary and local fallback is bounded and observable', () => {

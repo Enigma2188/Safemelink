@@ -15,7 +15,6 @@ const MIN_RESTART_DELAY_MS = 1_500;
 const MAX_RESTART_DELAY_MS = 30_000;
 const RAPID_TERMINATION_MS = 3_000;
 const MAX_CONSECUTIVE_FAILURES = 5;
-const CIRCUIT_BREAKER_DELAY_MS = 60_000;
 
 export function VoiceProtectionLifecycle() {
   const { session, isInitializing } = useAuth();
@@ -51,13 +50,39 @@ export function VoiceProtectionLifecycle() {
     } catch {}
   }, [clearRestartTimer]);
 
+  const disableProtection = useCallback(async (
+    targetUserId: string,
+    category: 'permission' | 'readiness' | 'start' | 'circuit_breaker',
+  ) => {
+    shouldListenRef.current = false;
+    cachedSettingsRef.current = null;
+    recognitionReadyRef.current = false;
+    stopRecognition();
+
+    try {
+      await VoiceProtectionService.stop();
+      const storedSettings = await VoiceProtectionStorage.get(targetUserId);
+      await VoiceProtectionStorage.save(targetUserId, {
+        ...storedSettings,
+        enabled: false,
+        enabledAt: null,
+        expiresAt: null,
+      });
+      VoiceProtectionRuntime.notifySettingsChanged(targetUserId);
+    } catch {
+      console.warn('[VoiceProtection] disattivazione automatica incompleta', { category });
+      return;
+    }
+
+    console.warn('[VoiceProtection] protezione disattivata automaticamente', { category });
+  }, [stopRecognition]);
+
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
     const recognitionGeneration = recognitionGenerationRef.current + 1;
     recognitionGenerationRef.current = recognitionGeneration;
     if (
       activeUserIdRef.current !== targetUserId ||
-      AppState.currentState !== 'active' ||
-      VoiceProtectionRuntime.isRecognitionSuspended()
+      AppState.currentState !== 'active'
     ) {
       return;
     }
@@ -102,6 +127,7 @@ export function VoiceProtectionLifecycle() {
     }
     if (readiness !== 'ready' && readiness !== 'model_status_unknown') {
       console.warn('[VoiceProtection] ascolto locale non disponibile', { readiness });
+      void disableProtection(targetUserId, 'readiness');
       return;
     }
     recognitionReadyRef.current = true;
@@ -111,6 +137,7 @@ export function VoiceProtectionLifecycle() {
       permission = await ExpoSpeechRecognitionModule.getPermissionsAsync();
     } catch {
       console.warn('[VoiceProtection] verifica permesso microfono non riuscita');
+      void disableProtection(targetUserId, 'permission');
       return;
     }
     if (recognitionGenerationRef.current !== recognitionGeneration) {
@@ -118,6 +145,7 @@ export function VoiceProtectionLifecycle() {
     }
     if (!permission.granted) {
       console.warn('[VoiceProtection] permesso microfono non disponibile');
+      void disableProtection(targetUserId, 'permission');
       return;
     }
     if (recognitionStartedRef.current) {
@@ -136,13 +164,14 @@ export function VoiceProtectionLifecycle() {
         contextualStrings: [storedSettings.passphrase],
         requiresOnDeviceRecognition: true,
       });
-    } catch (error) {
+    } catch {
       recognitionStartedRef.current = false;
       console.warn('[VoiceProtection] avvio ascolto protetto fallito', {
-        message: error instanceof Error ? error.message : 'errore sconosciuto',
+        category: 'native_start',
       });
+      void disableProtection(targetUserId, 'start');
     }
-  }, [stopRecognition]);
+  }, [disableProtection, stopRecognition]);
 
   const scheduleRestart = useCallback((rapidTermination: boolean) => {
     const currentUserId = activeUserIdRef.current;
@@ -150,8 +179,7 @@ export function VoiceProtectionLifecycle() {
     if (
       !currentUserId ||
       !shouldListenRef.current ||
-      AppState.currentState !== 'active' ||
-      VoiceProtectionRuntime.isRecognitionSuspended()
+      AppState.currentState !== 'active'
     ) {
       return;
     }
@@ -160,12 +188,8 @@ export function VoiceProtectionLifecycle() {
       ? consecutiveFailuresRef.current + 1
       : 0;
     if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_FAILURES) {
-      console.warn('[VoiceProtection] ascolto in pausa dopo interruzioni consecutive');
-      restartTimerRef.current = setTimeout(() => {
-        restartTimerRef.current = null;
-        consecutiveFailuresRef.current = 0;
-        void startRecognition(currentUserId, false);
-      }, CIRCUIT_BREAKER_DELAY_MS);
+      console.warn('[VoiceProtection] arresto dopo interruzioni consecutive');
+      void disableProtection(currentUserId, 'circuit_breaker');
       return;
     }
 
@@ -178,12 +202,9 @@ export function VoiceProtectionLifecycle() {
       restartTimerRef.current = null;
       void startRecognition(currentUserId, false);
     }, delayMs);
-  }, [clearRestartTimer, startRecognition]);
+  }, [clearRestartTimer, disableProtection, startRecognition]);
 
   useSpeechRecognitionEvent('start', () => {
-    if (VoiceProtectionRuntime.isRecognitionSuspended()) {
-      return;
-    }
     recognitionStartedAtRef.current = Date.now();
     const currentUserId = activeUserIdRef.current;
     if (currentUserId && shouldListenRef.current && recognitionStartedRef.current) {
@@ -193,7 +214,6 @@ export function VoiceProtectionLifecycle() {
 
   useSpeechRecognitionEvent('result', (event) => {
     if (
-      VoiceProtectionRuntime.isRecognitionSuspended() ||
       !shouldListenRef.current ||
       !event.isFinal
     ) {
@@ -222,9 +242,7 @@ export function VoiceProtectionLifecycle() {
 
   useSpeechRecognitionEvent('error', (event) => {
     if (
-      VoiceProtectionRuntime.isRecognitionSuspended() ||
       !shouldListenRef.current ||
-      event.error === 'aborted' ||
       !recognitionStartedRef.current
     ) {
       return;
@@ -233,9 +251,18 @@ export function VoiceProtectionLifecycle() {
       code: event.error,
     });
     recognitionStartedRef.current = false;
-    if (event.error === 'language-not-supported') {
-      shouldListenRef.current = false;
-      clearRestartTimer();
+    if (
+      event.error === 'language-not-supported' ||
+      event.error === 'not-allowed' ||
+      event.error === 'service-not-allowed'
+    ) {
+      const currentUserId = activeUserIdRef.current;
+      if (currentUserId) {
+        void disableProtection(
+          currentUserId,
+          event.error === 'language-not-supported' ? 'readiness' : 'permission',
+        );
+      }
       return;
     }
     scheduleRestart(Date.now() - recognitionStartedAtRef.current < RAPID_TERMINATION_MS);
@@ -243,7 +270,6 @@ export function VoiceProtectionLifecycle() {
 
   useSpeechRecognitionEvent('end', () => {
     if (
-      VoiceProtectionRuntime.isRecognitionSuspended() ||
       !shouldListenRef.current ||
       !recognitionStartedRef.current
     ) {
@@ -318,20 +344,8 @@ export function VoiceProtectionLifecycle() {
         }
       },
     );
-    const removeRecognitionAvailabilityListener =
-      VoiceProtectionRuntime.onRecognitionAvailabilityChanged(() => {
-        const currentUserId = activeUserIdRef.current;
-        if (VoiceProtectionRuntime.isRecognitionSuspended()) {
-          stopRecognition();
-        } else if (currentUserId && AppState.currentState === 'active') {
-          consecutiveFailuresRef.current = 0;
-          void startRecognition(currentUserId, false);
-        }
-      });
-
     return () => {
       removeSettingsListener();
-      removeRecognitionAvailabilityListener();
       appStateSubscription.remove();
       shouldListenRef.current = false;
       stopRecognition();

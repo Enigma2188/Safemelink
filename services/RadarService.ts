@@ -6,11 +6,6 @@ import {
   type RadarPreferencesUpdate,
 } from '@/backend/repositories/RadarRepository';
 
-export const RADAR_REFRESH_INTERVAL_MS = 30_000;
-export const RADAR_LOCATION_FALLBACK_INTERVAL_MS = 20_000;
-export const RADAR_PRESENCE_UPDATE_INTERVAL_MS = 60_000;
-export const RADAR_CACHED_LOCATION_MAX_AGE_MS = 90_000;
-export const RADAR_MIN_MOVEMENT_METERS = 50;
 export const RADAR_MAX_ACCURACY_METERS = 100;
 export const RADAR_SEARCH_RADIUS_METERS = 1_000;
 export const RADAR_RESULT_LIMIT = 25;
@@ -30,11 +25,6 @@ const RESERVED_RADAR_NICKNAMES = new Set([
   'support',
   'system',
 ]);
-
-export type RadarPresenceSnapshot = {
-  location: SOSLocation;
-  publishedAt: number;
-};
 
 export type NearbyUser = {
   anonymousId: string;
@@ -95,37 +85,6 @@ const normalizePreferences = (row: RadarPreferencesRow): RadarPreferences => ({
   publicNickname: row.public_nickname,
   updatedAt: row.preferences_updated_at,
 });
-
-const toRadians = (value: number) => (value * Math.PI) / 180;
-
-export function calculateRadarDistanceMeters(first: SOSLocation, second: SOSLocation) {
-  const latitudeDelta = toRadians(second.latitude - first.latitude);
-  const longitudeDelta = toRadians(second.longitude - first.longitude);
-  const firstLatitude = toRadians(first.latitude);
-  const secondLatitude = toRadians(second.latitude);
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(firstLatitude) *
-      Math.cos(secondLatitude) *
-      Math.sin(longitudeDelta / 2) ** 2;
-
-  return 2 * 6_371_000 * Math.asin(Math.sqrt(Math.min(1, Math.max(0, haversine))));
-}
-
-export function shouldPublishRadarPresence(
-  previous: RadarPresenceSnapshot | null,
-  current: SOSLocation,
-  now = Date.now(),
-) {
-  if (!previous) {
-    return true;
-  }
-
-  return (
-    now - previous.publishedAt >= RADAR_PRESENCE_UPDATE_INTERVAL_MS ||
-    calculateRadarDistanceMeters(previous.location, current) >= RADAR_MIN_MOVEMENT_METERS
-  );
-}
 
 const normalizeNearbyUsers = (rows: NearbyUserRow[]): NearbyUser[] => {
   const uniqueUsers = new Map<string, NearbyUser>();
