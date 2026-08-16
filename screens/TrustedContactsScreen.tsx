@@ -44,8 +44,13 @@ export function TrustedContactsScreen() {
   const [requests, setRequests] = useState<TrustedLinkRequest[]>([]);
   const [showQr, setShowQr] = useState(false);
   const [linkActionPending, setLinkActionPending] = useState(false);
+  const [contactActionPending, setContactActionPending] = useState(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
+  const linkActionGenerationRef = useRef(0);
+  const linkActionInFlightRef = useRef(false);
+  const contactActionGenerationRef = useRef(0);
+  const contactActionInFlightRef = useRef(false);
   activeUserIdRef.current = userId;
 
   const loadContacts = useCallback(async () => {
@@ -89,7 +94,12 @@ export function TrustedContactsScreen() {
     setLinkCode('');
     setRequests([]);
     setShowQr(false);
+    linkActionGenerationRef.current += 1;
+    linkActionInFlightRef.current = false;
     setLinkActionPending(false);
+    contactActionGenerationRef.current += 1;
+    contactActionInFlightRef.current = false;
+    setContactActionPending(false);
   }, [userId]);
 
   useFocusEffect(
@@ -110,10 +120,19 @@ export function TrustedContactsScreen() {
   const saveContact = async () => {
     const actionUserId = userId;
 
+    if (contactActionInFlightRef.current) {
+      return;
+    }
+
     if (!actionUserId) {
       Alert.alert('Contatti fidati', 'Accedi per gestire i contatti salvati.');
       return;
     }
+
+    contactActionInFlightRef.current = true;
+    const actionGeneration = contactActionGenerationRef.current + 1;
+    contactActionGenerationRef.current = actionGeneration;
+    setContactActionPending(true);
 
     try {
       const nextContacts = editingId
@@ -126,6 +145,16 @@ export function TrustedContactsScreen() {
       }
     } catch (error) {
       Alert.alert('Contatti fidati', error instanceof Error ? error.message : 'Errore inatteso.');
+    } finally {
+      if (contactActionGenerationRef.current === actionGeneration) {
+        contactActionInFlightRef.current = false;
+      }
+      if (
+        activeUserIdRef.current === actionUserId &&
+        contactActionGenerationRef.current === actionGeneration
+      ) {
+        setContactActionPending(false);
+      }
     }
   };
 
@@ -150,9 +179,14 @@ export function TrustedContactsScreen() {
         onPress: async () => {
           const actionUserId = userId;
 
-          if (!actionUserId) {
+          if (!actionUserId || contactActionInFlightRef.current) {
             return;
           }
+
+          contactActionInFlightRef.current = true;
+          const actionGeneration = contactActionGenerationRef.current + 1;
+          contactActionGenerationRef.current = actionGeneration;
+          setContactActionPending(true);
 
           try {
             const nextContacts = await ContactsService.remove(contact.id);
@@ -165,6 +199,16 @@ export function TrustedContactsScreen() {
             }
           } catch {
             Alert.alert('Contatti fidati', 'Non riesco a eliminare il contatto.');
+          } finally {
+            if (contactActionGenerationRef.current === actionGeneration) {
+              contactActionInFlightRef.current = false;
+            }
+            if (
+              activeUserIdRef.current === actionUserId &&
+              contactActionGenerationRef.current === actionGeneration
+            ) {
+              setContactActionPending(false);
+            }
           }
         },
       },
@@ -172,6 +216,10 @@ export function TrustedContactsScreen() {
   };
 
   const sendLinkRequest = async () => {
+    if (linkActionInFlightRef.current) {
+      return;
+    }
+
     if (!linkCode.trim()) {
       Alert.alert('Collegamento SafeMeLink', 'Inserisci un codice SafeMeLink.');
       return;
@@ -183,6 +231,9 @@ export function TrustedContactsScreen() {
       return;
     }
 
+    linkActionInFlightRef.current = true;
+    const actionGeneration = linkActionGenerationRef.current + 1;
+    linkActionGenerationRef.current = actionGeneration;
     setLinkActionPending(true);
 
     try {
@@ -201,19 +252,32 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile inviare la richiesta.',
       );
     } finally {
-      if (activeUserIdRef.current === actionUserId) {
+      if (linkActionGenerationRef.current === actionGeneration) {
+        linkActionInFlightRef.current = false;
+      }
+      if (
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
         setLinkActionPending(false);
       }
     }
   };
 
   const respondToRequest = async (requestId: string, accept: boolean) => {
+    if (linkActionInFlightRef.current) {
+      return;
+    }
+
     const actionUserId = userId;
 
     if (!actionUserId) {
       return;
     }
 
+    linkActionInFlightRef.current = true;
+    const actionGeneration = linkActionGenerationRef.current + 1;
+    linkActionGenerationRef.current = actionGeneration;
     setLinkActionPending(true);
 
     try {
@@ -234,19 +298,32 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile aggiornare la richiesta.',
       );
     } finally {
-      if (activeUserIdRef.current === actionUserId) {
+      if (linkActionGenerationRef.current === actionGeneration) {
+        linkActionInFlightRef.current = false;
+      }
+      if (
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
         setLinkActionPending(false);
       }
     }
   };
 
   const cancelRequest = async (requestId: string) => {
+    if (linkActionInFlightRef.current) {
+      return;
+    }
+
     const actionUserId = userId;
 
     if (!actionUserId) {
       return;
     }
 
+    linkActionInFlightRef.current = true;
+    const actionGeneration = linkActionGenerationRef.current + 1;
+    linkActionGenerationRef.current = actionGeneration;
     setLinkActionPending(true);
 
     try {
@@ -263,7 +340,13 @@ export function TrustedContactsScreen() {
         error instanceof Error ? error.message : 'Impossibile annullare la richiesta.',
       );
     } finally {
-      if (activeUserIdRef.current === actionUserId) {
+      if (linkActionGenerationRef.current === actionGeneration) {
+        linkActionInFlightRef.current = false;
+      }
+      if (
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
         setLinkActionPending(false);
       }
     }
@@ -394,6 +477,7 @@ export function TrustedContactsScreen() {
           account SafeMeLink.
         </Text>
         <TextInput
+          editable={!contactActionPending}
           style={styles.input}
           placeholder="Nome"
           placeholderTextColor="#687076"
@@ -404,6 +488,7 @@ export function TrustedContactsScreen() {
         <View style={styles.channelRow}>
           {(['sms', 'whatsapp'] as const).map((channel) => (
             <Pressable
+              disabled={contactActionPending}
               key={channel}
               onPress={() => setForm((current) => ({ ...current, preferredChannel: channel }))}
               style={[
@@ -421,6 +506,7 @@ export function TrustedContactsScreen() {
           ))}
         </View>
         <TextInput
+          editable={!contactActionPending}
           style={styles.input}
           placeholder="Numero di telefono"
           placeholderTextColor="#687076"
@@ -428,13 +514,19 @@ export function TrustedContactsScreen() {
           value={form.phone}
           onChangeText={(phone) => setForm((current) => ({ ...current, phone }))}
         />
-        <Pressable style={styles.primaryButton} onPress={saveContact}>
+        <Pressable
+          disabled={contactActionPending}
+          style={[styles.primaryButton, contactActionPending && styles.disabledButton]}
+          onPress={saveContact}>
           <Text style={styles.primaryButtonText}>
             {editingId ? 'Salva modifiche' : 'Aggiungi contatto'}
           </Text>
         </Pressable>
         {editingId && (
-          <Pressable style={styles.secondaryButton} onPress={resetForm}>
+          <Pressable
+            disabled={contactActionPending}
+            style={styles.secondaryButton}
+            onPress={resetForm}>
             <Text style={styles.secondaryButtonText}>Annulla modifica</Text>
           </Pressable>
         )}
@@ -464,10 +556,16 @@ export function TrustedContactsScreen() {
                 </Text>
               </View>
               <View style={styles.actions}>
-                <Pressable style={styles.smallButton} onPress={() => startEdit(contact)}>
+                <Pressable
+                  disabled={contactActionPending}
+                  style={styles.smallButton}
+                  onPress={() => startEdit(contact)}>
                   <Text style={styles.smallButtonText}>Modifica</Text>
                 </Pressable>
-                <Pressable style={styles.dangerButton} onPress={() => deleteContact(contact)}>
+                <Pressable
+                  disabled={contactActionPending}
+                  style={styles.dangerButton}
+                  onPress={() => deleteContact(contact)}>
                   <Text style={styles.dangerButtonText}>Elimina</Text>
                 </Pressable>
               </View>

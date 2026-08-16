@@ -283,8 +283,16 @@ export function RadarProvider({ children }: PropsWithChildren) {
           );
         }
       } finally {
-        if (generation === attemptGeneration) {
-          attemptInFlight = false;
+        attemptInFlight = false;
+
+        if (
+          isCurrent &&
+          generation !== attemptGeneration &&
+          appState === 'active' &&
+          canRunRadar &&
+          activeUserIdRef.current === userId
+        ) {
+          void runOneShotRadar();
         }
       }
     };
@@ -297,7 +305,6 @@ export function RadarProvider({ children }: PropsWithChildren) {
       const wasActive = appState === 'active';
       appState = nextState;
       attemptGeneration += 1;
-      attemptInFlight = false;
 
       if (nextState === 'active') {
         void runOneShotRadar();

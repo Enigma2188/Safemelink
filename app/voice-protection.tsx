@@ -125,6 +125,7 @@ export default function VoiceProtectionScreen() {
   const screenActiveRef = useRef(false);
   const screenGenerationRef = useRef(0);
   const refreshInFlightRef = useRef(false);
+  const refreshRequestedRef = useRef(false);
   const refreshGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const activationInFlightRef = useRef(false);
@@ -166,6 +167,7 @@ export default function VoiceProtectionScreen() {
 
   const refreshState = useCallback(async (showLoading = true) => {
     if (refreshInFlightRef.current) {
+      refreshRequestedRef.current = true;
       return;
     }
 
@@ -249,6 +251,10 @@ export default function VoiceProtectionScreen() {
       if (screenActiveRef.current) {
         setIsLoading(false);
       }
+      if (refreshRequestedRef.current && screenActiveRef.current) {
+        refreshRequestedRef.current = false;
+        void refreshState(false);
+      }
     }
   }, [userId]);
 
@@ -276,6 +282,7 @@ export default function VoiceProtectionScreen() {
 
       return () => {
         refreshGenerationRef.current += 1;
+        refreshRequestedRef.current = false;
         screenActiveRef.current = false;
       };
     }, [refreshState]),

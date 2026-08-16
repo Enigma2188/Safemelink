@@ -427,6 +427,11 @@ check('Push token registration retries and follows native token rotation', () =>
   assert.match(pushTokenRegistrar, /registerDevice\('foreground'\)/);
   assert.match(pushTokenRegistrar, /scheduleRetry/);
   assert.match(pushTokenRegistrar, /Math\.min\(60_000/);
+  assert.match(pushTokenRegistrar, /MAX_AUTOMATIC_RETRY_ATTEMPTS = 5/);
+  assert.match(
+    pushTokenRegistrar,
+    /retryAttempt >= MAX_AUTOMATIC_RETRY_ATTEMPTS/,
+  );
   assert.match(
     pushTokenRepository,
     /select\('id,user_id,active,updated_at'\)[\s\S]*\.single\(\)/,
@@ -497,6 +502,10 @@ check('Radar has no automatic polling, retry, or recurring timer', () => {
   assert.doesNotMatch(radarService, /RADAR_REFRESH_INTERVAL_MS|RADAR_LOCATION_FALLBACK_INTERVAL_MS/);
   assert.match(radarProvider, /manualRefreshRef\.current = \(\) =>/);
   assert.match(radarProvider, /attemptInFlight/);
+  assert.doesNotMatch(
+    radarProvider,
+    /appState = nextState;[\s\S]{0,120}attemptInFlight = false/,
+  );
 });
 
 check('Radar ignores stale async results and cleans up screen lifecycle', () => {
@@ -545,6 +554,11 @@ check('Voice activation waits for a confirmed native recognition start', () => {
     /useSpeechRecognitionEvent\('start',[\s\S]*notifyRecognitionStarted\(currentUserId\)/,
   );
   assert.match(voiceProtectionScreen, /settingsRefreshPendingRef/);
+  assert.match(voiceProtectionScreen, /refreshRequestedRef/);
+  assert.match(
+    voiceProtectionScreen,
+    /refreshInFlightRef\.current\) \{[\s\S]*refreshRequestedRef\.current = true/,
+  );
 });
 
 check('Voice keyword reaches the existing SOS countdown exactly once per session', () => {
@@ -568,6 +582,38 @@ check('SOS push remains primary and local fallback is bounded and observable', (
   assert.match(sosAlertService, /Linking\.canOpenURL/);
   assert.match(sosAlertService, /contact\.preferredChannel === 'whatsapp'/);
   assert.doesNotMatch(sosAlertService, /Alert\.alert/);
+});
+
+check('SOS activation supersedes preventive safety timers', () => {
+  const startCountdown = homeScreen.match(
+    /const startSOSCountdown = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[\]\);/,
+  )?.[1];
+  assert.ok(startCountdown, 'SOS countdown callback not found.');
+  assert.match(startCountdown, /setCheckpointStatus\('idle'\)/);
+  assert.match(startCountdown, /goHomeEstimateGenerationRef\.current \+= 1/);
+  assert.match(startCountdown, /setGoHomeStatus\('idle'\)/);
+});
+
+check('Trusted contact mutations are guarded against duplicate taps', () => {
+  assert.match(contactsScreen, /contactActionInFlightRef/);
+  assert.match(contactsScreen, /if \(contactActionInFlightRef\.current\)/);
+  assert.match(contactsScreen, /linkActionInFlightRef/);
+  assert.match(contactsScreen, /if \(linkActionInFlightRef\.current\)/);
+  assert.match(contactsScreen, /disabled=\{contactActionPending\}/);
+});
+
+check('WhatsApp fallback prefers the native scheme and never invents a country code', () => {
+  assert.match(sosAlertService, /\^\\\+\[1-9\]\\d\{6,14\}\$/);
+  assert.match(
+    sosAlertService,
+    /return \[\s*`whatsapp:\/\/send[\s\S]*`https:\/\/wa\.me/,
+  );
+  assert.doesNotMatch(sosAlertService, /\+39|defaultCountry|countryCode/);
+});
+
+check('Sensitive errors are categorized rather than logged as raw objects', () => {
+  assert.doesNotMatch(homeScreen, /errore operazione'[\s\S]{0,160}\berror,\s*\}/);
+  assert.doesNotMatch(homeScreen, /impostazioni posizione non riuscita', error\)/);
 });
 
 check('Trusted contacts distinguish and deduplicate local and linked recipients', () => {

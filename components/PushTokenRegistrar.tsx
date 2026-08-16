@@ -8,6 +8,8 @@ import {
   PushNotificationService,
 } from '@/services/PushNotificationService';
 
+const MAX_AUTOMATIC_RETRY_ATTEMPTS = 5;
+
 export function PushTokenRegistrar() {
   const { session } = useAuth();
   const permissionAlertShownForUser = useRef(new Set<string>());
@@ -35,6 +37,13 @@ export function PushTokenRegistrar() {
         return;
       }
 
+      if (retryAttempt >= MAX_AUTOMATIC_RETRY_ATTEMPTS) {
+        console.warn('[SafeMeLink Push] Tentativi automatici sospesi.', {
+          retryAttempt,
+        });
+        return;
+      }
+
       const delayMs = Math.min(60_000, 5_000 * 2 ** retryAttempt);
       retryAttempt += 1;
       console.warn('[SafeMeLink Push] Nuovo tentativo registrazione programmato.', {
@@ -49,6 +58,9 @@ export function PushTokenRegistrar() {
 
     const registerDevice = async (reason: 'login' | 'foreground' | 'token_changed' | 'retry') => {
       clearRetry();
+      if (reason !== 'retry') {
+        retryAttempt = 0;
+      }
       console.log('[SafeMeLink Push] Avvio registrazione dispositivo.', {
         reason,
       });
@@ -90,7 +102,10 @@ export function PushTokenRegistrar() {
                     void Linking.openSettings().catch((settingsError: unknown) => {
                       console.warn(
                         '[SafeMeLink Push] Apertura impostazioni non riuscita.',
-                        settingsError,
+                        {
+                          category:
+                            settingsError instanceof Error ? settingsError.name : 'unknown',
+                        },
                       );
                     });
                   },

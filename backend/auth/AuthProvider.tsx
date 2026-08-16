@@ -90,7 +90,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
             cleanupResults.forEach((result) => {
               if (result.status === 'rejected') {
-                console.warn('[SafeMeLink Auth] Pulizia pre-logout non riuscita.', result.reason);
+                console.warn('[SafeMeLink Auth] Pulizia pre-logout non riuscita.', {
+                  category: result.reason instanceof Error ? result.reason.name : 'unknown',
+                });
               }
             });
           }

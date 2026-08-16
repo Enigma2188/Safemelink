@@ -97,8 +97,8 @@ const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) =
   const phone = compactPhone.slice(1);
 
   return [
-    `https://wa.me/${phone}?text=${message}`,
     `whatsapp://send?phone=${phone}&text=${message}`,
+    `https://wa.me/${phone}?text=${message}`,
   ];
 };
 

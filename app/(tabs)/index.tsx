@@ -240,6 +240,17 @@ export default function HomeScreen() {
   );
 
   const startSOSCountdown = useCallback(() => {
+    setCheckpointStatus('idle');
+    setCheckpointRemainingSeconds(0);
+    setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    goHomeEstimateGenerationRef.current += 1;
+    goHomeEstimateInFlightRef.current = false;
+    setGoHomeStatus('idle');
+    setGoHomeSession(null);
+    setGoHomeRemainingSeconds(0);
+    setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+    setGoHomeError('');
+    setGoHomeErrorAction(null);
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
@@ -596,7 +607,9 @@ export default function HomeScreen() {
 
       await Linking.openSettings();
     } catch (error) {
-      console.warn('[TornoACasa] apertura impostazioni posizione non riuscita', error);
+      console.warn('[TornoACasa] apertura impostazioni posizione non riuscita', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
       await Linking.openSettings();
     }
   };
@@ -665,9 +678,7 @@ export default function HomeScreen() {
         GO_HOME_GPS_TIMEOUT_MS,
         'La richiesta GPS non risponde. Controlla la posizione e riprova.',
       );
-      console.info('[TornoACasa] posizione GPS ricevuta', {
-        accuracy: startLocation.accuracy,
-      });
+      console.info('[TornoACasa] posizione GPS ricevuta');
 
       if (
         activeUserIdRef.current !== actionUserId ||
@@ -678,10 +689,7 @@ export default function HomeScreen() {
 
       const distanceKm = calculateDistanceKm(startLocation, savedHomeLocation);
       const estimatedMinutes = estimateWalkingMinutes(distanceKm);
-      console.info('[TornoACasa] distanza calcolata', {
-        distanceKm,
-        estimatedMinutes,
-      });
+      console.info('[TornoACasa] stima percorso completata');
       const session: GoHomeSession = {
         id: `${Date.now()}`,
         createdAt: new Date().toISOString(),
@@ -733,7 +741,7 @@ export default function HomeScreen() {
         error instanceof Error ? error.message : 'Non riesco ad avviare Torno a casa.';
       console.error('[TornoACasa] errore operazione', {
         durationMs: Date.now() - startedAt,
-        error,
+        category: error instanceof Error ? error.name : 'unknown',
       });
 
       if (error instanceof LocationPermissionError) {
