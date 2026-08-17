@@ -28,9 +28,36 @@ const normalizePhoneNumber = (phone: string) => {
   return `${startsWithPlus ? '+' : ''}${digits}`;
 };
 
+const normalizeContactName = (name: string) =>
+  name.trim().toLocaleLowerCase('it-IT').replace(/\s+/g, ' ');
+
+const excludeAmbiguousLegacyContacts = (contacts: SafeMeLinkContact[]) => {
+  const linkedNamesWithoutPhone = new Set(
+    contacts
+      .filter((contact) => Boolean(contact.userId) && !normalizePhoneNumber(contact.phone))
+      .map((contact) => normalizeContactName(contact.name))
+      .filter(Boolean),
+  );
+  const eligibleContacts = contacts.filter(
+    (contact) =>
+      Boolean(contact.userId) ||
+      !linkedNamesWithoutPhone.has(normalizeContactName(contact.name)),
+  );
+  const excludedCount = contacts.length - eligibleContacts.length;
+
+  if (excludedCount > 0) {
+    console.info('[SafeMeLink SOS] contatti locali ambigui ignorati', {
+      category: 'linked_contact_without_verified_phone',
+      excludedCount,
+    });
+  }
+
+  return eligibleContacts;
+};
+
 const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) => {
   const uniqueContacts = new Map<string, SafeMeLinkContact>();
-  const orderedContacts = [...contacts].sort(
+  const orderedContacts = excludeAmbiguousLegacyContacts(contacts).sort(
     (first, second) => Number(second.hasApp) - Number(first.hasApp),
   );
 
@@ -190,6 +217,11 @@ export const sendSosAlert = async (
   };
 
   for (const contact of contactsWithValidPhones) {
+    console.info('[SafeMeLink SOS] destinatario fallback valutato', {
+      contactSource: contact.userId ? 'CONTACT_SOURCE_LINKED' : 'CONTACT_SOURCE_LOCAL',
+      phonePresent: true,
+      phoneE164Valid: /^\+[1-9]\d{6,14}$/.test(contact.phone),
+    });
     const preferredUrls =
       contact.preferredChannel === 'whatsapp'
         ? createWhatsAppUrls(event, contact)

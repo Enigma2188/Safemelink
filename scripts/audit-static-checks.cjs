@@ -573,6 +573,17 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
   assert.match(homeScreen, /startSOSCountdown\(\)/);
   assert.match(homeScreen, /router\.dismissTo\('\/\(tabs\)'\)/);
+  assert.match(homeScreen, /VOICE_LISTENER_RECEIVED/);
+  assert.match(homeScreen, /VOICE_COUNTDOWN_STARTED/);
+  assert.match(homeScreen, /statusRef\.current = 'countdown'/);
+  assert.match(homeScreen, /voiceCountdownPendingRef\.current = false/);
+  assert.match(
+    homeScreen,
+    /if \(statusRef\.current === 'idle'\)[\s\S]*Snapshot locale ignorato durante lifecycle attivo/,
+  );
+  assert.match(voiceProtectionLifecycle, /VOICE_MATCH_OK/);
+  assert.match(voiceProtectionRuntime, /VOICE_SOS_REQUESTED/);
+  assert.match(voiceProtectionRuntime, /VOICE_REQUEST_QUEUED/);
 });
 
 check('SOS push remains primary and local fallback is bounded and observable', () => {
@@ -609,6 +620,10 @@ check('WhatsApp fallback prefers the native scheme and never invents a country c
     /return \[\s*`whatsapp:\/\/send[\s\S]*`https:\/\/wa\.me/,
   );
   assert.doesNotMatch(sosAlertService, /\+39|defaultCountry|countryCode/);
+  assert.match(sosAlertService, /excludeAmbiguousLegacyContacts/);
+  assert.match(sosAlertService, /linked_contact_without_verified_phone/);
+  assert.match(sosAlertService, /CONTACT_SOURCE_LINKED/);
+  assert.match(sosAlertService, /CONTACT_SOURCE_LOCAL/);
 });
 
 check('Sensitive errors are categorized rather than logged as raw objects', () => {

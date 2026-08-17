@@ -232,6 +232,7 @@ export function VoiceProtectionLifecycle() {
       );
     });
     if (matches && !sosRequestedForSessionRef.current) {
+      console.info('[VoiceProtection Lifecycle] VOICE_MATCH_OK');
       sosRequestedForSessionRef.current = true;
       const currentUserId = activeUserIdRef.current;
       if (currentUserId) {

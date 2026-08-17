@@ -55,13 +55,13 @@ export const VoiceProtectionRuntime = {
     if (sosRequestListeners.size === 0) {
       pendingSOSUserId = userId;
       sosRequestLockedUntil = now + 15_000;
-      console.info('[VoiceProtection] richiesta SOS in attesa del listener applicativo');
+      console.info('[VoiceProtection Runtime] VOICE_REQUEST_QUEUED');
       return true;
     }
 
     pendingSOSUserId = null;
     sosRequestLockedUntil = now + 15_000;
-    console.info('[VoiceProtection] parola riconosciuta: richiesta SOS inoltrata');
+    console.info('[VoiceProtection Runtime] VOICE_SOS_REQUESTED');
     sosRequestListeners.forEach((listener) => listener(userId));
     return sosRequestListeners.size > 0;
   },
@@ -74,6 +74,9 @@ export const VoiceProtectionRuntime = {
       queueMicrotask(() => {
         if (sosRequestListeners.has(listener)) {
           listener(pendingUserId);
+        } else if (!pendingSOSUserId) {
+          pendingSOSUserId = pendingUserId;
+          console.info('[VoiceProtection Runtime] VOICE_REQUEST_QUEUED');
         }
       });
     }

@@ -181,6 +181,7 @@ export default function HomeScreen() {
   const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const statusRef = useRef<SOSStatus>('idle');
+  const voiceCountdownPendingRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
   const sosEndingInFlightRef = useRef(false);
@@ -240,6 +241,8 @@ export default function HomeScreen() {
   );
 
   const startSOSCountdown = useCallback(() => {
+    loadGenerationRef.current += 1;
+    statusRef.current = 'countdown';
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
@@ -261,14 +264,20 @@ export default function HomeScreen() {
     () =>
       VoiceProtectionRuntime.onSOSRequested((requestUserId) => {
         if (requestUserId !== activeUserIdRef.current) {
+          console.info('[VoiceProtection Home] VOICE_TRIGGER_BLOCKED', {
+            category: 'account_mismatch',
+          });
           return;
         }
         if (statusRef.current !== 'idle') {
-          console.info('[VoiceProtection] SOS vocale ignorato: flusso SOS già attivo');
+          console.info('[VoiceProtection Home] VOICE_TRIGGER_BLOCKED', {
+            category: 'sos_already_active',
+          });
           return;
         }
 
-        console.info('[VoiceProtection] avvio countdown SOS esistente');
+        console.info('[VoiceProtection Home] VOICE_LISTENER_RECEIVED');
+        voiceCountdownPendingRef.current = true;
         startSOSCountdown();
         router.dismissTo('/(tabs)');
       }),
@@ -276,6 +285,8 @@ export default function HomeScreen() {
   );
 
   const resetSensitiveState = useCallback(() => {
+    statusRef.current = 'idle';
+    voiceCountdownPendingRef.current = false;
     setContacts([]);
     setLastEvents([]);
     setActiveEvent(null);
@@ -400,8 +411,14 @@ export default function HomeScreen() {
       setContacts(storedContacts);
       setLastEvents(nextEvents);
       setHomeLocation(storedHomeLocation);
-      setActiveEvent(restoredActiveEvent);
-      setStatus(restoredActiveEvent ? 'active' : 'idle');
+      if (statusRef.current === 'idle') {
+        setActiveEvent(restoredActiveEvent);
+        setStatus(restoredActiveEvent ? 'active' : 'idle');
+      } else {
+        console.info('[SafeMeLink SOS] Snapshot locale ignorato durante lifecycle attivo.', {
+          lifecycle: statusRef.current,
+        });
+      }
     } catch (loadError: unknown) {
       if (
         activeUserIdRef.current === loadUserId &&
@@ -421,6 +438,13 @@ export default function HomeScreen() {
     loadGenerationRef.current += 1;
     resetSensitiveState();
   }, [resetSensitiveState, userId]);
+
+  useEffect(() => {
+    if (status === 'countdown' && voiceCountdownPendingRef.current) {
+      voiceCountdownPendingRef.current = false;
+      console.info('[VoiceProtection Home] VOICE_COUNTDOWN_STARTED');
+    }
+  }, [status]);
 
   useFocusEffect(
     useCallback(() => {
