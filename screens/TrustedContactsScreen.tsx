@@ -369,7 +369,9 @@ export function TrustedContactsScreen() {
       keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
         <Text style={styles.title}>Contatti fidati</Text>
-        <Text style={styles.subtitle}>Gestisci i contatti telefonici e i collegamenti SafeMeLink.</Text>
+        <Text style={styles.subtitle}>
+          La tua cerchia personale, separata dalla rete generale SafeMeLink.
+        </Text>
       </View>
 
       <View style={styles.section}>
@@ -401,7 +403,7 @@ export function TrustedContactsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Aggiungi tramite codice</Text>
           <Text style={styles.sectionHelp}>
-            Solo una richiesta accettata crea il collegamento SafeMeLink per gli SOS push.
+            Una richiesta accettata crea un contatto fidato personale e prioritario per gli SOS.
           </Text>
           <TextInput
             autoCapitalize="characters"

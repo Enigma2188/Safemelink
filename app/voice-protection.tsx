@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   AppState,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -720,6 +721,9 @@ export default function VoiceProtectionScreen() {
       : !settings.enabled && !settings.passphrase
         ? 'Salva prima una parola d’ordine.'
         : '';
+  const showPermissionSettings =
+    activationFeedback.startsWith('Permesso microfono non concesso') ||
+    activationFeedback.startsWith('Autorizza le notifiche');
 
   if (isInitializing || isLoading) {
     return (
@@ -779,6 +783,19 @@ export default function VoiceProtectionScreen() {
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
               {toggleUnavailableFeedback || activationFeedback}
             </Text>
+          ) : null}
+          {showPermissionSettings ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void Linking.openSettings().catch(() => {
+                  setMessage('Apri manualmente le impostazioni di SafeMeLink per autorizzare il permesso.');
+                });
+              }}
+              style={styles.batteryButton}>
+              <Ionicons color="#C8BEFF" name="settings-outline" size={17} />
+              <Text style={styles.batteryButtonText}>APRI IMPOSTAZIONI APP</Text>
+            </Pressable>
           ) : null}
 
           <View style={styles.microphoneRow}>

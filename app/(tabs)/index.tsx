@@ -60,12 +60,23 @@ const getSOSDeliveryNotice = (
           ? 'Nessun canale locale utilizzabile. Verifica i contatti fidati e le app disponibili.'
           : 'Il fallback locale non è disponibile per un problema tecnico.';
 
-  if (result.reason === 'no_linked_recipients') {
-    return `SOS attivo. Nessun contatto SafeMeLink collegato. ${fallbackNotice}`;
+  if (
+    result.reason === 'no_eligible_recipients' ||
+    result.reason === 'no_linked_recipients'
+  ) {
+    return `SOS attivo. Nessun contatto fidato o utente vicino della rete SafeMeLink risulta disponibile. ${fallbackNotice}`;
   }
 
   if (result.reason === 'recipients_without_active_tokens') {
-    return `SOS attivo. I contatti SafeMeLink collegati non hanno notifiche disponibili. ${fallbackNotice}`;
+    return `SOS attivo. I destinatari SafeMeLink individuati non hanno notifiche disponibili. ${fallbackNotice}`;
+  }
+
+  if (result.reason === 'rate_limited') {
+    return `SOS attivo. L’invio SafeMeLink è temporaneamente limitato per sicurezza. ${fallbackNotice}`;
+  }
+
+  if (result.reason === 'already_dispatched') {
+    return `SOS attivo. Questo evento era già stato inoltrato alla rete SafeMeLink. ${fallbackNotice}`;
   }
 
   if (result.errors.length > 0 || result.notificationsFailed > 0) {

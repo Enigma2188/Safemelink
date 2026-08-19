@@ -10,11 +10,17 @@ export type SOSDeliveryResult = {
   tokenCount: number;
   notificationsSent: number;
   notificationsFailed: number;
+  trustedRecipientCount?: number;
+  nearbyRecipientCount?: number;
   errors: string[];
   reason?:
     | 'not_authenticated'
+    | 'no_eligible_recipients'
     | 'no_linked_recipients'
-    | 'recipients_without_active_tokens';
+    | 'recipients_without_active_tokens'
+    | 'already_dispatched'
+    | 'rate_limited'
+    | 'unavailable';
 };
 
 type SOSPushResponse = {
@@ -22,8 +28,16 @@ type SOSPushResponse = {
   failed: number;
   recipientCount?: number;
   tokenCount?: number;
+  trustedRecipientCount?: number;
+  nearbyRecipientCount?: number;
   errors?: { code?: string; message: string }[];
-  reason?: 'no_linked_recipients' | 'recipients_without_active_tokens';
+  reason?:
+    | 'no_eligible_recipients'
+    | 'no_linked_recipients'
+    | 'recipients_without_active_tokens'
+    | 'already_dispatched'
+    | 'rate_limited'
+    | 'unavailable';
 };
 
 const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
@@ -147,9 +161,6 @@ async function sendSOSPush(
             },
             body: {
               sosId: sos.id,
-              senderUserId: session.user.id,
-              latitude: sos.latitude,
-              longitude: sos.longitude,
             },
           },
         ),
@@ -196,6 +207,8 @@ async function sendSOSPush(
       httpStatus: 200,
       recipientCount: data?.recipientCount ?? 0,
       tokenCount: data?.tokenCount ?? 0,
+      trustedRecipientCount: data?.trustedRecipientCount ?? 0,
+      nearbyRecipientCount: data?.nearbyRecipientCount ?? 0,
       sent: data?.sent ?? 0,
       failed: data?.failed ?? 0,
       reason: data?.reason,
@@ -209,6 +222,8 @@ async function sendSOSPush(
       tokenCount: data?.tokenCount ?? 0,
       notificationsSent: data?.sent ?? 0,
       notificationsFailed: data?.failed ?? 0,
+      trustedRecipientCount: data?.trustedRecipientCount ?? 0,
+      nearbyRecipientCount: data?.nearbyRecipientCount ?? 0,
       errors: data?.errors?.map((item) => item.message) ?? [],
       ...(data?.reason ? { reason: data.reason } : {}),
     };

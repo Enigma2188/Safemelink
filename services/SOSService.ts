@@ -125,6 +125,8 @@ export const SOSService = {
     console.log('[SafeMeLink Push] Esito consegna SOS.', {
       sosCreated: pushResult.sosCreated,
       recipientCount: pushResult.recipientCount,
+      trustedRecipientCount: pushResult.trustedRecipientCount ?? 0,
+      nearbyRecipientCount: pushResult.nearbyRecipientCount ?? 0,
       tokenCount: pushResult.tokenCount,
       notificationsSent: pushResult.notificationsSent,
       notificationsFailed: pushResult.notificationsFailed,

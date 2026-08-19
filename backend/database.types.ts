@@ -54,6 +54,7 @@ export type Database = {
           status: SosStatus;
           accepted_by: string | null;
           closed_at: string | null;
+          push_dispatched_at: string | null;
         };
         Insert: {
           id?: string;
@@ -67,6 +68,7 @@ export type Database = {
           status?: SosStatus;
           accepted_by?: string | null;
           closed_at?: string | null;
+          push_dispatched_at?: string | null;
         };
         Update: Partial<Database['public']['Tables']['sos']['Insert']>;
         Relationships: [];
@@ -276,6 +278,15 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      initialize_my_account: {
+        Args: Record<string, never>;
+        Returns: {
+          profile_id: string;
+          radar_enabled: boolean;
+          visible_to_nearby: boolean;
+          show_nickname: boolean;
+        }[];
+      };
       get_my_public_code: {
         Args: Record<string, never>;
         Returns: string;
@@ -315,6 +326,19 @@ export type Database = {
           user_id: string;
           active: boolean;
           updated_at: string;
+        }[];
+      };
+      claim_sos_push_dispatch: {
+        Args: { target_sos_id: string };
+        Returns: 'claimed' | 'already_dispatched' | 'rate_limited' | 'unavailable';
+      };
+      prepare_sos_delivery: {
+        Args: { target_sos_id: string };
+        Returns: {
+          recipient_user_id: string;
+          is_trusted: boolean;
+          is_nearby: boolean;
+          distance_meters: number | null;
         }[];
       };
       get_received_sos: {

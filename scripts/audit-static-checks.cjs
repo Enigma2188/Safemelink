@@ -5,6 +5,16 @@ const path = require('node:path');
 // eslint-disable-next-line no-undef
 const root = path.resolve(__dirname, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+const readSourceTree = (relativePath) => {
+  const absolutePath = path.join(root, relativePath);
+  return fs.readdirSync(absolutePath, { withFileTypes: true }).flatMap((entry) => {
+    const childPath = path.join(relativePath, entry.name);
+    if (entry.isDirectory()) {
+      return readSourceTree(childPath);
+    }
+    return /\.(?:ts|tsx|cjs)$/.test(entry.name) ? [read(childPath)] : [];
+  });
+};
 const check = (name, callback) => {
   callback();
   process.stdout.write(`PASS ${name}\n`);
@@ -19,19 +29,22 @@ const radarPresenceMigration = read(
 const radarMigration = read(
   'supabase/migrations/20260722140000_radar_preferences_and_nickname.sql',
 );
+const initialSchemaMigration = read('supabase/migrations/20260714120000_initial_schema.sql');
+const pushSchemaMigration = read('supabase/migrations/20260715120000_minimal_push_test.sql');
 const emergencyService = read('services/EmergencyProfileService.ts');
 const emergencyRepository = read(
   'backend/repositories/EmergencyProfileRepository.ts',
 );
 const emergencyHook = read('hooks/useEmergencyProfile.ts');
 const emergencyScreen = read('screens/EmergencyProfileScreen.tsx');
+const radarScreen = read('screens/RadarScreen.tsx');
 const emergencyMigration = read(
   'supabase/migrations/20260723120000_emergency_profile.sql',
 );
 const backendErrors = read('backend/errors/BackendError.ts');
 const databaseTypes = read('backend/database.types.ts');
 const pushFunction = read('supabase/functions/send-sos-push/index.ts');
-const pushRecipients = read('supabase/functions/_shared/pushRecipients.ts');
+const pushRecipients = read('supabase/functions/send-sos-push/pushRecipients.ts');
 const receivedSOSMigration = read(
   'supabase/migrations/20260722120000_received_sos_details.sql',
 );
@@ -60,11 +73,22 @@ const pushTokenOwnershipMigration = read(
 const trustedLinksHardeningMigration = read(
   'supabase/migrations/20260815121000_trusted_links_hardening.sql',
 );
+const sosProximityNetworkMigration = read(
+  'supabase/migrations/20260817120000_sos_proximity_network.sql',
+);
+const accountBootstrapMigration = read(
+  'supabase/migrations/20260817121000_account_bootstrap_and_sos_dispatch_guard.sql',
+);
+const authService = read('backend/auth/AuthService.ts');
+const authProvider = read('backend/auth/AuthProvider.tsx');
+const accountAccessPanel = read('components/AccountAccessPanel.tsx');
 const locationService = read('services/LocationService.ts');
 const sosService = read('services/SOSService.ts');
 const sosAlertService = read('services/SOSAlertService.ts');
 const trustedLinksService = read('services/TrustedLinksService.ts');
 const sosChannelQueriesPlugin = read('plugins/withSOSChannelQueries.cjs');
+const receivedSOSRepository = read('backend/repositories/ReceivedSOSRepository.ts');
+const receivedSOSScreen = read('app/sos/[id].tsx');
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
@@ -74,8 +98,12 @@ check('Radar client uses 1 km and 25 results', () => {
 check('Radar missing preferences are initialized with safe OFF defaults', () => {
   assert.match(radarRepository, /\.rpc\('get_my_radar_preferences'\)[\s\S]*\.maybeSingle\(\)/);
   assert.match(radarService, /DEFAULT_RADAR_PREFERENCES = \{[\s\S]*radarEnabled: false/);
-  assert.match(radarService, /visibleToNearby: true/);
+  assert.match(radarService, /visibleToNearby: false/);
   assert.match(radarService, /showNickname: false/);
+  assert.match(
+    accountBootstrapMigration,
+    /alter column visible_to_nearby set default false/,
+  );
   assert.match(
     radarService,
     /if \(storedPreferences\)[\s\S]*RadarRepository\.updatePreferences\(DEFAULT_RADAR_PREFERENCES\)/,
@@ -84,6 +112,38 @@ check('Radar missing preferences are initialized with safe OFF defaults', () => 
     radarMigration,
     /insert into public\.radar_preferences \(user_id\)[\s\S]*on conflict \(user_id\) do nothing/,
   );
+});
+
+check('Fresh users can sign up and receive an idempotent account bootstrap', () => {
+  assert.match(authService, /client\.auth\.signUp\(\{ email, password \}\)/);
+  assert.match(authProvider, /AuthService\.initializeAccount\(nextSession\.user\.id\)/);
+  assert.match(accountAccessPanel, /Crea account/);
+  assert.match(accountAccessPanel, /requiresEmailConfirmation/);
+  assert.match(accountBootstrapMigration, /create or replace function public\.handle_new_auth_user/);
+  assert.match(accountBootstrapMigration, /insert into public\.profiles \(id, phone\)/);
+  assert.match(accountBootstrapMigration, /insert into public\.radar_preferences/);
+  assert.match(accountBootstrapMigration, /create or replace function public\.initialize_my_account/);
+  assert.match(accountBootstrapMigration, /current_user_id uuid := auth\.uid\(\)/);
+  assert.doesNotMatch(accountBootstrapMigration, /initialize_my_account\([^)]*uuid/);
+});
+
+check('Fresh-user network defaults require explicit privacy opt-in', () => {
+  assert.match(
+    accountBootstrapMigration,
+    /new\.id,[\s\S]*false,[\s\S]*false,[\s\S]*false,[\s\S]*null/,
+  );
+  assert.match(accountAccessPanel, /dati locali restano separati per ogni utente/);
+  assert.match(radarScreen, /Entra o esci dalla rete SafeMeLink/);
+  assert.match(radarScreen, /Mostrami agli utenti vicini/);
+  assert.match(radarScreen, /value=\{preferences\?\.visibleToNearby \?\? false\}/);
+});
+
+check('Database types cover server-side SOS delivery RPCs', () => {
+  assert.match(databaseTypes, /claim_sos_push_dispatch:[\s\S]*target_sos_id: string/);
+  assert.match(databaseTypes, /prepare_sos_delivery:[\s\S]*recipient_user_id: string/);
+  assert.match(databaseTypes, /is_trusted: boolean/);
+  assert.match(databaseTypes, /is_nearby: boolean/);
+  assert.match(databaseTypes, /distance_meters: number \| null/);
 });
 
 check('Radar OFF performs no location publication or nearby search', () => {
@@ -297,12 +357,28 @@ check('Push function authenticates JWT and binds SOS to its owner', () => {
   assert.match(pushFunction, /\.eq\('status', 'open'\)/);
 });
 
-check('Push recipients are trusted, unique, active, and exclude sender', () => {
-  assert.match(pushRecipients, /\.from\('trusted_contacts'\)/);
-  assert.match(pushRecipients, /\.eq\('user_id', senderUserId\)/);
-  assert.match(pushRecipients, /id !== senderUserId/);
+check('Push recipients are resolved authoritatively, unique, active, and multi-device', () => {
+  assert.match(pushRecipients, /\.rpc\(\s*'prepare_sos_delivery'/);
+  assert.match(pushRecipients, /target_sos_id: sosId/);
+  assert.match(pushRecipients, /\.from\('device_push_tokens'\)/);
   assert.match(pushRecipients, /new Set/);
+  assert.match(pushRecipients, /new Map<string, SOSRecipientToken>/);
   assert.match(pushRecipients, /\.eq\('active', true\)/);
+  assert.doesNotMatch(pushRecipients, /\.from\('trusted_contacts'\)/);
+});
+
+check('SOS push dispatch is idempotent and rate limited on the server', () => {
+  assert.match(pushFunction, /\.rpc\(\s*'claim_sos_push_dispatch'/);
+  assert.match(accountBootstrapMigration, /push_dispatched_at timestamptz/);
+  assert.match(accountBootstrapMigration, /for update/);
+  assert.match(accountBootstrapMigration, /return 'already_dispatched'/);
+  assert.match(accountBootstrapMigration, /interval '5 minutes'/);
+  assert.match(accountBootstrapMigration, /recent_dispatch_count >= 3/);
+  assert.match(
+    accountBootstrapMigration,
+    /grant execute on function public\.claim_sos_push_dispatch\(uuid\) to service_role/,
+  );
+  assert.doesNotMatch(accountBootstrapMigration, /grant execute on function public\.claim_sos_push_dispatch\(uuid\) to authenticated/);
 });
 
 check('Notification data contains no sender UUID or coordinates', () => {
@@ -315,9 +391,67 @@ check('Notification data contains no sender UUID or coordinates', () => {
   assert.doesNotMatch(dataBlock, /senderUserId|latitude|longitude|mapsUrl/);
 });
 
-check('Received SOS RPC requires authentication and a trusted link', () => {
+check('Received SOS RPC accepts only server-selected trusted or nearby recipients', () => {
   assert.match(receivedSOSMigration, /auth\.uid\(\) is not null/);
-  assert.match(receivedSOSMigration, /tc\.linked_profile_id = auth\.uid\(\)/);
+  assert.match(sosProximityNetworkMigration, /trusted_contact\.linked_profile_id = auth\.uid\(\)/);
+  assert.match(sosProximityNetworkMigration, /nearby_alert\.nearby_user_id = auth\.uid\(\)/);
+  assert.match(sosProximityNetworkMigration, /target\.status in \('open', 'accepted'\)/);
+  assert.match(sosProximityNetworkMigration, /else 'Utente SafeMeLink'/);
+});
+
+check('Radar general network never requires a trusted link', () => {
+  assert.doesNotMatch(radarMigration, /trusted_contacts|trusted_contact_requests/);
+  assert.match(radarMigration, /candidate_preferences\.radar_enabled = true/);
+  assert.match(radarMigration, /candidate_preferences\.visible_to_nearby = true/);
+  assert.match(radarMigration, /candidate\.user_id <> current_user_id/);
+});
+
+check('SOS proximity recipients enforce opt-in, TTL, radius, limit, and sender exclusion', () => {
+  assert.match(sosProximityNetworkMigration, /prepare_sos_delivery/);
+  assert.match(sosProximityNetworkMigration, /sender_preferences\.radar_enabled = true/);
+  assert.match(sosProximityNetworkMigration, /sender_preferences\.visible_to_nearby = true/);
+  assert.match(sosProximityNetworkMigration, /preferences\.radar_enabled = true/);
+  assert.match(sosProximityNetworkMigration, /preferences\.visible_to_nearby = true/);
+  assert.match(sosProximityNetworkMigration, /now\(\) - public\.radar_presence_ttl\(\)/);
+  assert.match(sosProximityNetworkMigration, /exact_distance_meters <= 1000/);
+  assert.match(sosProximityNetworkMigration, /presence\.user_id <> target_sos\.user_id/);
+  assert.match(sosProximityNetworkMigration, /limit 25/);
+});
+
+check('Nearby alert authorization expires with the SOS lifecycle', () => {
+  assert.match(accountBootstrapMigration, /expire_nearby_alerts_on_sos_terminal/);
+  assert.match(accountBootstrapMigration, /new\.status in \('closed', 'cancelled'\)/);
+  assert.match(accountBootstrapMigration, /set status = 'expired'/);
+  assert.match(
+    accountBootstrapMigration,
+    /nearby_alert\.status in \('detected', 'acknowledged', 'expired'\)/,
+  );
+  assert.match(
+    accountBootstrapMigration,
+    /after update of status on public\.sos/,
+  );
+});
+
+check('Trusted and nearby SOS recipients remain separate and are deduplicated', () => {
+  assert.match(sosProximityNetworkMigration, /trusted_recipients/);
+  assert.match(sosProximityNetworkMigration, /nearby_recipients/);
+  assert.match(sosProximityNetworkMigration, /union all/);
+  assert.match(sosProximityNetworkMigration, /group by combined\.user_id/);
+  assert.match(sosProximityNetworkMigration, /bool_or\(combined\.trusted\)/);
+  assert.match(sosProximityNetworkMigration, /bool_or\(combined\.nearby\)/);
+});
+
+check('SOS recipient selection is service-role only and client payload chooses no recipients', () => {
+  assert.match(
+    sosProximityNetworkMigration,
+    /revoke all on function public\.prepare_sos_delivery\(uuid\) from public, anon, authenticated/,
+  );
+  assert.match(
+    sosProximityNetworkMigration,
+    /grant execute on function public\.prepare_sos_delivery\(uuid\) to service_role/,
+  );
+  assert.match(pushFunction, /type SOSPushRequest = \{\s*sosId: string;\s*\}/);
+  assert.doesNotMatch(pushFunction, /body\.recipient|recipientIds.*body/);
 });
 
 check('AsyncStorage keys are scoped by account UUID', () => {
@@ -422,6 +556,12 @@ check('Voice Protection state remains local and account scoped', () => {
   assert.match(voiceProtectionService, /VoiceProtectionStorage\.save\(taskUserId/);
 });
 
+check('Voice permission denial offers a direct recovery path', () => {
+  assert.match(voiceProtectionScreen, /showPermissionSettings/);
+  assert.match(voiceProtectionScreen, /Linking\.openSettings\(\)/);
+  assert.match(voiceProtectionScreen, /APRI IMPOSTAZIONI APP/);
+});
+
 check('Push token registration retries and follows native token rotation', () => {
   assert.match(pushTokenRegistrar, /addPushTokenListener/);
   assert.match(pushTokenRegistrar, /registerDevice\('foreground'\)/);
@@ -472,6 +612,23 @@ check('Received SOS events validate and deduplicate the real SOS identifier', ()
   assert.match(sosNotificationCenter, /SOSLifecycleService\.getStatus\(currentEvent\.sosId\)/);
   assert.match(sosNotificationCenter, /isUnavailableSOS\(error\)/);
   assert.match(sosNotificationCenter, /router\.push\(routePath as Href\)/);
+});
+
+check('Received SOS detail is bounded and does not display the complete UUID', () => {
+  assert.match(receivedSOSRepository, /RECEIVED_SOS_REQUEST_TIMEOUT_MS = 12_000/);
+  assert.match(receivedSOSRepository, /\.abortSignal\(controller\.signal\)/);
+  assert.match(receivedSOSRepository, /clearTimeout\(timeoutId\)/);
+  assert.match(receivedSOSScreen, /formatSOSReference/);
+  assert.doesNotMatch(receivedSOSScreen, /selectable style=\{styles\.eventId\}/);
+});
+
+check('Permission recovery and logout cleanup remain bounded', () => {
+  assert.match(radarScreen, /Apri impostazioni/);
+  assert.match(radarScreen, /Linking\.openSettings\(\)/);
+  assert.match(
+    pushNotificationService,
+    /runPushStepWithTimeout\([\s\S]*PushTokenRepository\.removeForUserAndToken/,
+  );
 });
 
 check('Foreground SOS uses the in-app alert while preserving one sound', () => {
@@ -639,6 +796,12 @@ check('Trusted contacts distinguish and deduplicate local and linked recipients'
   assert.doesNotMatch(homeScreen, /contacts\.length\}\/3/);
 });
 
+check('UI separates the general network from the personal trusted circle', () => {
+  assert.match(radarScreen, /La partecipazione alla rete non crea contatti fidati/);
+  assert.match(contactsScreen, /cerchia personale, separata dalla rete generale SafeMeLink/);
+  assert.match(contactsScreen, /contatto fidato personale e prioritario per gli SOS/);
+});
+
 check('Trusted contacts migrate phone fallbacks but links require accepted requests', () => {
   assert.match(trustedLinksService, /initialMerge\.localOnlyContacts/);
   assert.match(trustedLinksService, /linked_profile_id: null/);
@@ -650,6 +813,46 @@ check('Trusted contacts migrate phone fallbacks but links require accepted reque
   assert.match(
     trustedLinksHardeningMigration,
     /prevent_direct_trusted_link_change/,
+  );
+});
+
+check('Fundamental production queries have bounded access paths', () => {
+  assert.match(initialSchemaMigration, /sos_user_created_idx/);
+  assert.match(initialSchemaMigration, /nearby_alerts_unique_detection unique \(sos_id, nearby_user_id\)/);
+  assert.match(initialSchemaMigration, /nearby_alerts_nearby_user_created_idx/);
+  assert.match(initialSchemaMigration, /trusted_contacts_user_idx/);
+  assert.match(pushSchemaMigration, /expo_push_token text not null unique/);
+  assert.match(pushSchemaMigration, /device_push_tokens_user_active_idx/);
+  assert.match(radarPresenceMigration, /radar_presence_recent_active_idx/);
+  assert.match(radarMigration, /user_id uuid primary key/);
+  assert.match(accountBootstrapMigration, /sos_push_dispatch_rate_idx/);
+});
+
+check('Anonymous nearby users never enter the personal phone fallback', () => {
+  assert.doesNotMatch(sosAlertService, /RadarService|NearbyUser|nearby_alerts|radar_presence/);
+  assert.match(sosService, /sendSosAlert\(completedEvent, contacts\)/);
+  assert.match(sosService, /ContactsService\.list\(expectedUserId\)/);
+});
+
+check('Production source contains no hardcoded test accounts or credentials', () => {
+  const productionSource = [
+    ...readSourceTree('app'),
+    ...readSourceTree('backend'),
+    ...readSourceTree('components'),
+    ...readSourceTree('hooks'),
+    ...readSourceTree('screens'),
+    ...readSourceTree('services'),
+    ...readSourceTree('storage'),
+    ...readSourceTree('supabase/functions'),
+  ].join('\n');
+  assert.doesNotMatch(productionSource, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  assert.doesNotMatch(
+    productionSource,
+    /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+  );
+  assert.doesNotMatch(
+    productionSource,
+    /(?:ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{8,}\]/,
   );
 });
 

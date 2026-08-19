@@ -307,7 +307,7 @@ export function SOSNotificationCenter() {
         </View>
 
         <Text style={styles.message}>
-          {notice ?? openError ?? 'Un tuo contatto SafeMeLink ha attivato un’emergenza.'}
+          {notice ?? openError ?? 'Un utente SafeMeLink ha attivato un’emergenza.'}
         </Text>
 
         {displayedEvent ? (

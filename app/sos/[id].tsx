@@ -19,6 +19,8 @@ const statusLabels: Record<ReceivedSOS['sos_status'], string> = {
   cancelled: 'Annullato',
 };
 
+const formatSOSReference = (sosId: string) => sosId.slice(0, 8).toUpperCase();
+
 export default function ReceivedSOSScreen() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const router = useRouter();
@@ -249,8 +251,8 @@ export default function ReceivedSOSScreen() {
             {sos.latitude}, {sos.longitude}
           </Text>
 
-          <Text style={styles.label}>Identificativo evento</Text>
-          <Text selectable style={styles.eventId}>{sos.sos_id}</Text>
+          <Text style={styles.label}>Riferimento evento</Text>
+          <Text style={styles.eventId}>{formatSOSReference(sos.sos_id)}</Text>
 
           <Pressable style={styles.primaryButton} onPress={() => void openMap()}>
             <Text style={styles.primaryButtonText}>Apri posizione nella mappa</Text>
@@ -280,8 +282,8 @@ export default function ReceivedSOSScreen() {
           <Text style={styles.closedNotice}>
             L’emergenza non è più attiva. Coordinate e dati protetti non sono più disponibili.
           </Text>
-          <Text style={styles.label}>Identificativo evento</Text>
-          <Text selectable style={styles.eventId}>{remoteState.sos_id}</Text>
+          <Text style={styles.label}>Riferimento evento</Text>
+          <Text style={styles.eventId}>{formatSOSReference(remoteState.sos_id)}</Text>
         </View>
       ) : null}
 

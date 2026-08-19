@@ -4,7 +4,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet } from 'react-na
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
-import { TestAuthPanel } from '@/components/TestAuthPanel';
+import { AccountAccessPanel } from '@/components/AccountAccessPanel';
 
 export default function LoginScreen() {
   const { session, isInitializing } = useAuth();
@@ -80,7 +80,7 @@ export default function LoginScreen() {
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled">
-          <TestAuthPanel />
+          <AccountAccessPanel />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -89,7 +89,7 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#050816',
     flex: 1,
   },
   content: {

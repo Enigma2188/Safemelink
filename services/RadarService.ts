@@ -48,7 +48,7 @@ export type RadarNicknameValidation =
 
 export const DEFAULT_RADAR_PREFERENCES = {
   radarEnabled: false,
-  visibleToNearby: true,
+  visibleToNearby: false,
   showNickname: false,
   publicNickname: null,
 } as const;

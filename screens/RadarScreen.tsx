@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -103,6 +104,17 @@ export function RadarScreen() {
         setActionError(
           saveError instanceof Error ? saveError.message : 'Salvataggio Radar non riuscito.',
         );
+      }
+    }
+  };
+  const openLocationSettings = async () => {
+    setActionError(null);
+
+    try {
+      await Linking.openSettings();
+    } catch {
+      if (isMountedRef.current) {
+        setActionError('Impossibile aprire le impostazioni. Aprile manualmente e abilita la posizione.');
       }
     }
   };
@@ -233,6 +245,15 @@ export function RadarScreen() {
                 <Text style={styles.refreshButtonText}>Riprova</Text>
               </Pressable>
             ) : null}
+            {status === 'permission_required' ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void openLocationSettings()}
+                style={styles.refreshButton}>
+                <Ionicons color="#DDEEFF" name="settings-outline" size={17} />
+                <Text style={styles.refreshButtonText}>Apri impostazioni</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -240,7 +261,7 @@ export function RadarScreen() {
           <Text style={styles.settingsTitle}>Preferenze Radar</Text>
           <Text style={styles.explanationText}>
             Per vedere gli utenti vicini devi essere visibile anche tu. La tua posizione precisa
-            non verrà mai mostrata.
+            non verrà mai mostrata. La partecipazione alla rete non crea contatti fidati.
           </Text>
 
           <View style={styles.settingRow}>
@@ -269,7 +290,7 @@ export function RadarScreen() {
               onValueChange={(visibleToNearby) => void saveChanges({ visibleToNearby })}
               thumbColor={preferences?.visibleToNearby ? '#F7FAFF' : '#A8B5D1'}
               trackColor={{ false: '#29324D', true: '#7868FF' }}
-              value={preferences?.visibleToNearby ?? true}
+              value={preferences?.visibleToNearby ?? false}
             />
           </View>
 
