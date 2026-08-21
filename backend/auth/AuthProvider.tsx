@@ -1,7 +1,11 @@
 import type { Session } from '@supabase/supabase-js';
 import { createContext, type PropsWithChildren, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState } from 'react-native';
 
-import { AuthService } from '@/backend/auth/AuthService';
+import {
+  AuthService,
+  classifyAuthFailure,
+} from '@/backend/auth/AuthService';
 import { PushNotificationService } from '@/services/PushNotificationService';
 import { RadarService } from '@/services/RadarService';
 
@@ -9,6 +13,7 @@ type AuthContextValue = {
   session: Session | null;
   isInitializing: boolean;
   isSubmitting: boolean;
+  isOffline: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
   signup: (
@@ -63,49 +68,173 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
     let sessionGeneration = 0;
     let initializedUserId: string | null = null;
+    let offlineUserId: string | null = null;
+    let currentSession: Session | null = null;
+    let recoveryAttempt = 0;
+    let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const applySession = async (nextSession: Session | null) => {
-      const generation = ++sessionGeneration;
+    const clearRecoveryTimer = () => {
+      if (recoveryTimer) {
+        clearTimeout(recoveryTimer);
+        recoveryTimer = null;
+      }
+    };
 
-      if (!nextSession) {
-        initializedUserId = null;
-        if (isMounted) {
-          setSession(null);
-          setIsInitializing(false);
-        }
+    const invalidateSession = (generation: number) => {
+      if (!isMounted || generation !== sessionGeneration) {
         return;
       }
 
+      clearRecoveryTimer();
+      currentSession = null;
+      initializedUserId = null;
+      offlineUserId = null;
+      setSession(null);
+      setIsOffline(false);
+      setError('La sessione è scaduta. Accedi nuovamente.');
+      setIsInitializing(false);
+    };
+
+    const bootstrapSession = async (
+      nextSession: Session,
+      generation: number,
+      allowRefresh = true,
+    ): Promise<void> => {
       try {
-        if (initializedUserId !== nextSession.user.id) {
-          await AuthService.initializeAccount(nextSession.user.id);
-          if (generation === sessionGeneration) {
-            initializedUserId = nextSession.user.id;
+        await AuthService.initializeAccount(nextSession.user.id);
+
+        if (!isMounted || generation !== sessionGeneration) {
+          return;
+        }
+
+        clearRecoveryTimer();
+        recoveryAttempt = 0;
+        initializedUserId = nextSession.user.id;
+        offlineUserId = null;
+        setSession(nextSession);
+        setIsOffline(false);
+        setError(null);
+      } catch (initializationError: unknown) {
+        if (!isMounted || generation !== sessionGeneration) {
+          return;
+        }
+
+        const category = classifyAuthFailure(initializationError);
+        if (category === 'network') {
+          offlineUserId = nextSession.user.id;
+          setSession(nextSession);
+          setIsOffline(true);
+          setError(null);
+          scheduleRecovery(nextSession, generation);
+          return;
+        }
+
+        if (category === 'invalid_session' && allowRefresh) {
+          try {
+            const refreshedSession = await AuthService.refreshSession();
+            if (
+              !refreshedSession ||
+              refreshedSession.user.id !== nextSession.user.id
+            ) {
+              invalidateSession(generation);
+              return;
+            }
+
+            if (!isMounted || generation !== sessionGeneration) {
+              return;
+            }
+
+            currentSession = refreshedSession;
+            setSession(refreshedSession);
+            await bootstrapSession(refreshedSession, generation, false);
+            return;
+          } catch (refreshError: unknown) {
+            if (classifyAuthFailure(refreshError) === 'network') {
+              offlineUserId = nextSession.user.id;
+              setSession(nextSession);
+              setIsOffline(true);
+              setError(null);
+              scheduleRecovery(nextSession, generation);
+              return;
+            }
           }
         }
 
-        if (isMounted && generation === sessionGeneration) {
-          setSession(nextSession);
-          setError(null);
+        if (category === 'invalid_session') {
+          invalidateSession(generation);
+          return;
         }
-      } catch (initializationError: unknown) {
-        if (isMounted && generation === sessionGeneration) {
-          setSession((currentSession) =>
-            currentSession?.user.id === nextSession.user.id ? currentSession : null,
-          );
-          setError(getErrorMessage(initializationError));
-        }
+
+        setSession(nextSession);
+        setIsOffline(false);
+        setError(getErrorMessage(initializationError));
       } finally {
         if (isMounted && generation === sessionGeneration) {
           setIsInitializing(false);
         }
       }
+    };
+
+    function scheduleRecovery(nextSession: Session, generation: number) {
+      if (
+        !isMounted ||
+        generation !== sessionGeneration ||
+        recoveryTimer ||
+        offlineUserId !== nextSession.user.id
+      ) {
+        return;
+      }
+
+      const delayMs = Math.min(60_000, 5_000 * 2 ** Math.min(recoveryAttempt, 4));
+      recoveryAttempt += 1;
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = null;
+        if (
+          isMounted &&
+          generation === sessionGeneration &&
+          currentSession?.user.id === nextSession.user.id
+        ) {
+          void bootstrapSession(currentSession, generation);
+        }
+      }, delayMs);
+    }
+
+    const applySession = async (nextSession: Session | null) => {
+      const generation = ++sessionGeneration;
+      clearRecoveryTimer();
+      currentSession = nextSession;
+
+      if (!nextSession) {
+        initializedUserId = null;
+        offlineUserId = null;
+        recoveryAttempt = 0;
+        if (isMounted) {
+          setSession(null);
+          setIsOffline(false);
+          setIsInitializing(false);
+        }
+        return;
+      }
+
+      if (isMounted) {
+        setSession(nextSession);
+        setIsInitializing(false);
+        setError(null);
+      }
+
+      if (initializedUserId === nextSession.user.id && offlineUserId === null) {
+        setIsOffline(false);
+        return;
+      }
+
+      await bootstrapSession(nextSession, generation);
     };
 
     const subscription = AuthService.onAuthStateChange((_event, nextSession) => {
@@ -118,7 +247,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       })
       .catch((sessionError: unknown) => {
         if (isMounted) {
-          setError(getErrorMessage(sessionError));
+          const category = classifyAuthFailure(sessionError);
+          setIsOffline(category === 'network');
+          setError(category === 'network' ? null : getErrorMessage(sessionError));
         }
       })
       .finally(() => {
@@ -127,9 +258,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
       });
 
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || !currentSession || !offlineUserId) {
+        return;
+      }
+
+      clearRecoveryTimer();
+      void bootstrapSession(currentSession, sessionGeneration);
+    });
+
     return () => {
       isMounted = false;
+      clearRecoveryTimer();
       subscription?.unsubscribe();
+      appStateSubscription.remove();
     };
   }, []);
 
@@ -138,6 +280,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       session,
       isInitializing,
       isSubmitting,
+      isOffline,
       error,
       login: async (email, password) => {
         setIsSubmitting(true);
@@ -150,8 +293,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
             throw new Error('Accesso non completato. Verifica l’account e riprova.');
           }
 
-          await AuthService.initializeAccount(nextSession.user.id);
           setSession(nextSession);
+          setIsOffline(false);
         } catch (loginError: unknown) {
           setError(getErrorMessage(loginError));
         } finally {
@@ -166,8 +309,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
           const result = await AuthService.signUp(email.trim(), password);
 
           if (result.session) {
-            await AuthService.initializeAccount(result.session.user.id);
             setSession(result.session);
+            setIsOffline(false);
           }
 
           return { requiresEmailConfirmation: result.requiresEmailConfirmation };
@@ -179,6 +322,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
       },
       logout: async () => {
+        if (isOffline) {
+          setError('Sei offline. Riconnettiti prima di cambiare o disconnettere l’account.');
+          return;
+        }
+
         setIsSubmitting(true);
         setError(null);
 
@@ -207,7 +355,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
       },
     }),
-    [error, isInitializing, isSubmitting, session],
+    [error, isInitializing, isOffline, isSubmitting, session],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -79,6 +79,8 @@ export type Database = {
           user_id: string;
           name: string;
           phone: string | null;
+          phone_e164: string | null;
+          preferred_channel: 'sms' | 'whatsapp';
           priority: number;
           linked_profile_id: string | null;
         };
@@ -87,12 +89,16 @@ export type Database = {
           user_id: string;
           name: string;
           phone?: string | null;
+          phone_e164?: string | null;
+          preferred_channel?: 'sms' | 'whatsapp';
           priority: number;
           linked_profile_id?: string | null;
         };
         Update: {
           name?: string;
           phone?: string | null;
+          phone_e164?: string | null;
+          preferred_channel?: 'sms' | 'whatsapp';
           priority?: number;
           linked_profile_id?: string | null;
         };

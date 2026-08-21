@@ -11,13 +11,13 @@ import {
 const MAX_AUTOMATIC_RETRY_ATTEMPTS = 5;
 
 export function PushTokenRegistrar() {
-  const { session } = useAuth();
+  const { isOffline, session } = useAuth();
   const permissionAlertShownForUser = useRef(new Set<string>());
 
   useEffect(() => {
     const userId = session?.user.id;
 
-    if (!userId) {
+    if (!userId || isOffline) {
       return;
     }
 
@@ -145,7 +145,7 @@ export function PushTokenRegistrar() {
       appStateSubscription.remove();
       pushTokenSubscription.remove();
     };
-  }, [session?.user.id]);
+  }, [isOffline, session?.user.id]);
 
   return null;
 }

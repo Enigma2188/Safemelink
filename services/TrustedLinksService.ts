@@ -2,6 +2,7 @@ import { AuthService } from '@/backend/auth/AuthService';
 import { TrustedContactsRepository } from '@/backend/repositories/TrustedContactsRepository';
 import { TrustedLinksRepository } from '@/backend/repositories/TrustedLinksRepository';
 import type { TrustedContact } from '@/services/ContactsService';
+import { getPhoneIdentityKey } from '@/services/PhoneIdentity';
 import { ContactsStorage } from '@/storage/ContactsStorage';
 
 export type TrustedLinkRequest = Awaited<
@@ -9,9 +10,6 @@ export type TrustedLinkRequest = Awaited<
 >[number];
 
 const maskCode = (code: string) => `${code.slice(0, 4)}••••${code.slice(-2)}`;
-const normalizePhoneIdentity = (phone: string | null | undefined) =>
-  phone?.replace(/[^\d+]/g, '') ?? '';
-
 type RemoteTrustedContact = Awaited<
   ReturnType<typeof TrustedContactsRepository.listOwn>
 >[number];
@@ -28,9 +26,9 @@ const findMatchingLocalContact = (
           contact.userId === remoteContact.linked_profile_id,
       ) ||
       Boolean(
-        remoteContact.phone &&
-          normalizePhoneIdentity(contact.phone) ===
-            normalizePhoneIdentity(remoteContact.phone),
+        getPhoneIdentityKey(remoteContact.phone, remoteContact.phone_e164) &&
+          getPhoneIdentityKey(contact.phone, contact.phoneE164) ===
+            getPhoneIdentityKey(remoteContact.phone, remoteContact.phone_e164),
       ),
   );
 
@@ -53,28 +51,47 @@ const mergeRemoteAndLocalContacts = (
       remoteId: remoteContact.id,
       name: remoteContact.name,
       phone: remoteContact.phone ?? existing?.phone ?? '',
+      phoneE164:
+        remoteContact.phone_e164 ??
+        getPhoneIdentityKey(remoteContact.phone, existing?.phoneE164),
+      priority: remoteContact.priority,
       hasApp: Boolean(linkedProfileId),
       ...(linkedProfileId ? { userId: linkedProfileId } : {}),
-      preferredChannel: existing?.preferredChannel ?? 'sms',
+      preferredChannel: remoteContact.preferred_channel,
+      isLegacyLocal: false,
     };
+    const canonicalPhone = getPhoneIdentityKey(
+      remoteContact.phone,
+      remoteContact.phone_e164,
+    );
     const identity = linkedProfileId
       ? `linked:${linkedProfileId}`
-      : `remote:${remoteContact.id}`;
-    remoteContactsByIdentity.set(identity, contact);
+      : canonicalPhone
+        ? `phone:${canonicalPhone}`
+        : `remote:${remoteContact.id}`;
+
+    if (remoteContactsByIdentity.has(identity)) {
+      console.info('[TrustedLinks] DUPLICATE_CANONICAL_REMOVED');
+    } else {
+      remoteContactsByIdentity.set(identity, contact);
+    }
   }
 
-  const localOnlyContacts = localContacts
-    .filter((contact) => !mergedLocalIds.has(contact.id) && Boolean(contact.phone))
-    .map((contact) => ({
-      ...contact,
-      remoteId: undefined,
-      hasApp: false,
-      userId: undefined,
-    }));
+  const legacyContacts = localContacts
+    .filter((contact) => !mergedLocalIds.has(contact.id) && contact.isLegacyLocal)
+    .map((contact) => ({ ...contact, isLegacyLocal: true }));
+  if (legacyContacts.length > 0) {
+    console.info('[TrustedLinks] cache locale in attesa di decisione esplicita', {
+      category: 'CONTACT_SOURCE_LOCAL_CACHE',
+      pendingCount: legacyContacts.length,
+    });
+  }
 
   return {
-    contacts: [...remoteContactsByIdentity.values(), ...localOnlyContacts],
-    localOnlyContacts,
+    contacts: [...remoteContactsByIdentity.values()].sort(
+      (first, second) => first.priority - second.priority,
+    ),
+    legacyContacts,
   };
 };
 
@@ -91,34 +108,8 @@ export const TrustedLinksService = {
     console.log('[TrustedLinks] sincronizzazione avviata');
 
     try {
-      let remoteContacts = await TrustedContactsRepository.listOwn();
-      const initialMerge = mergeRemoteAndLocalContacts(localContacts, remoteContacts);
-
-      if (initialMerge.localOnlyContacts.length > 0) {
-        let nextPriority = remoteContacts.reduce(
-          (highest, contact) => Math.max(highest, contact.priority),
-          0,
-        );
-
-        for (const localContact of initialMerge.localOnlyContacts) {
-          nextPriority += 1;
-          await TrustedContactsRepository.create({
-            user_id: userId,
-            name: localContact.name,
-            phone: localContact.phone,
-            priority: nextPriority,
-            linked_profile_id: null,
-          });
-          console.log('[TrustedContacts] contatto creato');
-        }
-
-        remoteContacts = await TrustedContactsRepository.listOwn();
-      }
-
-      const nextContacts = mergeRemoteAndLocalContacts(
-        localContacts,
-        remoteContacts,
-      ).contacts;
+      const remoteContacts = await TrustedContactsRepository.listOwn();
+      const mergedContacts = mergeRemoteAndLocalContacts(localContacts, remoteContacts);
 
       const currentSession = await AuthService.getSession();
 
@@ -126,13 +117,17 @@ export const TrustedLinksService = {
         return [];
       }
 
-      await ContactsStorage.saveContacts(userId, nextContacts);
+      await ContactsStorage.saveContacts(userId, [
+        ...mergedContacts.contacts,
+        ...mergedContacts.legacyContacts,
+      ]);
+      console.info('[TrustedLinks] CONTACT_SOURCE_REMOTE');
       console.log('[TrustedLinks] sincronizzazione locale completata', {
-        linkedContacts: nextContacts.filter((contact) => contact.userId).length,
+        linkedContacts: mergedContacts.contacts.filter((contact) => contact.userId).length,
         remoteContacts: remoteContacts.length,
       });
 
-      return nextContacts;
+      return mergedContacts.contacts;
     } catch (error) {
       console.error('[TrustedLinks] errore collegamento', {
         category: error instanceof Error ? error.name : 'unknown',
@@ -149,6 +144,7 @@ export const TrustedLinksService = {
         publicCode: null,
         requests: [] as TrustedLinkRequest[],
         contacts: [] as TrustedContact[],
+        legacyContacts: [] as TrustedContact[],
       };
     }
 
@@ -167,7 +163,11 @@ export const TrustedLinksService = {
       ).length,
     });
 
-    return { publicCode, requests, contacts };
+    const legacyContacts = (await ContactsStorage.getContacts(session.user.id)).filter(
+      (contact) => contact.isLegacyLocal,
+    );
+
+    return { publicCode, requests, contacts, legacyContacts };
   },
 
   async sendRequest(publicCode: string) {

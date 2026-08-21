@@ -214,6 +214,25 @@ async function sendSOSPush(
       reason: data?.reason,
       errorCount: data?.errors?.length ?? 0,
     });
+    console.info('[SafeMeLink SOS] SOS_NEARBY_RECIPIENT_COUNT', {
+      count: data?.nearbyRecipientCount ?? 0,
+    });
+    const recipientSelectionSkipped =
+      data?.reason === 'already_dispatched' ||
+      data?.reason === 'rate_limited' ||
+      data?.reason === 'unavailable';
+    if (!recipientSelectionSkipped && (data?.nearbyRecipientCount ?? 0) === 0) {
+      console.info('[SafeMeLink SOS] SOS_NEARBY_NO_ELIGIBLE_USERS');
+    }
+    console.info('[SafeMeLink Push] PUSH_TOKEN_COUNT', {
+      count: data?.tokenCount ?? 0,
+    });
+    console.info('[SafeMeLink Push] PUSH_SENT_COUNT', {
+      count: data?.sent ?? 0,
+    });
+    console.info('[SafeMeLink Push] PUSH_FAILED_COUNT', {
+      count: data?.failed ?? 0,
+    });
 
     return {
       sosCreated: true,

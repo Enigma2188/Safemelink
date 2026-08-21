@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { AuthProvider } from '@/backend/auth/AuthProvider';
+import { OfflineStatusBanner } from '@/components/OfflineStatusBanner';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { RadarProvider } from '@/components/RadarProvider';
 import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
@@ -25,6 +26,7 @@ export default function RootLayout() {
         <VoiceProtectionLifecycle />
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={styles.container}>
+            <OfflineStatusBanner />
             <Stack>
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="login" options={{ title: 'Login' }} />

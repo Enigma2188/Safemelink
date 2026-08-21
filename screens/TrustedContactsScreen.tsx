@@ -34,9 +34,10 @@ const emptyForm: ContactForm = {
 };
 
 export function TrustedContactsScreen() {
-  const { session, isInitializing } = useAuth();
+  const { session, isInitializing, isOffline } = useAuth();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
+  const [legacyContacts, setLegacyContacts] = useState<TrustedContact[]>([]);
   const [form, setForm] = useState<ContactForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [publicCode, setPublicCode] = useState<string | null>(null);
@@ -63,6 +64,23 @@ export function TrustedContactsScreen() {
     }
 
     try {
+      if (isOffline) {
+        const cachedContacts = await ContactsService.listCached(loadUserId);
+
+        if (
+          activeUserIdRef.current !== loadUserId ||
+          loadGenerationRef.current !== loadGeneration
+        ) {
+          return;
+        }
+
+        setContacts(cachedContacts);
+        setLegacyContacts([]);
+        setPublicCode(null);
+        setRequests([]);
+        return;
+      }
+
       const overview = await TrustedLinksService.loadOverview();
 
       if (
@@ -73,6 +91,7 @@ export function TrustedContactsScreen() {
       }
 
       setContacts(overview.contacts);
+      setLegacyContacts(overview.legacyContacts);
       setPublicCode(overview.publicCode);
       setRequests(overview.requests);
     } catch {
@@ -83,11 +102,12 @@ export function TrustedContactsScreen() {
         Alert.alert('Contatti fidati', 'Non riesco a caricare i contatti salvati.');
       }
     }
-  }, [isInitializing, userId]);
+  }, [isInitializing, isOffline, userId]);
 
   useEffect(() => {
     loadGenerationRef.current += 1;
     setContacts([]);
+    setLegacyContacts([]);
     setForm(emptyForm);
     setEditingId(null);
     setPublicCode(null);
@@ -213,6 +233,56 @@ export function TrustedContactsScreen() {
         },
       },
     ]);
+  };
+
+  const importLegacyContact = async (contact: TrustedContact) => {
+    if (!userId || contactActionInFlightRef.current) {
+      return;
+    }
+
+    contactActionInFlightRef.current = true;
+    const actionGeneration = contactActionGenerationRef.current + 1;
+    contactActionGenerationRef.current = actionGeneration;
+    setContactActionPending(true);
+
+    try {
+      await ContactsService.importLegacy(contact.id);
+      await loadContacts();
+    } catch (error) {
+      Alert.alert(
+        'Importa contatto',
+        error instanceof Error ? error.message : 'Non riesco a importare il contatto.',
+      );
+    } finally {
+      if (contactActionGenerationRef.current === actionGeneration) {
+        contactActionInFlightRef.current = false;
+      }
+      if (contactActionGenerationRef.current === actionGeneration) {
+        setContactActionPending(false);
+      }
+    }
+  };
+
+  const discardLegacyContact = (contact: TrustedContact) => {
+    Alert.alert(
+      'Rimuovi dato locale',
+      'Vuoi rimuovere questo vecchio contatto soltanto dal dispositivo?',
+      [
+        { text: 'Annulla', style: 'cancel' },
+        {
+          text: 'Rimuovi',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await ContactsService.discardLegacy(contact.id);
+              await loadContacts();
+            } catch {
+              Alert.alert('Contatti fidati', 'Non riesco a rimuovere il dato locale.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const sendLinkRequest = async () => {
@@ -475,8 +545,8 @@ export function TrustedContactsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
         <Text style={styles.sectionHelp}>
-          Il numero telefonico viene sincronizzato come fallback SMS/WhatsApp, ma non collega un
-          account SafeMeLink.
+          Usa il numero completo di prefisso internazionale (per esempio +39). Il numero viene
+          sincronizzato come fallback SMS/WhatsApp, ma non collega un account SafeMeLink.
         </Text>
         <TextInput
           editable={!contactActionPending}
@@ -510,7 +580,7 @@ export function TrustedContactsScreen() {
         <TextInput
           editable={!contactActionPending}
           style={styles.input}
-          placeholder="Numero di telefono"
+          placeholder="Numero internazionale (es. +39...)"
           placeholderTextColor="#687076"
           keyboardType="phone-pad"
           value={form.phone}
@@ -556,6 +626,11 @@ export function TrustedContactsScreen() {
                     ? ` · Fallback ${contact.preferredChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'}`
                     : ''}
                 </Text>
+                {contact.phone && !contact.phoneE164 ? (
+                  <Text style={styles.legacyPhoneWarning}>
+                    Aggiungi il prefisso internazionale per usare WhatsApp.
+                  </Text>
+                ) : null}
               </View>
               <View style={styles.actions}>
                 <Pressable
@@ -575,6 +650,38 @@ export function TrustedContactsScreen() {
           ))
         )}
       </View>
+
+      {legacyContacts.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Contatti locali precedenti</Text>
+          <Text style={styles.sectionHelp}>
+            Questi dati non vengono sincronizzati automaticamente. Importali soltanto se vuoi
+            conservarli nel tuo account SafeMeLink.
+          </Text>
+          {legacyContacts.map((contact) => (
+            <View key={contact.id} style={styles.contactRow}>
+              <View style={styles.contactInfo}>
+                <Text style={styles.contactName}>{contact.name}</Text>
+                <Text style={styles.contactPhone}>{contact.phone}</Text>
+              </View>
+              <View style={styles.actions}>
+                <Pressable
+                  disabled={contactActionPending}
+                  onPress={() => void importLegacyContact(contact)}
+                  style={styles.smallButton}>
+                  <Text style={styles.smallButtonText}>Importa</Text>
+                </Pressable>
+                <Pressable
+                  disabled={contactActionPending}
+                  onPress={() => discardLegacyContact(contact)}
+                  style={styles.dangerButton}>
+                  <Text style={styles.dangerButtonText}>Rimuovi</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -710,6 +817,11 @@ const styles = StyleSheet.create({
   },
   contactMeta: {
     color: '#687076',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  legacyPhoneWarning: {
+    color: '#9a6700',
     fontSize: 12,
     marginTop: 4,
   },

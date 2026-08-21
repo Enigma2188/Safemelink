@@ -1,5 +1,6 @@
 import type { TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
+import { getPhoneIdentityKey } from '@/services/PhoneIdentity';
 import {
   getAccountStorageItem,
   setAccountStorageItem,
@@ -14,26 +15,32 @@ type StoredContact = {
   name: string;
   number?: string;
   phone?: string;
+  phoneE164?: string | null;
   selected?: boolean;
   hasApp?: boolean;
   userId?: string;
   preferredChannel?: PreferredSosChannel;
+  priority?: number;
+  isLegacyLocal?: boolean;
 };
 
 const normalizeContacts = (contacts: StoredContact[]) => {
   const uniqueContacts = new Map<string, TrustedContact>();
 
-  for (const contact of contacts) {
+  for (const [index, contact] of contacts.entries()) {
     const phone = contact.phone ?? contact.number ?? '';
-    const normalizedPhone = phone.replace(/[^\d+]/g, '');
+    const phoneE164 = getPhoneIdentityKey(phone, contact.phoneE164);
     const normalizedContact: TrustedContact = {
-      id: contact.id ?? `${contact.name}-${normalizedPhone || 'linked'}`,
+      id: contact.id ?? (phoneE164 ? `phone:${phoneE164}` : `legacy:${index}`),
       ...(contact.remoteId ? { remoteId: contact.remoteId } : {}),
       name: contact.name,
       phone,
+      phoneE164,
+      priority: contact.priority ?? Number.MAX_SAFE_INTEGER,
       hasApp: contact.hasApp ?? false,
       ...(contact.userId ? { userId: contact.userId } : {}),
       preferredChannel: contact.preferredChannel ?? 'sms',
+      isLegacyLocal: contact.isLegacyLocal ?? !contact.remoteId,
     };
 
     if (!normalizedContact.name || (!normalizedContact.phone && !normalizedContact.userId)) {
@@ -44,7 +51,9 @@ const normalizeContacts = (contacts: StoredContact[]) => {
       ? `remote:${normalizedContact.remoteId}`
       : normalizedContact.userId
         ? `linked:${normalizedContact.userId}`
-        : `local:${normalizedPhone}`;
+        : phoneE164
+          ? `phone:${phoneE164}`
+          : `legacy:${normalizedContact.id}`;
     uniqueContacts.set(identity, normalizedContact);
   }
 

@@ -16,14 +16,14 @@ import {
 } from 'react-native';
 
 import { useNearbyUsers, type RadarViewStatus } from '@/hooks/useNearbyUsers';
-import { validateRadarNickname } from '@/services/RadarService';
+import { canParticipateInRadar, validateRadarNickname } from '@/services/RadarService';
 
 const statusMessages: Record<Exclude<RadarViewStatus, 'ready'>, string> = {
   loading_preferences: 'Caricamento preferenze Radar...',
   off: 'Radar disattivato.',
   visibility_required: 'Attiva “Mostrami agli utenti vicini” per entrare nella rete Radar.',
   searching: 'Ricerca utenti vicini...',
-  empty: 'Radar attivo: nessun utente recente nelle vicinanze.',
+  empty: 'Presenza pubblicata: nessun altro utente idoneo nelle vicinanze.',
   permission_required: 'Autorizzazione alla posizione necessaria per usare il Radar.',
   position_unavailable: 'Posizione non disponibile.',
   accuracy_insufficient: 'Segnale GPS non abbastanza preciso. Riprova in uno spazio aperto.',
@@ -52,6 +52,7 @@ export function RadarScreen() {
   const isMountedRef = useRef(true);
   const radarPulse = useRef(new Animated.Value(0)).current;
   const nicknameValidation = validateRadarNickname(nicknameDraft);
+  const isParticipating = canParticipateInRadar(preferences);
 
   useFocusEffect(
     useCallback(() => {
@@ -267,16 +268,18 @@ export function RadarScreen() {
           <View style={styles.settingRow}>
             <View style={styles.settingCopy}>
               <Text style={styles.settingTitle}>
-                Radar {preferences?.radarEnabled ? 'ON' : 'OFF'}
+                Radar {isParticipating ? 'ON' : 'OFF'}
               </Text>
               <Text style={styles.settingDescription}>Entra o esci dalla rete SafeMeLink.</Text>
             </View>
             <Switch
               disabled={!preferences || isSavingPreferences}
-              onValueChange={(radarEnabled) => void saveChanges({ radarEnabled })}
-              thumbColor={preferences?.radarEnabled ? '#F7FAFF' : '#A8B5D1'}
+              onValueChange={(radarEnabled) =>
+                void saveChanges({ radarEnabled, visibleToNearby: radarEnabled })
+              }
+              thumbColor={isParticipating ? '#F7FAFF' : '#A8B5D1'}
               trackColor={{ false: '#29324D', true: '#7868FF' }}
-              value={preferences?.radarEnabled ?? false}
+              value={isParticipating}
             />
           </View>
 

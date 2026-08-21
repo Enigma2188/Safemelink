@@ -5,7 +5,10 @@ export type SafeMeLinkContact = {
   remoteId?: string;
   name: string;
   phone: string;
+  phoneE164: string | null;
+  priority: number;
   hasApp: boolean;
   userId?: string;
   preferredChannel: PreferredSosChannel;
+  isLegacyLocal?: boolean;
 };

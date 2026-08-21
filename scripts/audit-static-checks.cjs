@@ -45,6 +45,7 @@ const backendErrors = read('backend/errors/BackendError.ts');
 const databaseTypes = read('backend/database.types.ts');
 const pushFunction = read('supabase/functions/send-sos-push/index.ts');
 const pushRecipients = read('supabase/functions/send-sos-push/pushRecipients.ts');
+const sosPushService = read('backend/functions/SOSPushService.ts');
 const receivedSOSMigration = read(
   'supabase/migrations/20260722120000_received_sos_details.sql',
 );
@@ -73,6 +74,13 @@ const pushTokenOwnershipMigration = read(
 const trustedLinksHardeningMigration = read(
   'supabase/migrations/20260815121000_trusted_links_hardening.sql',
 );
+const trustedPhoneIdentityMigration = read(
+  'supabase/migrations/20260820120000_trusted_contact_phone_identity.sql',
+);
+const contactsService = read('services/ContactsService.ts');
+const contactsStorage = read('storage/ContactsStorage.ts');
+const goHomeStorage = read('storage/GoHomeStorage.ts');
+const phoneIdentity = read('services/PhoneIdentity.ts');
 const sosProximityNetworkMigration = read(
   'supabase/migrations/20260817120000_sos_proximity_network.sql',
 );
@@ -82,6 +90,7 @@ const accountBootstrapMigration = read(
 const authService = read('backend/auth/AuthService.ts');
 const authProvider = read('backend/auth/AuthProvider.tsx');
 const accountAccessPanel = read('components/AccountAccessPanel.tsx');
+const offlineStatusBanner = read('components/OfflineStatusBanner.tsx');
 const locationService = read('services/LocationService.ts');
 const sosService = read('services/SOSService.ts');
 const sosAlertService = read('services/SOSAlertService.ts');
@@ -125,6 +134,26 @@ check('Fresh users can sign up and receive an idempotent account bootstrap', () 
   assert.match(accountBootstrapMigration, /create or replace function public\.initialize_my_account/);
   assert.match(accountBootstrapMigration, /current_user_id uuid := auth\.uid\(\)/);
   assert.doesNotMatch(accountBootstrapMigration, /initialize_my_account\([^)]*uuid/);
+});
+
+check('Persisted authentication degrades safely while offline and recovers', () => {
+  assert.match(authProvider, /setSession\(nextSession\);[\s\S]*await bootstrapSession/);
+  assert.match(authProvider, /classifyAuthFailure\(initializationError\)/);
+  assert.match(authProvider, /setIsOffline\(true\);[\s\S]*scheduleRecovery/);
+  assert.match(authProvider, /AppState\.addEventListener\('change'/);
+  assert.match(authProvider, /invalidateSession\(generation\)/);
+  assert.match(authProvider, /Riconnettiti prima di cambiare o disconnettere l.account/);
+  assert.match(authService, /AuthFailureCategory = 'network' \| 'invalid_session' \| 'other'/);
+  assert.match(authService, /AuthNetworkUnavailableError/);
+  assert.match(rootLayout, /<OfflineStatusBanner \/>/);
+  assert.match(
+    offlineStatusBanner,
+    /Sei offline\. Alcune funzioni SafeMeLink non sono disponibili\./,
+  );
+  assert.match(pushTokenRegistrar, /if \(!userId \|\| isOffline\)/);
+  assert.match(sosService, /allowRemoteDelivery/);
+  assert.match(sosService, /ContactsService\.listCached\(expectedUserId\)/);
+  assert.match(homeScreen, /isOffline \? ContactsService\.listCached\(loadUserId\)/);
 });
 
 check('Fresh-user network defaults require explicit privacy opt-in', () => {
@@ -686,6 +715,36 @@ check('Radar keeps a TTL presence after screen blur without keeping GPS active',
     radarProvider,
     /preferences[\s\S]*!participationEnabled[\s\S]*deactivate\(\)/,
   );
+  const appStateHandler = radarProvider.match(
+    /AppState\.addEventListener\('change',[\s\S]*?\n    \}\);/,
+  )?.[0];
+  assert.ok(appStateHandler, 'Radar AppState handler not found.');
+  assert.doesNotMatch(appStateHandler, /deactivate\(\)/);
+});
+
+check('Radar master switch represents complete reciprocal participation', () => {
+  assert.match(radarScreen, /const isParticipating = canParticipateInRadar\(preferences\)/);
+  assert.match(
+    radarScreen,
+    /saveChanges\(\{ radarEnabled, visibleToNearby: radarEnabled \}\)/,
+  );
+  assert.match(radarScreen, /value=\{isParticipating\}/);
+});
+
+check('SOS network diagnostics expose only aggregate delivery counts', () => {
+  for (const marker of [
+    'SOS_NEARBY_RECIPIENT_COUNT',
+    'SOS_NEARBY_NO_ELIGIBLE_USERS',
+    'PUSH_TOKEN_COUNT',
+    'PUSH_SENT_COUNT',
+    'PUSH_FAILED_COUNT',
+  ]) {
+    assert.match(sosPushService, new RegExp(marker));
+  }
+  assert.doesNotMatch(
+    sosPushService,
+    /SOS_NEARBY_RECIPIENT_COUNT[\s\S]{0,180}(sosId|userId|token|latitude|longitude)/,
+  );
 });
 
 check('Voice recognition has single continuous ownership and bounded restart', () => {
@@ -771,14 +830,15 @@ check('Trusted contact mutations are guarded against duplicate taps', () => {
 });
 
 check('WhatsApp fallback prefers the native scheme and never invents a country code', () => {
-  assert.match(sosAlertService, /\^\\\+\[1-9\]\\d\{6,14\}\$/);
+  assert.match(phoneIdentity, /E164_PATTERN = \/\^\\\+\[1-9\]\\d\{6,14\}\$\//);
   assert.match(
     sosAlertService,
     /return \[\s*`whatsapp:\/\/send[\s\S]*`https:\/\/wa\.me/,
   );
   assert.doesNotMatch(sosAlertService, /\+39|defaultCountry|countryCode/);
-  assert.match(sosAlertService, /excludeAmbiguousLegacyContacts/);
-  assert.match(sosAlertService, /linked_contact_without_verified_phone/);
+  assert.match(sosAlertService, /contact\.phoneE164/);
+  assert.match(sosAlertService, /WHATSAPP_COMPOSER_OPENED/);
+  assert.match(sosAlertService, /smsFollowUpAvailable: true/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LINKED/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LOCAL/);
 });
@@ -803,8 +863,12 @@ check('UI separates the general network from the personal trusted circle', () =>
 });
 
 check('Trusted contacts migrate phone fallbacks but links require accepted requests', () => {
-  assert.match(trustedLinksService, /initialMerge\.localOnlyContacts/);
-  assert.match(trustedLinksService, /linked_profile_id: null/);
+  assert.doesNotMatch(trustedLinksService, /localOnlyContacts/);
+  assert.doesNotMatch(trustedLinksService, /TrustedContactsRepository\.create/);
+  assert.match(trustedLinksService, /CONTACT_SOURCE_REMOTE/);
+  assert.match(contactsService, /async importLegacy\(id: string\)/);
+  assert.match(contactsScreen, /Contatti locali precedenti/);
+  assert.match(contactsScreen, /non vengono sincronizzati automaticamente/);
   assert.match(trustedLinksService, /trusted_contacts confermati/);
   assert.match(
     trustedLinksHardeningMigration,
@@ -814,6 +878,21 @@ check('Trusted contacts migrate phone fallbacks but links require accepted reque
     trustedLinksHardeningMigration,
     /prevent_direct_trusted_link_change/,
   );
+  assert.match(trustedPhoneIdentityMigration, /phone_e164 text/);
+  assert.match(trustedPhoneIdentityMigration, /preferred_channel text/);
+  assert.match(trustedPhoneIdentityMigration, /trusted_contacts_unique_phone_e164_idx/);
+  assert.match(contactsService, /phone_e164: input\.phoneE164/);
+  assert.match(contactsService, /preferred_channel: input\.preferredChannel/);
+  assert.match(contactsStorage, /phoneE164/);
+});
+
+check('Go Home transport mode is account-scoped and belongs to the active session', () => {
+  assert.match(goHomeStorage, /GoHomeTransportMode = 'walking' \| 'cycling' \| 'driving'/);
+  assert.match(goHomeStorage, /'go-home-transport-mode'/);
+  assert.match(goHomeStorage, /transportMode: GoHomeTransportMode/);
+  assert.match(homeScreen, /Come ti stai spostando\?/);
+  assert.match(homeScreen, /estimateGoHomeMinutes\(distanceKm, transportMode\)/);
+  assert.match(homeScreen, /transportMode,/);
 });
 
 check('Fundamental production queries have bounded access paths', () => {

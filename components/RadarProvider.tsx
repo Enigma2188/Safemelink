@@ -162,6 +162,12 @@ export function RadarProvider({ children }: PropsWithChildren) {
     void RadarService.getPreferences()
       .then((storedPreferences) => {
         if (isCurrent) {
+          console.info('[SafeMeLink Radar] RADAR_PREFS_ENABLED', {
+            enabled: storedPreferences.radarEnabled,
+          });
+          console.info('[SafeMeLink Radar] RADAR_VISIBILITY_ENABLED', {
+            enabled: storedPreferences.visibleToNearby,
+          });
           setPreferences(storedPreferences);
           setPreferencesUserId(userId);
           setStatus(
@@ -222,8 +228,10 @@ export function RadarProvider({ children }: PropsWithChildren) {
 
       attemptInFlight = true;
       const generation = ++attemptGeneration;
+      let stage: 'location' | 'presence' | 'search' = 'location';
       setStatus('searching');
       setError(null);
+      console.info('[SafeMeLink Radar] RADAR_SEARCH_STARTED');
 
       try {
         const location = await LocationService.getCurrentLocation({
@@ -234,17 +242,22 @@ export function RadarProvider({ children }: PropsWithChildren) {
           return;
         }
 
+        console.info('[SafeMeLink Radar] RADAR_GPS_ACQUIRED');
         if (!RadarService.isLocationAccurateEnough(location)) {
+          console.warn('[SafeMeLink Radar] RADAR_GPS_REJECTED_ACCURACY');
           setUsers([]);
           setStatus('accuracy_insufficient');
           return;
         }
 
+        stage = 'presence';
         await enqueuePresenceMutation(() => RadarService.publishPresence(location));
         if (!isAttemptCurrent(generation)) {
           return;
         }
+        console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLISHED');
 
+        stage = 'search';
         const nearbyUsers = await RadarService.findNearbyUsers();
         if (!isAttemptCurrent(generation)) {
           return;
@@ -255,7 +268,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
         );
         setStatus(nearbyUsers.length > 0 ? 'ready' : 'empty');
         setError(null);
-        console.info('[SafeMeLink Radar] Ricerca one-shot completata.', {
+        console.info('[SafeMeLink Radar] RADAR_SEARCH_RESULT_COUNT', {
           nearbyUserCount: nearbyUsers.length,
         });
       } catch (attemptError: unknown) {
@@ -264,6 +277,15 @@ export function RadarProvider({ children }: PropsWithChildren) {
         }
 
         setUsers([]);
+        console.warn(
+          stage === 'presence'
+            ? '[SafeMeLink Radar] RADAR_PRESENCE_PUBLISH_FAILED'
+            : '[SafeMeLink Radar] RADAR_SEARCH_FAILED',
+          {
+            stage,
+            category: attemptError instanceof Error ? attemptError.name : 'unknown',
+          },
+        );
         if (attemptError instanceof LocationPermissionError) {
           setStatus('permission_required');
           setError(null);
@@ -302,14 +324,11 @@ export function RadarProvider({ children }: PropsWithChildren) {
     };
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      const wasActive = appState === 'active';
       appState = nextState;
       attemptGeneration += 1;
 
       if (nextState === 'active') {
         void runOneShotRadar();
-      } else if (wasActive && participationEnabled) {
-        void deactivate();
       }
     });
 
@@ -373,6 +392,12 @@ export function RadarProvider({ children }: PropsWithChildren) {
         const savedPreferences = await request;
 
         if (activeUserIdRef.current === userId) {
+          console.info('[SafeMeLink Radar] RADAR_PREFS_ENABLED', {
+            enabled: savedPreferences.radarEnabled,
+          });
+          console.info('[SafeMeLink Radar] RADAR_VISIBILITY_ENABLED', {
+            enabled: savedPreferences.visibleToNearby,
+          });
           setPreferences(savedPreferences);
           setError(null);
         }

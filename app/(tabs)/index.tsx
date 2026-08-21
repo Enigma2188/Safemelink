@@ -30,15 +30,33 @@ import {
   type SOSTerminalStatus,
 } from '@/services/SOSService';
 import { CheckpointStorage } from '@/storage/CheckpointStorage';
-import { GoHomeStorage, type GoHomeSession, type HomeLocation } from '@/storage/GoHomeStorage';
+import {
+  GoHomeStorage,
+  type GoHomeSession,
+  type GoHomeTransportMode,
+  type HomeLocation,
+} from '@/storage/GoHomeStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
 
 const SAFETY_TIMER_SECONDS = 10;
 const CHECKPOINT_CONFIRM_SECONDS = 30;
 const CHECKPOINT_OPTIONS_MINUTES = [5, 10, 15, 30];
 const GO_HOME_CONFIRM_SECONDS = 30;
-const WALKING_SPEED_KM_H = 5;
 const GO_HOME_SAFETY_MARGIN = 1.3;
+const GO_HOME_SPEED_KM_H: Record<GoHomeTransportMode, number> = {
+  walking: 5,
+  cycling: 15,
+  driving: 35,
+};
+const GO_HOME_TRANSPORT_OPTIONS: readonly {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  mode: GoHomeTransportMode;
+}[] = [
+  { icon: 'walk-outline', label: 'A piedi', mode: 'walking' },
+  { icon: 'bicycle-outline', label: 'In bici', mode: 'cycling' },
+  { icon: 'car-outline', label: 'In auto', mode: 'driving' },
+];
 const GO_HOME_STORAGE_TIMEOUT_MS = 8_000;
 const GO_HOME_GPS_TIMEOUT_MS = INTERACTIVE_LOCATION_TIMEOUT_MS + 5_000;
 const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
@@ -118,8 +136,14 @@ const calculateDistanceKm = (
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 };
 
-const estimateWalkingMinutes = (distanceKm: number) =>
-  Math.max(1, Math.round((distanceKm / WALKING_SPEED_KM_H) * 60 * GO_HOME_SAFETY_MARGIN));
+const getGoHomeTransportLabel = (mode: GoHomeTransportMode) =>
+  GO_HOME_TRANSPORT_OPTIONS.find((option) => option.mode === mode)?.label ?? 'A piedi';
+
+const estimateGoHomeMinutes = (distanceKm: number, mode: GoHomeTransportMode) =>
+  Math.max(
+    1,
+    Math.round((distanceKm / GO_HOME_SPEED_KM_H[mode]) * 60 * GO_HOME_SAFETY_MARGIN),
+  );
 
 const runGoHomeStepWithTimeout = async <T,>(
   operation: Promise<T>,
@@ -163,7 +187,7 @@ const runSOSLocalStepWithTimeout = async <T,>(operation: Promise<T>) => {
 };
 
 export default function HomeScreen() {
-  const { session, isInitializing, isSubmitting, logout } = useAuth();
+  const { session, isInitializing, isOffline, isSubmitting, logout } = useAuth();
   const router = useRouter();
   const isHomeFocused = useIsFocused();
   const userId = session?.user.id ?? null;
@@ -171,6 +195,7 @@ export default function HomeScreen() {
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
   const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
   const [pushDeliveryNotice, setPushDeliveryNotice] = useState<string | null>(null);
+  const [smsFollowUpAvailable, setSmsFollowUpAvailable] = useState(false);
   const [isEndingSOS, setIsEndingSOS] = useState(false);
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
@@ -179,6 +204,8 @@ export default function HomeScreen() {
   const [checkpointRemainingSeconds, setCheckpointRemainingSeconds] = useState(0);
   const [checkpointConfirmSeconds, setCheckpointConfirmSeconds] = useState(CHECKPOINT_CONFIRM_SECONDS);
   const [homeLocation, setHomeLocation] = useState<HomeLocation | null>(null);
+  const [goHomeTransportMode, setGoHomeTransportMode] =
+    useState<GoHomeTransportMode>('walking');
   const [goHomeStatus, setGoHomeStatus] = useState<GoHomeStatus>('idle');
   const [goHomeSession, setGoHomeSession] = useState<GoHomeSession | null>(null);
   const [goHomeRemainingSeconds, setGoHomeRemainingSeconds] = useState(0);
@@ -268,6 +295,7 @@ export default function HomeScreen() {
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
+    setSmsFollowUpAvailable(false);
     setStatus('countdown');
   }, []);
 
@@ -302,6 +330,7 @@ export default function HomeScreen() {
     setLastEvents([]);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
+    setSmsFollowUpAvailable(false);
     sosCompletionInFlightRef.current = false;
     sosEndingInFlightRef.current = false;
     setIsEndingSOS(false);
@@ -311,6 +340,7 @@ export default function HomeScreen() {
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
     setHomeLocation(null);
+    setGoHomeTransportMode('walking');
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
     homeCaptureInFlightRef.current = false;
@@ -332,11 +362,12 @@ export default function HomeScreen() {
     }
 
     try {
-      const [storedContacts, storedEvents, storedHomeLocation] =
+      const [storedContacts, storedEvents, storedHomeLocation, storedTransportMode] =
         await Promise.all([
-          ContactsService.list(),
+          isOffline ? ContactsService.listCached(loadUserId) : ContactsService.list(),
           SOSStorage.listEvents(loadUserId),
           GoHomeStorage.getHomeLocation(loadUserId),
+          GoHomeStorage.getTransportMode(loadUserId),
         ]);
       let nextEvents = storedEvents;
       let restoredActiveEvent: ActiveSOSEvent | null = null;
@@ -357,8 +388,13 @@ export default function HomeScreen() {
           };
         };
 
-        if (!latestStoredEvent.remoteSosId) {
+        if (!latestStoredEvent.remoteSosId || isOffline) {
           restoreLatestEvent();
+          if (latestStoredEvent.remoteSosId && isOffline) {
+            console.info('[SafeMeLink SOS] Ripristino locale in modalit\u00e0 offline.', {
+              category: 'offline_cached_state',
+            });
+          }
         } else {
         try {
           const remoteState = await SOSLifecycleService.getStatus(
@@ -422,6 +458,7 @@ export default function HomeScreen() {
       setContacts(storedContacts);
       setLastEvents(nextEvents);
       setHomeLocation(storedHomeLocation);
+      setGoHomeTransportMode(storedTransportMode);
       if (statusRef.current === 'idle') {
         setActiveEvent(restoredActiveEvent);
         setStatus(restoredActiveEvent ? 'active' : 'idle');
@@ -443,7 +480,7 @@ export default function HomeScreen() {
         );
       }
     }
-  }, [isInitializing, userId]);
+  }, [isInitializing, isOffline, userId]);
 
   useEffect(() => {
     loadGenerationRef.current += 1;
@@ -633,6 +670,26 @@ export default function HomeScreen() {
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
   };
 
+  const selectGoHomeTransportMode = async (mode: GoHomeTransportMode) => {
+    const actionUserId = userId;
+    setGoHomeTransportMode(mode);
+
+    if (!actionUserId) {
+      return;
+    }
+
+    try {
+      await GoHomeStorage.saveTransportMode(actionUserId, mode);
+    } catch {
+      if (activeUserIdRef.current === actionUserId) {
+        Alert.alert(
+          'Torno a casa',
+          'Modalità selezionata per questa sessione, ma non è stato possibile ricordarla.',
+        );
+      }
+    }
+  };
+
   const openGoHomeLocationSettings = async () => {
     try {
       if (Platform.OS === 'android') {
@@ -723,7 +780,8 @@ export default function HomeScreen() {
       }
 
       const distanceKm = calculateDistanceKm(startLocation, savedHomeLocation);
-      const estimatedMinutes = estimateWalkingMinutes(distanceKm);
+      const transportMode = goHomeTransportMode;
+      const estimatedMinutes = estimateGoHomeMinutes(distanceKm, transportMode);
       console.info('[TornoACasa] stima percorso completata');
       const session: GoHomeSession = {
         id: `${Date.now()}`,
@@ -732,11 +790,12 @@ export default function HomeScreen() {
         homeLocation: savedHomeLocation,
         distanceKm,
         estimatedMinutes,
+        transportMode,
       };
 
       Alert.alert(
         'Torno a casa',
-        `Distanza stimata: ${distanceKm.toFixed(2)} km\nTempo stimato: ${estimatedMinutes} min\n\nStima indicativa, non considera strade, traffico o deviazioni.`,
+        `Modalità: ${getGoHomeTransportLabel(transportMode)}\nDistanza stimata: ${distanceKm.toFixed(2)} km\nTempo indicativo: ${estimatedMinutes} min\n\nStima lineare di sicurezza: non considera strade, traffico o deviazioni.`,
         [
           {
             text: 'Annulla',
@@ -867,7 +926,9 @@ export default function HomeScreen() {
     setStatus('sending');
 
     try {
-      const result = await SOSService.completeSOS(actionUserId);
+      const result = await SOSService.completeSOS(actionUserId, {
+        allowRemoteDelivery: !isOffline,
+      });
 
       if (activeUserIdRef.current !== actionUserId) {
         return;
@@ -885,6 +946,7 @@ export default function HomeScreen() {
       setPushDeliveryNotice(
         [persistenceNotice, deliveryNotice].filter(Boolean).join(' ') || null,
       );
+      setSmsFollowUpAvailable(result.localDeliveryResult.smsFollowUpAvailable === true);
       setStatus('active');
     } catch (error) {
       if (activeUserIdRef.current === actionUserId) {
@@ -908,7 +970,7 @@ export default function HomeScreen() {
     } finally {
       sosCompletionInFlightRef.current = false;
     }
-  }, [userId]);
+  }, [isOffline, userId]);
 
   useEffect(() => {
     const trackedEvent = activeEvent;
@@ -1170,6 +1232,7 @@ export default function HomeScreen() {
       setLastEvents(nextEvents);
       setActiveEvent(null);
       setPushDeliveryNotice(null);
+      setSmsFollowUpAvailable(false);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
       console.info('[SafeMeLink SOS] Chiusura completata.', {
@@ -1229,6 +1292,25 @@ export default function HomeScreen() {
       await SOSService.shareSOS(activeEvent, contacts);
     } catch {
       Alert.alert('Condivisione SOS', 'Non riesco ad aprire la condivisione del messaggio.');
+    }
+  };
+
+  const sendActiveSOSSmsFallback = async () => {
+    if (!activeEvent) {
+      return;
+    }
+
+    try {
+      const result = await SOSService.sendSmsFallback(activeEvent, contacts);
+      if (result.status === 'sms_opened') {
+        setSmsFollowUpAvailable(false);
+        setPushDeliveryNotice('Composer SMS aperto. Verifica i destinatari prima di inviare.');
+        return;
+      }
+
+      Alert.alert('Fallback SMS', 'Non riesco ad aprire il composer SMS su questo dispositivo.');
+    } catch {
+      Alert.alert('Fallback SMS', 'Non riesco ad aprire il composer SMS su questo dispositivo.');
     }
   };
 
@@ -1434,6 +1516,13 @@ export default function HomeScreen() {
           <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
             <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
           </Pressable>
+          {smsFollowUpAvailable ? (
+            <Pressable
+              style={styles.shareButton}
+              onPress={() => void sendActiveSOSSmsFallback()}>
+              <Text style={styles.shareButtonText}>Invia anche SMS</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
             onPress={deactivateSOS}>
@@ -1513,6 +1602,20 @@ export default function HomeScreen() {
 
         {goHomeStatus === 'running' && goHomeSession ? (
           <View style={styles.goHomeActive}>
+            <View style={styles.goHomeActiveMode}>
+              <Ionicons
+                color="#8fd5ff"
+                name={
+                  GO_HOME_TRANSPORT_OPTIONS.find(
+                    (option) => option.mode === goHomeSession.transportMode,
+                  )?.icon ?? 'walk-outline'
+                }
+                size={20}
+              />
+              <Text style={styles.goHomeActiveModeText}>
+                {getGoHomeTransportLabel(goHomeSession.transportMode)}
+              </Text>
+            </View>
             <Text style={styles.goHomeTimer}>{formatTimer(goHomeRemainingSeconds)}</Text>
             <Text style={styles.goHomeEstimate}>
               {goHomeSession.distanceKm.toFixed(2)} km stimati, {goHomeSession.estimatedMinutes} min
@@ -1524,6 +1627,38 @@ export default function HomeScreen() {
           </View>
         ) : (
           <View style={styles.goHomeActions}>
+            <Text style={styles.goHomeModeTitle}>Come ti stai spostando?</Text>
+            <View style={styles.goHomeModeOptions}>
+              {GO_HOME_TRANSPORT_OPTIONS.map((option) => {
+                const selected = option.mode === goHomeTransportMode;
+
+                return (
+                  <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: selected }}
+                    disabled={goHomeStatus === 'estimating'}
+                    key={option.mode}
+                    onPress={() => void selectGoHomeTransportMode(option.mode)}
+                    style={[
+                      styles.goHomeModeButton,
+                      selected && styles.goHomeModeButtonSelected,
+                    ]}>
+                    <Ionicons
+                      color={selected ? '#f7fbff' : '#9fb5d9'}
+                      name={option.icon}
+                      size={23}
+                    />
+                    <Text
+                      style={[
+                        styles.goHomeModeButtonText,
+                        selected && styles.goHomeModeButtonTextSelected,
+                      ]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <Pressable style={styles.secondaryActionButton} onPress={confirmHomeLocationChange}>
               <Text style={styles.secondaryActionText}>
                 {homeLocation ? 'Modifica casa' : 'Imposta casa'}
@@ -1595,11 +1730,15 @@ export default function HomeScreen() {
                     <View
                       style={[
                         styles.drawerStatusDot,
-                        session ? styles.drawerStatusOnline : styles.drawerStatusOffline,
+                        session && !isOffline
+                          ? styles.drawerStatusOnline
+                          : styles.drawerStatusOffline,
                       ]}
                     />
                     <Text numberOfLines={1} style={styles.drawerUserText}>
-                      {session?.user.email ?? 'Utente non autenticato'}
+                      {session
+                        ? `${session.user.email ?? 'Account SafeMeLink'}${isOffline ? ' · Offline' : ''}`
+                        : 'Utente non autenticato'}
                     </Text>
                   </View>
                 </View>
@@ -2201,6 +2340,59 @@ const styles = StyleSheet.create({
   },
   goHomeActive: {
     gap: 10,
+  },
+  goHomeActiveMode: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(69, 183, 255, 0.12)',
+    borderColor: 'rgba(69, 183, 255, 0.3)',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  goHomeActiveModeText: {
+    color: '#d9efff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  goHomeModeTitle: {
+    color: '#f7fbff',
+    fontSize: 15,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  goHomeModeOptions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  goHomeModeButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10, 24, 52, 0.76)',
+    borderColor: 'rgba(159, 181, 217, 0.24)',
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    gap: 5,
+    minHeight: 70,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 9,
+  },
+  goHomeModeButtonSelected: {
+    backgroundColor: 'rgba(69, 183, 255, 0.2)',
+    borderColor: '#45b7ff',
+  },
+  goHomeModeButtonText: {
+    color: '#9fb5d9',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  goHomeModeButtonTextSelected: {
+    color: '#f7fbff',
   },
   goHomeTimer: {
     color: '#f7fbff',

@@ -4,6 +4,7 @@ export type AccountStorageNamespace =
   | 'checkpoint-events'
   | 'go-home-events'
   | 'go-home-location'
+  | 'go-home-transport-mode'
   | 'passphrase'
   | 'sos-events'
   | 'trusted-contacts'

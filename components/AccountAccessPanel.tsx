@@ -6,7 +6,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 type AccessMode = 'login' | 'signup';
 
 export function AccountAccessPanel() {
-  const { session, isInitializing, isSubmitting, error, login, signup, logout } = useAuth();
+  const { session, isInitializing, isOffline, isSubmitting, error, login, signup, logout } = useAuth();
   const [mode, setMode] = useState<AccessMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -73,7 +73,9 @@ export function AccountAccessPanel() {
 
       {isAuthenticated ? (
         <>
-          <Text style={styles.success}>Account attivo</Text>
+          <Text style={isOffline ? styles.offline : styles.success}>
+            {isOffline ? 'Account attivo · modalità offline' : 'Account attivo'}
+          </Text>
           <Text numberOfLines={1} style={styles.email}>
             {session.user.email ?? 'Email non disponibile'}
           </Text>
@@ -270,6 +272,11 @@ const styles = StyleSheet.create({
   help: {
     color: '#FBBF24',
     fontSize: 12,
+  },
+  offline: {
+    color: '#FBBF24',
+    fontSize: 13,
+    lineHeight: 18,
   },
   success: {
     color: '#45D6A5',

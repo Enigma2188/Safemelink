@@ -7,6 +7,7 @@ import {
 import { LocationService, type SOSLocation } from '@/services/LocationService';
 import {
   sendSosAlert,
+  sendSosSmsFallback,
   shareSosAlert,
   type SOSLocalDeliveryResult,
 } from '@/services/SOSAlertService';
@@ -66,7 +67,11 @@ export const SOSService = {
     ].join('\n');
   },
 
-  async completeSOS(expectedUserId: string) {
+  async completeSOS(
+    expectedUserId: string,
+    options: { allowRemoteDelivery?: boolean } = {},
+  ) {
+    const allowRemoteDelivery = options.allowRemoteDelivery ?? true;
     const initialSession = await getSOSSessionWithTimeout();
 
     if (initialSession?.user.id !== expectedUserId) {
@@ -85,7 +90,11 @@ export const SOSService = {
     let contacts: TrustedContact[] = [];
 
     try {
-      contacts = await runLocalOperationWithTimeout(ContactsService.list(expectedUserId));
+      contacts = await runLocalOperationWithTimeout(
+        allowRemoteDelivery
+          ? ContactsService.list(expectedUserId)
+          : ContactsService.listCached(expectedUserId),
+      );
     } catch {
       console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', {
         category: 'local_contacts_unavailable',
@@ -104,23 +113,37 @@ export const SOSService = {
       contactIds: contacts.map((contact) => contact.id),
     };
 
-    const pushResult: SOSDeliveryResult = await SOSPushService.send(
-      event,
-      expectedUserId,
-    ).catch((error: unknown) => {
-      console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', {
-        category: error instanceof Error ? error.name : 'UnknownError',
+    const pushResult: SOSDeliveryResult = allowRemoteDelivery
+      ? await SOSPushService.send(event, expectedUserId).catch((error: unknown) => {
+          console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', {
+            category: error instanceof Error ? error.name : 'UnknownError',
+          });
+          return {
+            sosCreated: false,
+            sosId: null,
+            recipientCount: 0,
+            tokenCount: 0,
+            notificationsSent: 0,
+            notificationsFailed: 0,
+            errors: ['Invio SafeMeLink non disponibile.'],
+          };
+        })
+      : {
+          sosCreated: false,
+          sosId: null,
+          recipientCount: 0,
+          tokenCount: 0,
+          notificationsSent: 0,
+          notificationsFailed: 0,
+          errors: ['Invio SafeMeLink non disponibile offline.'],
+          reason: 'unavailable',
+        };
+
+    if (!allowRemoteDelivery) {
+      console.info('[SafeMeLink SOS] Consegna remota ignorata in modalità offline.', {
+        category: 'offline_degraded_mode',
       });
-      return {
-        sosCreated: false,
-        sosId: null,
-        recipientCount: 0,
-        tokenCount: 0,
-        notificationsSent: 0,
-        notificationsFailed: 0,
-        errors: ['Invio SafeMeLink non disponibile.'],
-      };
-    });
+    }
 
     console.log('[SafeMeLink Push] Esito consegna SOS.', {
       sosCreated: pushResult.sosCreated,
@@ -185,6 +208,10 @@ export const SOSService = {
 
   async sendSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {
     await sendSosAlert(event, contacts);
+  },
+
+  async sendSmsFallback(event: ActiveSOSEvent, contacts: TrustedContact[]) {
+    return sendSosSmsFallback(event, contacts);
   },
 
   async shareSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {

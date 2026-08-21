@@ -6,6 +6,50 @@ const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 const ACCOUNT_INITIALIZATION_TIMEOUT_MS = 15_000;
 const accountInitializations = new Map<string, Promise<void>>();
 
+export type AuthFailureCategory = 'network' | 'invalid_session' | 'other';
+
+export class AuthNetworkUnavailableError extends Error {
+  constructor(message = 'Servizio account non disponibile. Controlla la rete e riprova.') {
+    super(message);
+    this.name = 'AuthNetworkUnavailableError';
+  }
+}
+
+export const classifyAuthFailure = (error: unknown): AuthFailureCategory => {
+  if (error instanceof AuthNetworkUnavailableError || error instanceof TypeError) {
+    return 'network';
+  }
+
+  const errorLike = error && typeof error === 'object'
+    ? (error as { code?: unknown; message?: unknown; status?: unknown })
+    : null;
+  const code = typeof errorLike?.code === 'string' ? errorLike.code : '';
+  const message = typeof errorLike?.message === 'string' ? errorLike.message : '';
+  const status = typeof errorLike?.status === 'number' ? errorLike.status : null;
+
+  if (
+    status === 0 ||
+    /network|failed to fetch|fetch failed|network request failed|load failed|timed? ?out|abort/i.test(
+      message,
+    )
+  ) {
+    return 'network';
+  }
+
+  if (
+    status === 401 ||
+    code === 'refresh_token_not_found' ||
+    code === 'invalid_refresh_token' ||
+    /invalid refresh token|refresh token not found|jwt expired|invalid jwt|session.*expired/i.test(
+      message,
+    )
+  ) {
+    return 'invalid_session';
+  }
+
+  return 'other';
+};
+
 const withAuthRequestTimeout = async <T>(
   operation: PromiseLike<T>,
   timeoutMessage = 'Servizio account non disponibile. Controlla la rete e riprova.',
@@ -17,7 +61,7 @@ const withAuthRequestTimeout = async <T>(
       Promise.resolve(operation),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
-          () => reject(new Error(timeoutMessage)),
+          () => reject(new AuthNetworkUnavailableError(timeoutMessage)),
           AUTH_REQUEST_TIMEOUT_MS,
         );
       }),
@@ -89,6 +133,17 @@ export const AuthService = {
     };
   },
 
+  async refreshSession() {
+    const client = requireAuthClient();
+    const { data, error } = await withAuthRequestTimeout(client.auth.refreshSession());
+
+    if (error) {
+      throw error;
+    }
+
+    return data.session;
+  },
+
   initializeAccount(userId: string) {
     const existingInitialization = accountInitializations.get(userId);
 
@@ -124,7 +179,7 @@ export const AuthService = {
         }
       } catch (initializationError) {
         if (controller.signal.aborted) {
-          throw new Error('Configurazione account non disponibile. Riprova.');
+          throw new AuthNetworkUnavailableError('Configurazione account non disponibile. Riprova.');
         }
         throw initializationError;
       } finally {
