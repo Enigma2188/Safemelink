@@ -44,6 +44,10 @@ type RadarPreferenceSave = {
   userId: string;
   promise: Promise<RadarPreferences>;
 };
+type RadarPresenceDeactivation = {
+  userId: string;
+  promise: Promise<void>;
+};
 
 type RadarContextValue = {
   users: NearbyUser[];
@@ -57,6 +61,8 @@ type RadarContextValue = {
 };
 
 const RadarContext = createContext<RadarContextValue | undefined>(undefined);
+const RADAR_PRESENCE_REFRESH_MS = 4 * 60 * 1_000;
+const RADAR_PREFERENCES_MAX_RETRIES = 5;
 
 const clearRadarState = (
   setUsers: (users: NearbyUser[]) => void,
@@ -91,7 +97,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const [isRadarScreenActive, setIsRadarScreenActive] = useState(false);
   const preferenceSaveRef = useRef<RadarPreferenceSave | null>(null);
-  const deactivationInFlightRef = useRef<Promise<void> | null>(null);
+  const deactivationInFlightRef = useRef<RadarPresenceDeactivation | null>(null);
   const presenceMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeUserIdRef = useRef<string | null>(userId);
   const manualRefreshRef = useRef<() => void>(() => undefined);
@@ -103,10 +109,20 @@ export function RadarProvider({ children }: PropsWithChildren) {
     manualRefreshRef.current();
   }, []);
 
-  const enqueuePresenceMutation = useCallback(<T,>(operation: () => Promise<T>) => {
+  const enqueuePresenceMutation = useCallback((
+    expectedUserId: string | null,
+    operation: () => Promise<unknown>,
+  ) => {
     const request = presenceMutationQueueRef.current
       .catch(() => undefined)
-      .then(operation);
+      .then(async () => {
+        if (!expectedUserId || activeUserIdRef.current !== expectedUserId) {
+          console.info('[SafeMeLink Radar] Operazione presenza obsoleta ignorata.');
+          return;
+        }
+
+        await operation();
+      });
     presenceMutationQueueRef.current = request.then(
       () => undefined,
       () => undefined,
@@ -114,32 +130,50 @@ export function RadarProvider({ children }: PropsWithChildren) {
     return request;
   }, []);
 
-  const deactivate = useCallback(() => {
-    if (deactivationInFlightRef.current) {
-      return deactivationInFlightRef.current;
+  const deactivate = useCallback((expectedUserId: string) => {
+    if (deactivationInFlightRef.current?.userId === expectedUserId) {
+      return deactivationInFlightRef.current.promise;
     }
 
-    const request = enqueuePresenceMutation(() => RadarService.deactivatePresence())
+    const request = enqueuePresenceMutation(
+      expectedUserId,
+      () => RadarService.deactivatePresence(),
+    )
       .catch((deactivationError: unknown) => {
         console.warn('[SafeMeLink Radar] Disattivazione presenza non riuscita.', {
           category: deactivationError instanceof Error ? deactivationError.name : 'unknown',
         });
       })
       .finally(() => {
-        if (deactivationInFlightRef.current === request) {
+        if (deactivationInFlightRef.current?.promise === request) {
           deactivationInFlightRef.current = null;
         }
       });
-    deactivationInFlightRef.current = request;
+    deactivationInFlightRef.current = {
+      userId: expectedUserId,
+      promise: request,
+    };
     return request;
   }, [enqueuePresenceMutation]);
 
   useEffect(() => {
     let isCurrent = true;
+    let preferencesLoaded = false;
+    let requestInFlight = false;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearRetryTimer = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
     if (isInitializing) {
       return () => {
         isCurrent = false;
+        clearRetryTimer();
       };
     }
 
@@ -151,17 +185,39 @@ export function RadarProvider({ children }: PropsWithChildren) {
       setStatus('unauthenticated');
       return () => {
         isCurrent = false;
+        clearRetryTimer();
       };
     }
 
-    setPreferences(null);
-    setPreferencesUserId(null);
-    setIsSavingPreferences(false);
-    clearRadarState(setUsers, setError);
-    setStatus('loading_preferences');
-    void RadarService.getPreferences()
-      .then((storedPreferences) => {
+    const schedulePreferencesRetry = () => {
+      if (
+        !isCurrent ||
+        retryTimer ||
+        retryAttempt >= RADAR_PREFERENCES_MAX_RETRIES ||
+        AppState.currentState !== 'active'
+      ) {
+        return;
+      }
+
+      const delayMs = Math.min(60_000, 5_000 * 2 ** retryAttempt);
+      retryAttempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void loadPreferences();
+      }, delayMs);
+    };
+
+    const loadPreferences = async () => {
+      if (!isCurrent || requestInFlight || preferencesLoaded) {
+        return;
+      }
+
+      requestInFlight = true;
+      try {
+        const storedPreferences = await RadarService.getPreferences();
         if (isCurrent) {
+          preferencesLoaded = true;
+          clearRetryTimer();
           console.info('[SafeMeLink Radar] RADAR_PREFS_ENABLED', {
             enabled: storedPreferences.radarEnabled,
           });
@@ -179,8 +235,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
           );
           setError(null);
         }
-      })
-      .catch((loadError: unknown) => {
+      } catch (loadError: unknown) {
         if (isCurrent) {
           setStatus('error');
           setError(
@@ -188,11 +243,35 @@ export function RadarProvider({ children }: PropsWithChildren) {
               ? loadError.message
               : 'Impossibile caricare le preferenze Radar.',
           );
+          schedulePreferencesRetry();
         }
-      });
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    setPreferences(null);
+    setPreferencesUserId(null);
+    setIsSavingPreferences(false);
+    clearRadarState(setUsers, setError);
+    setStatus('loading_preferences');
+
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || preferencesLoaded) {
+        clearRetryTimer();
+        return;
+      }
+
+      retryAttempt = 0;
+      void loadPreferences();
+    });
+
+    void loadPreferences();
 
     return () => {
       isCurrent = false;
+      clearRetryTimer();
+      appStateSubscription.remove();
     };
   }, [isInitializing, userId]);
 
@@ -201,37 +280,61 @@ export function RadarProvider({ children }: PropsWithChildren) {
     let appState: AppStateStatus = AppState.currentState;
     let attemptInFlight = false;
     let attemptGeneration = 0;
-    const canRunRadar = Boolean(
+    let presenceRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const canPublishPresence = Boolean(
       userId &&
         preferencesUserId === userId &&
-        participationEnabled &&
-        isRadarScreenActive,
+        participationEnabled,
     );
+
+    const clearPresenceRefresh = () => {
+      if (presenceRefreshTimer) {
+        clearTimeout(presenceRefreshTimer);
+        presenceRefreshTimer = null;
+      }
+    };
 
     const isAttemptCurrent = (generation: number) =>
       isCurrent &&
       generation === attemptGeneration &&
       appState === 'active' &&
-      canRunRadar &&
+      canPublishPresence &&
       activeUserIdRef.current === userId;
+
+    const schedulePresenceRefresh = () => {
+      clearPresenceRefresh();
+      if (!isCurrent || appState !== 'active' || !canPublishPresence) {
+        return;
+      }
+
+      presenceRefreshTimer = setTimeout(() => {
+        presenceRefreshTimer = null;
+        void runOneShotRadar();
+      }, RADAR_PRESENCE_REFRESH_MS);
+    };
 
     const runOneShotRadar = async () => {
       if (
         attemptInFlight ||
         !isCurrent ||
         appState !== 'active' ||
-        !canRunRadar ||
+        !canPublishPresence ||
         activeUserIdRef.current !== userId
       ) {
         return;
       }
 
+      clearPresenceRefresh();
       attemptInFlight = true;
       const generation = ++attemptGeneration;
       let stage: 'location' | 'presence' | 'search' = 'location';
-      setStatus('searching');
-      setError(null);
-      console.info('[SafeMeLink Radar] RADAR_SEARCH_STARTED');
+      if (isRadarScreenActive) {
+        setStatus('searching');
+        setError(null);
+        console.info('[SafeMeLink Radar] RADAR_SEARCH_STARTED');
+      } else {
+        console.info('[SafeMeLink Radar] RADAR_PRESENCE_REFRESH_STARTED');
+      }
 
       try {
         const location = await LocationService.getCurrentLocation({
@@ -245,17 +348,26 @@ export function RadarProvider({ children }: PropsWithChildren) {
         console.info('[SafeMeLink Radar] RADAR_GPS_ACQUIRED');
         if (!RadarService.isLocationAccurateEnough(location)) {
           console.warn('[SafeMeLink Radar] RADAR_GPS_REJECTED_ACCURACY');
-          setUsers([]);
-          setStatus('accuracy_insufficient');
+          if (isRadarScreenActive) {
+            setUsers([]);
+            setStatus('accuracy_insufficient');
+          }
           return;
         }
 
         stage = 'presence';
-        await enqueuePresenceMutation(() => RadarService.publishPresence(location));
+        await enqueuePresenceMutation(
+          userId,
+          () => RadarService.publishPresence(location),
+        );
         if (!isAttemptCurrent(generation)) {
           return;
         }
         console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLISHED');
+
+        if (!isRadarScreenActive) {
+          return;
+        }
 
         stage = 'search';
         const nearbyUsers = await RadarService.findNearbyUsers();
@@ -276,7 +388,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
           return;
         }
 
-        setUsers([]);
+        if (isRadarScreenActive) {
+          setUsers([]);
+        }
         console.warn(
           stage === 'presence'
             ? '[SafeMeLink Radar] RADAR_PRESENCE_PUBLISH_FAILED'
@@ -286,6 +400,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
             category: attemptError instanceof Error ? attemptError.name : 'unknown',
           },
         );
+        if (!isRadarScreenActive) {
+          return;
+        }
         if (attemptError instanceof LocationPermissionError) {
           setStatus('permission_required');
           setError(null);
@@ -306,12 +423,13 @@ export function RadarProvider({ children }: PropsWithChildren) {
         }
       } finally {
         attemptInFlight = false;
+        schedulePresenceRefresh();
 
         if (
           isCurrent &&
           generation !== attemptGeneration &&
           appState === 'active' &&
-          canRunRadar &&
+          canPublishPresence &&
           activeUserIdRef.current === userId
         ) {
           void runOneShotRadar();
@@ -326,6 +444,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       appState = nextState;
       attemptGeneration += 1;
+      clearPresenceRefresh();
 
       if (nextState === 'active') {
         void runOneShotRadar();
@@ -340,9 +459,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
       setStatus(userId ? (radarEnabled ? 'visibility_required' : 'off') : 'unauthenticated');
 
       if (userId && preferencesUserId === userId && preferences) {
-        void deactivate();
+        void deactivate(userId);
       }
-    } else if (isRadarScreenActive && appState === 'active') {
+    } else if (appState === 'active') {
       void runOneShotRadar();
     }
 
@@ -350,6 +469,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       isCurrent = false;
       attemptGeneration += 1;
       attemptInFlight = false;
+      clearPresenceRefresh();
       manualRefreshRef.current = () => undefined;
       appStateSubscription.remove();
     };

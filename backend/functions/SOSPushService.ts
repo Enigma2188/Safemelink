@@ -13,6 +13,8 @@ export type SOSDeliveryResult = {
   trustedRecipientCount?: number;
   nearbyRecipientCount?: number;
   errors: string[];
+  expoTicketOkCount?: number;
+  expoTicketErrorCount?: number;
   reason?:
     | 'not_authenticated'
     | 'no_eligible_recipients'
@@ -31,6 +33,8 @@ type SOSPushResponse = {
   trustedRecipientCount?: number;
   nearbyRecipientCount?: number;
   errors?: { code?: string; message: string }[];
+  expoTicketOkCount?: number;
+  expoTicketErrorCount?: number;
   reason?:
     | 'no_eligible_recipients'
     | 'no_linked_recipients'
@@ -233,6 +237,12 @@ async function sendSOSPush(
     console.info('[SafeMeLink Push] PUSH_FAILED_COUNT', {
       count: data?.failed ?? 0,
     });
+    console.info('[SafeMeLink Push] EXPO_TICKET_OK_COUNT', {
+      count: data?.expoTicketOkCount ?? data?.sent ?? 0,
+    });
+    console.info('[SafeMeLink Push] EXPO_TICKET_ERROR_COUNT', {
+      count: data?.expoTicketErrorCount ?? data?.failed ?? 0,
+    });
 
     return {
       sosCreated: true,
@@ -241,6 +251,8 @@ async function sendSOSPush(
       tokenCount: data?.tokenCount ?? 0,
       notificationsSent: data?.sent ?? 0,
       notificationsFailed: data?.failed ?? 0,
+      expoTicketOkCount: data?.expoTicketOkCount ?? data?.sent ?? 0,
+      expoTicketErrorCount: data?.expoTicketErrorCount ?? data?.failed ?? 0,
       trustedRecipientCount: data?.trustedRecipientCount ?? 0,
       nearbyRecipientCount: data?.nearbyRecipientCount ?? 0,
       errors: data?.errors?.map((item) => item.message) ?? [],

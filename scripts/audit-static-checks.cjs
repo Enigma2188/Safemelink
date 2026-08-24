@@ -179,15 +179,15 @@ check('Radar OFF performs no location publication or nearby search', () => {
   assert.match(radarService, /preferences\?\.radarEnabled && preferences\.visibleToNearby/);
   assert.match(
     radarProvider,
-    /const canRunRadar = Boolean\([\s\S]*isRadarScreenActive/,
+    /const canPublishPresence = Boolean\([\s\S]*participationEnabled/,
   );
   assert.match(
     radarProvider,
-    /!canRunRadar[\s\S]*activeUserIdRef\.current !== userId/,
+    /!canPublishPresence[\s\S]*activeUserIdRef\.current !== userId/,
   );
   assert.match(
     radarProvider,
-    /!participationEnabled[\s\S]*preferencesUserId === userId[\s\S]*deactivate\(\)/,
+    /!participationEnabled[\s\S]*preferencesUserId === userId[\s\S]*deactivate\(userId\)/,
   );
 });
 
@@ -682,8 +682,22 @@ check('Radar uses one bounded foreground location acquisition per attempt', () =
   assert.doesNotMatch(radarProvider, /startLocationWatch|watchdog|fallbackPending/);
 });
 
-check('Radar has no automatic polling, retry, or recurring timer', () => {
-  assert.doesNotMatch(radarProvider, /setInterval\(|setTimeout\(/);
+check('Radar keeps an opted-in foreground presence fresh without a GPS watcher', () => {
+  assert.doesNotMatch(radarProvider, /setInterval\(/);
+  assert.match(radarProvider, /RADAR_PRESENCE_REFRESH_MS = 4 \* 60 \* 1_000/);
+  assert.match(radarProvider, /presenceRefreshTimer = setTimeout/);
+  assert.match(
+    radarProvider,
+    /activeUserIdRef\.current !== expectedUserId/,
+    'Radar presence mutations must not cross authenticated accounts.',
+  );
+  assert.match(
+    radarProvider,
+    /deactivationInFlightRef\.current\?\.userId === expectedUserId/,
+    'Radar presence deactivation must be scoped to the authenticated account.',
+  );
+  assert.match(radarProvider, /clearTimeout\(presenceRefreshTimer\)/);
+  assert.match(radarProvider, /appState !== 'active' \|\| !canPublishPresence/);
   assert.doesNotMatch(radarProvider, /scheduleNetworkRefresh|runSingleLocationFallback/);
   assert.doesNotMatch(radarService, /RADAR_REFRESH_INTERVAL_MS|RADAR_LOCATION_FALLBACK_INTERVAL_MS/);
   assert.match(radarProvider, /manualRefreshRef\.current = \(\) =>/);
@@ -692,6 +706,14 @@ check('Radar has no automatic polling, retry, or recurring timer', () => {
     radarProvider,
     /appState = nextState;[\s\S]{0,120}attemptInFlight = false/,
   );
+});
+
+check('Radar preference bootstrap recovers from temporary backend failures', () => {
+  assert.match(radarProvider, /RADAR_PREFERENCES_MAX_RETRIES = 5/);
+  assert.match(radarProvider, /schedulePreferencesRetry/);
+  assert.match(radarProvider, /retryAttempt >= RADAR_PREFERENCES_MAX_RETRIES/);
+  assert.match(radarProvider, /AppState\.currentState !== 'active'/);
+  assert.match(radarProvider, /retryAttempt = 0;[\s\S]*loadPreferences\(\)/);
 });
 
 check('Radar ignores stale async results and cleans up screen lifecycle', () => {
@@ -710,16 +732,16 @@ check('Radar keeps a TTL presence after screen blur without keeping GPS active',
   const cleanupEnd = radarProvider.indexOf('\n    };', cleanupMarker);
   assert.ok(cleanupMarker >= 0 && cleanupStart >= 0 && cleanupEnd >= 0);
   const cleanup = radarProvider.slice(cleanupStart, cleanupEnd);
-  assert.doesNotMatch(cleanup, /deactivate\(\)/);
+  assert.doesNotMatch(cleanup, /deactivate\(/);
   assert.match(
     radarProvider,
-    /preferences[\s\S]*!participationEnabled[\s\S]*deactivate\(\)/,
+    /preferences[\s\S]*!participationEnabled[\s\S]*deactivate\(userId\)/,
   );
   const appStateHandler = radarProvider.match(
     /AppState\.addEventListener\('change',[\s\S]*?\n    \}\);/,
   )?.[0];
   assert.ok(appStateHandler, 'Radar AppState handler not found.');
-  assert.doesNotMatch(appStateHandler, /deactivate\(\)/);
+  assert.doesNotMatch(appStateHandler, /deactivate\(/);
 });
 
 check('Radar master switch represents complete reciprocal participation', () => {
@@ -738,8 +760,11 @@ check('SOS network diagnostics expose only aggregate delivery counts', () => {
     'PUSH_TOKEN_COUNT',
     'PUSH_SENT_COUNT',
     'PUSH_FAILED_COUNT',
+    'EXPO_TICKET_OK_COUNT',
+    'EXPO_TICKET_ERROR_COUNT',
   ]) {
     assert.match(sosPushService, new RegExp(marker));
+    assert.match(pushFunction, new RegExp(marker));
   }
   assert.doesNotMatch(
     sosPushService,

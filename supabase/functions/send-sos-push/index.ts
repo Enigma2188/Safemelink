@@ -191,6 +191,12 @@ Deno.serve(async (request) => {
       nearbyRecipientCount,
       tokenCount: tokens.length,
     });
+    console.info('[send-sos-push] SOS_NEARBY_RECIPIENT_COUNT', {
+      count: nearbyRecipientCount,
+    });
+    console.info('[send-sos-push] PUSH_TOKEN_COUNT', {
+      count: tokens.length,
+    });
 
     if (tokens.length === 0) {
       const reason =
@@ -204,6 +210,13 @@ Deno.serve(async (request) => {
         tokenCount: 0,
         reason,
       });
+      if (recipientIds.length === 0) {
+        console.info('[send-sos-push] SOS_NEARBY_NO_ELIGIBLE_USERS');
+      }
+      console.info('[send-sos-push] EXPO_TICKET_OK_COUNT', { count: 0 });
+      console.info('[send-sos-push] EXPO_TICKET_ERROR_COUNT', { count: 0 });
+      console.info('[send-sos-push] PUSH_SENT_COUNT', { count: 0 });
+      console.info('[send-sos-push] PUSH_FAILED_COUNT', { count: 0 });
       return jsonResponse({
         sent: 0,
         failed: 0,
@@ -313,6 +326,14 @@ Deno.serve(async (request) => {
     const sent = tickets.filter((ticket) => ticket.status === 'ok').length;
     const failed =
       tickets.filter((ticket) => ticket.status === 'error').length + unprocessedCount;
+    const expoTicketErrorCount = tickets.filter((ticket) => ticket.status === 'error').length;
+
+    console.info('[send-sos-push] EXPO_TICKET_OK_COUNT', { count: sent });
+    console.info('[send-sos-push] EXPO_TICKET_ERROR_COUNT', {
+      count: expoTicketErrorCount,
+    });
+    console.info('[send-sos-push] PUSH_SENT_COUNT', { count: sent });
+    console.info('[send-sos-push] PUSH_FAILED_COUNT', { count: failed });
 
     console.log('[send-sos-push] Invio completato.', {
       recipientCount: recipientIds.length,
@@ -330,6 +351,8 @@ Deno.serve(async (request) => {
       trustedRecipientCount,
       nearbyRecipientCount,
       tokenCount: tokens.length,
+      expoTicketOkCount: sent,
+      expoTicketErrorCount,
       errors: [...expoErrors, ...ticketErrors],
     });
   } catch {
