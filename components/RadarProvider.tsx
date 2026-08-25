@@ -61,7 +61,9 @@ type RadarContextValue = {
 };
 
 const RadarContext = createContext<RadarContextValue | undefined>(undefined);
-const RADAR_PRESENCE_REFRESH_MS = 4 * 60 * 1_000;
+const RADAR_PRESENCE_REFRESH_MS = 2 * 60 * 1_000;
+const RADAR_PRESENCE_RETRY_BASE_MS = 30_000;
+const RADAR_PRESENCE_FAST_RETRY_LIMIT = 3;
 const RADAR_PREFERENCES_MAX_RETRIES = 5;
 
 const clearRadarState = (
@@ -280,6 +282,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
     let appState: AppStateStatus = AppState.currentState;
     let attemptInFlight = false;
     let attemptGeneration = 0;
+    let consecutivePresenceFailures = 0;
     let presenceRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     const canPublishPresence = Boolean(
       userId &&
@@ -301,16 +304,25 @@ export function RadarProvider({ children }: PropsWithChildren) {
       canPublishPresence &&
       activeUserIdRef.current === userId;
 
-    const schedulePresenceRefresh = () => {
+    const schedulePresenceRefresh = (delayMs = RADAR_PRESENCE_REFRESH_MS) => {
       clearPresenceRefresh();
-      if (!isCurrent || appState !== 'active' || !canPublishPresence) {
+      if (
+        !isCurrent ||
+        appState !== 'active' ||
+        !canPublishPresence ||
+        activeUserIdRef.current !== userId
+      ) {
         return;
       }
 
+      console.info('[SafeMeLink Radar] RADAR_PRESENCE_REFRESH_SCHEDULED', {
+        delayMs,
+      });
       presenceRefreshTimer = setTimeout(() => {
         presenceRefreshTimer = null;
+        console.info('[SafeMeLink Radar] RADAR_PRESENCE_REFRESH_EXECUTED');
         void runOneShotRadar();
-      }, RADAR_PRESENCE_REFRESH_MS);
+      }, delayMs);
     };
 
     const runOneShotRadar = async () => {
@@ -328,6 +340,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
       attemptInFlight = true;
       const generation = ++attemptGeneration;
       let stage: 'location' | 'presence' | 'search' = 'location';
+      let presencePublished = false;
+      console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLICATION_ATTEMPTED');
       if (isRadarScreenActive) {
         setStatus('searching');
         setError(null);
@@ -363,6 +377,8 @@ export function RadarProvider({ children }: PropsWithChildren) {
         if (!isAttemptCurrent(generation)) {
           return;
         }
+        presencePublished = true;
+        consecutivePresenceFailures = 0;
         console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLISHED');
 
         if (!isRadarScreenActive) {
@@ -392,9 +408,11 @@ export function RadarProvider({ children }: PropsWithChildren) {
           setUsers([]);
         }
         console.warn(
-          stage === 'presence'
-            ? '[SafeMeLink Radar] RADAR_PRESENCE_PUBLISH_FAILED'
-            : '[SafeMeLink Radar] RADAR_SEARCH_FAILED',
+          stage === 'location'
+            ? '[SafeMeLink Radar] RADAR_GPS_ACQUISITION_FAILED'
+            : stage === 'presence'
+              ? '[SafeMeLink Radar] RADAR_PRESENCE_PUBLISH_FAILED'
+              : '[SafeMeLink Radar] RADAR_SEARCH_FAILED',
           {
             stage,
             category: attemptError instanceof Error ? attemptError.name : 'unknown',
@@ -423,7 +441,19 @@ export function RadarProvider({ children }: PropsWithChildren) {
         }
       } finally {
         attemptInFlight = false;
-        schedulePresenceRefresh();
+        if (!presencePublished && stage !== 'search') {
+          consecutivePresenceFailures += 1;
+        }
+        const retryDelayMs =
+          !presencePublished &&
+          stage !== 'search' &&
+          consecutivePresenceFailures <= RADAR_PRESENCE_FAST_RETRY_LIMIT
+            ? Math.min(
+                RADAR_PRESENCE_REFRESH_MS,
+                RADAR_PRESENCE_RETRY_BASE_MS * 2 ** (consecutivePresenceFailures - 1),
+              )
+            : RADAR_PRESENCE_REFRESH_MS;
+        schedulePresenceRefresh(retryDelayMs);
 
         if (
           isCurrent &&

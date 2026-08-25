@@ -684,7 +684,9 @@ check('Radar uses one bounded foreground location acquisition per attempt', () =
 
 check('Radar keeps an opted-in foreground presence fresh without a GPS watcher', () => {
   assert.doesNotMatch(radarProvider, /setInterval\(/);
-  assert.match(radarProvider, /RADAR_PRESENCE_REFRESH_MS = 4 \* 60 \* 1_000/);
+  assert.match(radarProvider, /RADAR_PRESENCE_REFRESH_MS = 2 \* 60 \* 1_000/);
+  assert.match(radarProvider, /RADAR_PRESENCE_RETRY_BASE_MS = 30_000/);
+  assert.match(radarProvider, /RADAR_PRESENCE_FAST_RETRY_LIMIT = 3/);
   assert.match(radarProvider, /presenceRefreshTimer = setTimeout/);
   assert.match(
     radarProvider,
@@ -697,7 +699,11 @@ check('Radar keeps an opted-in foreground presence fresh without a GPS watcher',
     'Radar presence deactivation must be scoped to the authenticated account.',
   );
   assert.match(radarProvider, /clearTimeout\(presenceRefreshTimer\)/);
-  assert.match(radarProvider, /appState !== 'active' \|\| !canPublishPresence/);
+  assert.match(radarProvider, /appState !== 'active'[\s\S]{0,120}!canPublishPresence/);
+  assert.match(radarProvider, /RADAR_PRESENCE_PUBLICATION_ATTEMPTED/);
+  assert.match(radarProvider, /RADAR_PRESENCE_REFRESH_SCHEDULED/);
+  assert.match(radarProvider, /RADAR_PRESENCE_REFRESH_EXECUTED/);
+  assert.match(radarProvider, /RADAR_GPS_ACQUISITION_FAILED/);
   assert.doesNotMatch(radarProvider, /scheduleNetworkRefresh|runSingleLocationFallback/);
   assert.doesNotMatch(radarService, /RADAR_REFRESH_INTERVAL_MS|RADAR_LOCATION_FALLBACK_INTERVAL_MS/);
   assert.match(radarProvider, /manualRefreshRef\.current = \(\) =>/);
