@@ -98,10 +98,79 @@ const trustedLinksService = read('services/TrustedLinksService.ts');
 const sosChannelQueriesPlugin = read('plugins/withSOSChannelQueries.cjs');
 const receivedSOSRepository = read('backend/repositories/ReceivedSOSRepository.ts');
 const receivedSOSScreen = read('app/sos/[id].tsx');
+const sosNetworkMigration = read(
+  'supabase/migrations/20260825120000_sos_network_presence.sql',
+);
+const sosNetworkRepository = read(
+  'backend/repositories/SOSNetworkPresenceRepository.ts',
+);
+const sosNetworkProvider = read('components/SOSNetworkPresenceProvider.tsx');
+const sosNetworkService = read('services/SOSNetworkPresenceService.ts');
+const sosNetworkTask = read('services/SOSNetworkBackgroundTask.ts');
+const appConfig = read('app.json');
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
   assert.match(radarService, /RADAR_RESULT_LIMIT = 25/);
+});
+
+check('Visual Radar and SOS network presence are separate and explicitly opted in', () => {
+  assert.match(sosNetworkMigration, /create table if not exists public\.sos_network_presence/);
+  assert.match(sosNetworkMigration, /add column sos_network_enabled boolean not null default false/);
+  assert.doesNotMatch(sosNetworkMigration, /set sos_network_enabled = true/);
+  assert.match(sosNetworkMigration, /current_user_id uuid := auth\.uid\(\)/);
+  assert.match(sosNetworkMigration, /for update/);
+  assert.match(sosNetworkRepository, /get_my_sos_network_preference/);
+  assert.match(radarScreen, /Disponibilità rete SOS/);
+  assert.match(radarScreen, /La posizione non è[\s\S]*inserita nelle notifiche/);
+});
+
+check('SOS network background location is bounded, opportunistic and account-scoped', () => {
+  assert.match(sosNetworkService, /Accuracy\.Balanced/);
+  assert.match(sosNetworkService, /BACKGROUND_UPDATE_INTERVAL_MS = 15 \* 60 \* 1_000/);
+  assert.match(sosNetworkService, /BACKGROUND_UPDATE_DISTANCE_METERS = 500/);
+  assert.match(sosNetworkService, /pausesUpdatesAutomatically: true/);
+  assert.match(sosNetworkService, /session\?\.user\.id !== expectedUserId/);
+  assert.match(sosNetworkProvider, /FOREGROUND_REFRESH_MS = 10 \* 60 \* 1_000/);
+  assert.match(sosNetworkProvider, /AppState\.addEventListener\('change'/);
+  assert.doesNotMatch(sosNetworkProvider, /setInterval/);
+  assert.doesNotMatch(sosNetworkService, /watchPositionAsync/);
+  assert.match(sosNetworkTask, /TaskManager\.defineTask/);
+  assert.match(rootLayout, /SOSNetworkBackgroundTask/);
+  assert.match(appConfig, /"isAndroidBackgroundLocationEnabled": true/);
+  assert.match(appConfig, /"isIosBackgroundLocationEnabled": true/);
+});
+
+check('SOS nearby selection uses backend freshness, adaptive radius and deterministic ranking', () => {
+  assert.doesNotMatch(sosNetworkMigration, /sender_network_enabled/);
+  assert.doesNotMatch(
+    sosNetworkMigration,
+    /sender_preferences[\s\S]*sos_network_enabled = true/,
+  );
+  assert.match(
+    sosNetworkMigration,
+    /preferences\.user_id = presence\.user_id[\s\S]*preferences\.sos_network_enabled = true/,
+  );
+  assert.match(sosNetworkMigration, /presence\.observed_at >= now\(\) - interval '30 minutes'/);
+  assert.match(sosNetworkMigration, /interval '5 minutes' then 0/);
+  assert.match(sosNetworkMigration, /interval '15 minutes' then 1000/);
+  assert.match(sosNetworkMigration, /presence\.accuracy <= 100/);
+  assert.match(sosNetworkMigration, /distance_meters <= 1000/);
+  assert.match(sosNetworkMigration, /distance_meters <= 3000/);
+  assert.match(sosNetworkMigration, /selected_radius_meters integer := 5000/);
+  assert.match(sosNetworkMigration, /reliability_score/);
+  assert.match(sosNetworkMigration, /limit maximum_nearby_recipients/);
+  assert.match(sosNetworkMigration, /group by combined\.user_id/);
+  assert.doesNotMatch(sosNetworkMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
+});
+
+check('Cold-start SOS routing waits for authentication and navigation readiness', () => {
+  assert.match(sosNotificationCenter, /authReadyRef/);
+  assert.match(sosNotificationCenter, /!navigationReadyRef\.current \|\| !authReadyRef\.current/);
+  assert.match(
+    sosNotificationCenter,
+    /isInitializing \|\|[\s\S]*!session\?\.user\.id \|\|[\s\S]*!pendingResponseRef\.current/,
+  );
 });
 
 check('Radar missing preferences are initialized with safe OFF defaults', () => {

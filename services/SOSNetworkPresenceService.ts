@@ -1,0 +1,190 @@
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
+
+import { AuthService } from '@/backend/auth/AuthService';
+import {
+  SOSNetworkPresenceRepository,
+  type SOSNetworkPresenceSource,
+} from '@/backend/repositories/SOSNetworkPresenceRepository';
+
+export const SOS_NETWORK_LOCATION_TASK = 'SAFEMELINK_SOS_NETWORK_LOCATION';
+export const SOS_NETWORK_MAX_ACCURACY_METERS = 100;
+const BACKGROUND_UPDATE_INTERVAL_MS = 15 * 60 * 1_000;
+const BACKGROUND_UPDATE_DISTANCE_METERS = 500;
+const FOREGROUND_LOCATION_TIMEOUT_MS = 20_000;
+
+export class SOSNetworkPermissionError extends Error {
+  constructor(
+    public readonly permission: 'foreground' | 'background',
+  ) {
+    super(
+      permission === 'background'
+        ? 'Consenti la posizione sempre per risultare disponibile alla rete SOS.'
+        : 'Consenti la posizione per aderire alla rete SOS.',
+    );
+    this.name = 'SOSNetworkPermissionError';
+  }
+}
+
+export class SOSNetworkBackgroundUnavailableError extends Error {
+  constructor() {
+    super('Gli aggiornamenti in background non sono disponibili su questo dispositivo.');
+    this.name = 'SOSNetworkBackgroundUnavailableError';
+  }
+}
+
+let publicationInFlight: { userId: string; promise: Promise<boolean> } | null = null;
+
+const publishLocation = async (
+  location: Location.LocationObject,
+  source: SOSNetworkPresenceSource,
+  expectedUserId: string,
+) => {
+  const accuracy = location.coords.accuracy;
+  if (
+    accuracy === null ||
+    !Number.isFinite(accuracy) ||
+    accuracy < 0 ||
+    accuracy > SOS_NETWORK_MAX_ACCURACY_METERS
+  ) {
+    console.info('[SafeMeLink Rete SOS] Posizione ignorata.', {
+      category: 'accuracy_insufficient',
+      source,
+    });
+    return false;
+  }
+
+  const session = await AuthService.getSession();
+  if (session?.user.id !== expectedUserId) {
+    console.info('[SafeMeLink Rete SOS] Pubblicazione obsoleta ignorata.', {
+      category: 'account_changed',
+      source,
+    });
+    return false;
+  }
+
+  await SOSNetworkPresenceRepository.updatePresence({
+    latitude: location.coords.latitude,
+    longitude: location.coords.longitude,
+    accuracy,
+    observedAt: new Date(location.timestamp).toISOString(),
+    source,
+  });
+  console.info('[SafeMeLink Rete SOS] Presenza aggiornata.', { source });
+  return true;
+};
+
+export const SOSNetworkPresenceService = {
+  async requestPermissions() {
+    const foreground = await Location.requestForegroundPermissionsAsync();
+    if (foreground.status !== 'granted') {
+      throw new SOSNetworkPermissionError('foreground');
+    }
+
+    const background = await Location.requestBackgroundPermissionsAsync();
+    if (background.status !== 'granted') {
+      throw new SOSNetworkPermissionError('background');
+    }
+  },
+
+  async hasRequiredPermissions() {
+    const [foreground, background] = await Promise.all([
+      Location.getForegroundPermissionsAsync(),
+      Location.getBackgroundPermissionsAsync(),
+    ]);
+    return foreground.status === 'granted' && background.status === 'granted';
+  },
+
+  async startBackgroundUpdates() {
+    if (!(await TaskManager.isAvailableAsync())) {
+      throw new SOSNetworkBackgroundUnavailableError();
+    }
+
+    if (!(await this.hasRequiredPermissions())) {
+      throw new SOSNetworkPermissionError('background');
+    }
+
+    if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
+      return;
+    }
+
+    await Location.startLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK, {
+      accuracy: Location.Accuracy.Balanced,
+      activityType: Location.ActivityType.Other,
+      distanceInterval: BACKGROUND_UPDATE_DISTANCE_METERS,
+      timeInterval: BACKGROUND_UPDATE_INTERVAL_MS,
+      deferredUpdatesDistance: BACKGROUND_UPDATE_DISTANCE_METERS,
+      deferredUpdatesInterval: BACKGROUND_UPDATE_INTERVAL_MS,
+      pausesUpdatesAutomatically: true,
+      showsBackgroundLocationIndicator: true,
+      ...(Platform.OS === 'android'
+        ? {
+            foregroundService: {
+              notificationTitle: 'SafeMeLink — Rete SOS',
+              notificationBody: 'Disponibilità occasionale alle emergenze nelle vicinanze attiva.',
+              notificationColor: '#45B7FF',
+              killServiceOnDestroy: false,
+            },
+          }
+        : {}),
+    });
+  },
+
+  async stopBackgroundUpdates() {
+    if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
+      await Location.stopLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK);
+    }
+  },
+
+  publishForegroundPresence(expectedUserId: string): Promise<boolean> {
+    if (publicationInFlight) {
+      if (publicationInFlight.userId === expectedUserId) {
+        return publicationInFlight.promise;
+      }
+      return publicationInFlight.promise
+        .catch(() => false)
+        .then(() => this.publishForegroundPresence(expectedUserId));
+    }
+
+    const request = (async () => {
+      const foreground = await Location.getForegroundPermissionsAsync();
+      if (foreground.status !== 'granted') {
+        throw new SOSNetworkPermissionError('foreground');
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        throw new Error('Servizi di localizzazione non disponibili.');
+      }
+
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let location: Location.LocationObject;
+      try {
+        location = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(
+              () => reject(new Error('Acquisizione posizione rete SOS scaduta.')),
+              FOREGROUND_LOCATION_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
+      return publishLocation(location, 'foreground', expectedUserId);
+    })().finally(() => {
+      if (publicationInFlight?.promise === request) {
+        publicationInFlight = null;
+      }
+    });
+
+    publicationInFlight = { userId: expectedUserId, promise: request };
+    return request;
+  },
+
+  publishBackgroundLocation(location: Location.LocationObject, expectedUserId: string) {
+    return publishLocation(location, 'background', expectedUserId);
+  },
+};

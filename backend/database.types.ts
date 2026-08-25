@@ -212,6 +212,30 @@ export type Database = {
         };
         Relationships: [];
       };
+      sos_network_presence: {
+        Row: {
+          user_id: string;
+          latitude: number;
+          longitude: number;
+          accuracy: number;
+          source: 'foreground' | 'background';
+          observed_at: string;
+          updated_at: string;
+          is_active: boolean;
+        };
+        Insert: {
+          user_id: string;
+          latitude: number;
+          longitude: number;
+          accuracy: number;
+          source: 'foreground' | 'background';
+          observed_at: string;
+          updated_at?: string;
+          is_active?: boolean;
+        };
+        Update: Partial<Database['public']['Tables']['sos_network_presence']['Insert']>;
+        Relationships: [];
+      };
       radar_preferences: {
         Row: {
           user_id: string;
@@ -219,6 +243,7 @@ export type Database = {
           visible_to_nearby: boolean;
           show_nickname: boolean;
           public_nickname: string | null;
+          sos_network_enabled: boolean;
           updated_at: string;
         };
         Insert: {
@@ -227,6 +252,7 @@ export type Database = {
           visible_to_nearby?: boolean;
           show_nickname?: boolean;
           public_nickname?: string | null;
+          sos_network_enabled?: boolean;
           updated_at?: string;
         };
         Update: {
@@ -234,6 +260,7 @@ export type Database = {
           visible_to_nearby?: boolean;
           show_nickname?: boolean;
           public_nickname?: string | null;
+          sos_network_enabled?: boolean;
           updated_at?: string;
         };
         Relationships: [];
@@ -391,6 +418,28 @@ export type Database = {
         Returns: string;
       };
       deactivate_my_radar_presence: {
+        Args: Record<string, never>;
+        Returns: undefined;
+      };
+      get_my_sos_network_preference: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
+      update_my_sos_network_preference: {
+        Args: { next_enabled: boolean };
+        Returns: boolean;
+      };
+      update_my_sos_network_presence: {
+        Args: {
+          position_latitude: number;
+          position_longitude: number;
+          position_accuracy: number;
+          position_observed_at: string;
+          update_source: 'foreground' | 'background';
+        };
+        Returns: string;
+      };
+      deactivate_my_sos_network_presence: {
         Args: Record<string, never>;
         Returns: undefined;
       };

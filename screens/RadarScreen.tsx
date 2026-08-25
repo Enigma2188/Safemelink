@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 
 import { useNearbyUsers, type RadarViewStatus } from '@/hooks/useNearbyUsers';
+import { useSOSNetworkPresence } from '@/components/SOSNetworkPresenceProvider';
 import { canParticipateInRadar, validateRadarNickname } from '@/services/RadarService';
 
 const statusMessages: Record<Exclude<RadarViewStatus, 'ready'>, string> = {
@@ -37,6 +38,7 @@ const formatDistance = (distanceMeters: number) =>
     : `circa ${distanceMeters} m`;
 
 export function RadarScreen() {
+  const sosNetwork = useSOSNetworkPresence();
   const {
     users,
     status,
@@ -106,6 +108,14 @@ export function RadarScreen() {
           saveError instanceof Error ? saveError.message : 'Salvataggio Radar non riuscito.',
         );
       }
+    }
+  };
+  const updateSOSNetworkAvailability = async (enabled: boolean) => {
+    setActionError(null);
+    try {
+      await sosNetwork.setEnabled(enabled);
+    } catch {
+      // The provider exposes a sanitized, actionable message next to this switch.
     }
   };
   const openLocationSettings = async () => {
@@ -259,6 +269,41 @@ export function RadarScreen() {
         ) : null}
 
         <View style={styles.settingsCard}>
+          <Text style={styles.settingsTitle}>Disponibilità rete SOS</Text>
+          <Text style={styles.explanationText}>
+            Consente a SafeMeLink di aggiornare occasionalmente la tua posizione, anche in
+            background, per poterti inviare emergenze realmente vicine. La posizione non è
+            mostrata pubblicamente e non viene inserita nelle notifiche.
+          </Text>
+          <View style={styles.settingRow}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.settingTitle}>
+                Rete SOS {sosNetwork.enabled ? 'ON' : 'OFF'}
+              </Text>
+              <Text style={styles.settingDescription}>
+                {sosNetwork.isSaving ? 'Aggiornamento in corso…' : 'Ricevi richieste di aiuto nelle vicinanze.'}
+              </Text>
+            </View>
+            <Switch
+              disabled={sosNetwork.isLoading || sosNetwork.isSaving}
+              onValueChange={(enabled) => void updateSOSNetworkAvailability(enabled)}
+              thumbColor={sosNetwork.enabled ? '#F7FAFF' : '#A8B5D1'}
+              trackColor={{ false: '#29324D', true: '#45B7FF' }}
+              value={sosNetwork.enabled}
+            />
+          </View>
+          {sosNetwork.message ? (
+            <Text
+              style={
+                sosNetwork.status === 'available' || sosNetwork.status === 'off'
+                  ? styles.networkAvailabilityMessage
+                  : styles.validationError
+              }>
+              {sosNetwork.message}
+            </Text>
+          ) : null}
+
+          <View style={styles.settingsDivider} />
           <Text style={styles.settingsTitle}>Preferenze Radar</Text>
           <Text style={styles.explanationText}>
             Per vedere gli utenti vicini devi essere visibile anche tu. La tua posizione precisa
@@ -672,6 +717,18 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginBottom: 14,
     marginTop: 5,
+  },
+  networkAvailabilityMessage: {
+    color: '#72E2BB',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+  settingsDivider: {
+    backgroundColor: 'rgba(168, 181, 209, 0.16)',
+    height: 1,
+    marginBottom: 16,
+    marginTop: 12,
   },
   settingRow: {
     alignItems: 'center',

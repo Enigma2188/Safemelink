@@ -11,7 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SafeMeLink usa la posizione per includere le coordinate nel messaggio SOS.",
+        "NSLocationWhenInUseUsageDescription": "SafeMeLink usa la posizione per il Radar, gli SOS e le richieste di aiuto nelle vicinanze.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Se aderisci alla rete SOS, SafeMeLink aggiorna occasionalmente la posizione anche in background per inviarti emergenze realmente vicine.",
         "NSMicrophoneUsageDescription": "SafeMeLink usa il microfono solo quando la modalita ascolto della parola d'ordine e attiva.",
         "NSSpeechRecognitionUsageDescription": "SafeMeLink usa il riconoscimento vocale per attivare la parola d'ordine configurata."
       }
@@ -46,6 +47,16 @@
     "plugins": [
       "expo-router",
       "expo-notifications",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "SafeMeLink usa la posizione per il Radar, gli SOS e le richieste di aiuto nelle vicinanze.",
+          "locationAlwaysAndWhenInUsePermission": "Se aderisci alla rete SOS, SafeMeLink aggiorna occasionalmente la posizione anche in background per inviarti emergenze realmente vicine.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "isIosBackgroundLocationEnabled": true
+        }
+      ],
       "./plugins/withVoiceProtectionForegroundService.cjs",
       "./plugins/withSOSChannelQueries.cjs",
       [

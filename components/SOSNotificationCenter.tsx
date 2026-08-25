@@ -38,7 +38,7 @@ const isUnavailableSOS = (error: unknown) =>
     error.category === 'unexpected_response');
 
 export function SOSNotificationCenter() {
-  const { session } = useAuth();
+  const { session, isInitializing } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const rootNavigationState = useRootNavigationState();
@@ -54,11 +54,13 @@ export function SOSNotificationCenter() {
   const navigationInFlightRef = useRef(false);
   const openRequestGenerationRef = useRef(0);
   const navigationReadyRef = useRef(Boolean(rootNavigationState?.key));
+  const authReadyRef = useRef(!isInitializing && Boolean(session?.user.id));
   const pendingResponseRef = useRef<SOSNotificationPayload | null>(null);
 
   pathnameRef.current = pathname;
   userIdRef.current = session?.user.id;
   navigationReadyRef.current = Boolean(rootNavigationState?.key);
+  authReadyRef.current = !isInitializing && Boolean(session?.user.id);
 
   const removeEvent = useCallback((sosId: string, state: ReceivedSOSState) => {
     eventStatesRef.current.set(sosId, state);
@@ -145,9 +147,9 @@ export function SOSNotificationCenter() {
         return;
       }
 
-      if (!navigationReadyRef.current) {
+      if (!navigationReadyRef.current || !authReadyRef.current) {
         pendingResponseRef.current = payload;
-        console.info('[SafeMeLink SOS ricevuto] Apertura in attesa della navigazione.');
+        console.info('[SafeMeLink SOS ricevuto] Apertura in attesa della disponibilità app.');
         return;
       }
 
@@ -196,7 +198,12 @@ export function SOSNotificationCenter() {
   }, [enqueueForegroundSOS, handleNotificationResponse]);
 
   useEffect(() => {
-    if (!rootNavigationState?.key || !pendingResponseRef.current) {
+    if (
+      !rootNavigationState?.key ||
+      isInitializing ||
+      !session?.user.id ||
+      !pendingResponseRef.current
+    ) {
       return;
     }
 
@@ -205,7 +212,7 @@ export function SOSNotificationCenter() {
     openRequestGenerationRef.current += 1;
     setIsOpening(false);
     navigateToSOS(pendingResponse.sosId);
-  }, [navigateToSOS, rootNavigationState?.key]);
+  }, [isInitializing, navigateToSOS, rootNavigationState?.key, session?.user.id]);
 
   useEffect(() => {
     eventStatesRef.current.clear();
