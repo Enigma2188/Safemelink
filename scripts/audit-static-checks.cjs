@@ -107,6 +107,9 @@ const sosNetworkRepository = read(
 const sosNetworkProvider = read('components/SOSNetworkPresenceProvider.tsx');
 const sosNetworkService = read('services/SOSNetworkPresenceService.ts');
 const sosNetworkTask = read('services/SOSNetworkBackgroundTask.ts');
+const sosDispatchLeaseMigration = read(
+  'supabase/migrations/20260826120000_sos_push_dispatch_lease.sql',
+);
 const appConfig = read('app.json');
 
 check('Radar client uses 1 km and 25 results', () => {
@@ -136,6 +139,20 @@ check('SOS network background location is bounded, opportunistic and account-sco
   assert.doesNotMatch(sosNetworkProvider, /setInterval/);
   assert.doesNotMatch(sosNetworkService, /watchPositionAsync/);
   assert.match(sosNetworkTask, /TaskManager\.defineTask/);
+  assert.match(sosNetworkService, /SOS_NETWORK_PERMISSION_FOREGROUND/);
+  assert.match(sosNetworkService, /SOS_NETWORK_PERMISSION_BACKGROUND/);
+  assert.match(sosNetworkService, /SOS_NETWORK_PRESENCE_ATTEMPT/);
+  assert.match(sosNetworkService, /SOS_NETWORK_PRESENCE_SUCCESS/);
+  assert.match(sosNetworkTask, /SOS_NETWORK_PRESENCE_FAILURE/);
+  assert.match(sosNetworkProvider, /SOS_NETWORK_OPT_IN_ENABLED/);
+  assert.match(
+    sosNetworkProvider,
+    /startBackgroundUpdates\(\)[\s\S]*publishForegroundPresence/,
+  );
+  assert.match(
+    sosNetworkProvider,
+    /catch \(startError: unknown\)[\s\S]*publishForegroundPresence/,
+  );
   assert.match(rootLayout, /SOSNetworkBackgroundTask/);
   assert.match(appConfig, /"isAndroidBackgroundLocationEnabled": true/);
   assert.match(appConfig, /"isIosBackgroundLocationEnabled": true/);
@@ -164,6 +181,69 @@ check('SOS nearby selection uses backend freshness, adaptive radius and determin
   assert.doesNotMatch(sosNetworkMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
 });
 
+check('SOS nearby boundary scenarios retain valid responders', () => {
+  const chooseRadius = (distances) => {
+    if (distances.filter((distance) => distance <= 1_000).length >= 5) return 1_000;
+    if (distances.filter((distance) => distance <= 3_000).length >= 5) return 3_000;
+    return 5_000;
+  };
+  const selected = (distances) => {
+    const radius = chooseRadius(distances);
+    return distances.filter((distance) => distance <= radius).slice(0, 25);
+  };
+
+  assert.deepEqual(selected([150]), [150]);
+  assert.deepEqual(selected([150, 250]), [150, 250]);
+  assert.deepEqual(selected([150, 250, 350, 450]), [150, 250, 350, 450]);
+  assert.equal(chooseRadius([100, 200, 300, 400, 500]), 1_000);
+  assert.equal(chooseRadius([2_000]), 5_000);
+  assert.deepEqual(selected([2_000]), [2_000]);
+  assert.deepEqual(selected([4_000]), [4_000]);
+  assert.deepEqual(selected([5_001]), []);
+  assert.equal(selected(Array.from({ length: 30 }, (_, index) => index + 100)).length, 25);
+
+  const isFresh = (ageSeconds) => ageSeconds <= 30 * 60;
+  const freshnessPenalty = (ageSeconds) =>
+    ageSeconds <= 5 * 60 ? 0 : ageSeconds <= 15 * 60 ? 1_000 : 3_000;
+  assert.equal(isFresh(4 * 60 + 59), true);
+  assert.equal(freshnessPenalty(4 * 60 + 59), 0);
+  assert.equal(freshnessPenalty(5 * 60 + 1), 1_000);
+  assert.equal(freshnessPenalty(14 * 60 + 59), 1_000);
+  assert.equal(freshnessPenalty(15 * 60 + 1), 3_000);
+  assert.equal(isFresh(29 * 60 + 59), true);
+  assert.equal(isFresh(30 * 60 + 1), false);
+});
+
+check('SOS push claim is a recoverable pre-attempt lease with conservative post-attempt handling', () => {
+  assert.match(sosDispatchLeaseMigration, /push_dispatch_claim_id uuid/);
+  assert.match(sosDispatchLeaseMigration, /push_dispatch_attempted_at timestamptz/);
+  assert.doesNotMatch(sosDispatchLeaseMigration, /drop function.*claim_sos_push_dispatch\(uuid\)/);
+  assert.match(sosDispatchLeaseMigration, /interval '2 minutes'/);
+  assert.match(sosDispatchLeaseMigration, /return 'attempt_in_progress'/);
+  assert.match(sosDispatchLeaseMigration, /return 'in_progress'/);
+  assert.match(sosDispatchLeaseMigration, /release_sos_push_dispatch/);
+  assert.match(sosDispatchLeaseMigration, /push_dispatch_attempted_at is null/);
+  assert.match(pushFunction, /mark_sos_push_dispatch_attempted/);
+  assert.match(pushFunction, /complete_sos_push_dispatch/);
+  assert.match(pushFunction, /dispatchClaimed && !dispatchAttempted/);
+  assert.match(pushFunction, /EXPO_REQUEST_TIMEOUT_MS = 15_000/);
+  assert.match(sosPushService, /EDGE_FUNCTION_MAX_ATTEMPTS = 2/);
+  assert.match(sosPushService, /attempt <= EDGE_FUNCTION_MAX_ATTEMPTS/);
+});
+
+check('Radar diagnostics cover opt-in, permission, presence and nearby results', () => {
+  for (const marker of [
+    'RADAR_ENABLED',
+    'RADAR_PERMISSION',
+    'RADAR_PRESENCE_ATTEMPT',
+    'RADAR_PRESENCE_SUCCESS',
+    'RADAR_PRESENCE_FAILURE',
+    'RADAR_NEARBY_COUNT',
+  ]) {
+    assert.match(radarProvider, new RegExp(marker));
+  }
+});
+
 check('Cold-start SOS routing waits for authentication and navigation readiness', () => {
   assert.match(sosNotificationCenter, /authReadyRef/);
   assert.match(sosNotificationCenter, /!navigationReadyRef\.current \|\| !authReadyRef\.current/);
@@ -171,6 +251,8 @@ check('Cold-start SOS routing waits for authentication and navigation readiness'
     sosNotificationCenter,
     /isInitializing \|\|[\s\S]*!session\?\.user\.id \|\|[\s\S]*!pendingResponseRef\.current/,
   );
+  assert.match(sosNotificationCenter, /SOS_NOTIFICATION_FOREGROUND/);
+  assert.match(sosNotificationCenter, /SOS_NOTIFICATION_RESPONSE/);
 });
 
 check('Radar missing preferences are initialized with safe OFF defaults', () => {
@@ -237,7 +319,13 @@ check('Fresh-user network defaults require explicit privacy opt-in', () => {
 });
 
 check('Database types cover server-side SOS delivery RPCs', () => {
-  assert.match(databaseTypes, /claim_sos_push_dispatch:[\s\S]*target_sos_id: string/);
+  assert.match(
+    databaseTypes,
+    /claim_sos_push_dispatch:[\s\S]*target_sos_id: string; requested_claim_id: string/,
+  );
+  assert.match(databaseTypes, /mark_sos_push_dispatch_attempted:[\s\S]*Returns: boolean/);
+  assert.match(databaseTypes, /complete_sos_push_dispatch:[\s\S]*Returns: boolean/);
+  assert.match(databaseTypes, /release_sos_push_dispatch:[\s\S]*Returns: boolean/);
   assert.match(databaseTypes, /prepare_sos_delivery:[\s\S]*recipient_user_id: string/);
   assert.match(databaseTypes, /is_trusted: boolean/);
   assert.match(databaseTypes, /is_nearby: boolean/);
@@ -468,15 +556,18 @@ check('Push recipients are resolved authoritatively, unique, active, and multi-d
 check('SOS push dispatch is idempotent and rate limited on the server', () => {
   assert.match(pushFunction, /\.rpc\(\s*'claim_sos_push_dispatch'/);
   assert.match(accountBootstrapMigration, /push_dispatched_at timestamptz/);
-  assert.match(accountBootstrapMigration, /for update/);
-  assert.match(accountBootstrapMigration, /return 'already_dispatched'/);
-  assert.match(accountBootstrapMigration, /interval '5 minutes'/);
-  assert.match(accountBootstrapMigration, /recent_dispatch_count >= 3/);
+  assert.match(sosDispatchLeaseMigration, /for update/);
+  assert.match(sosDispatchLeaseMigration, /return 'already_dispatched'/);
+  assert.match(sosDispatchLeaseMigration, /interval '5 minutes'/);
+  assert.match(sosDispatchLeaseMigration, /recent_dispatch_count >= 3/);
   assert.match(
-    accountBootstrapMigration,
-    /grant execute on function public\.claim_sos_push_dispatch\(uuid\) to service_role/,
+    sosDispatchLeaseMigration,
+    /grant execute on function public\.claim_sos_push_dispatch\(uuid, uuid\) to service_role/,
   );
-  assert.doesNotMatch(accountBootstrapMigration, /grant execute on function public\.claim_sos_push_dispatch\(uuid\) to authenticated/);
+  assert.doesNotMatch(
+    sosDispatchLeaseMigration,
+    /grant execute on function public\.claim_sos_push_dispatch\(uuid, uuid\) to authenticated/,
+  );
 });
 
 check('Notification data contains no sender UUID or coordinates', () => {

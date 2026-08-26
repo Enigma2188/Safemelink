@@ -97,6 +97,10 @@ const getSOSDeliveryNotice = (
     return `SOS attivo. Questo evento era già stato inoltrato alla rete SafeMeLink. ${fallbackNotice}`;
   }
 
+  if (result.reason === 'in_progress' || result.reason === 'attempt_in_progress') {
+    return `SOS attivo. L’invio alla rete SafeMeLink è già in elaborazione. ${fallbackNotice}`;
+  }
+
   if (result.errors.length > 0 || result.notificationsFailed > 0) {
     return `SOS attivo, ma l’invio SafeMeLink ha incontrato un problema tecnico. ${fallbackNotice}`;
   }

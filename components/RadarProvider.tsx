@@ -223,6 +223,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
           console.info('[SafeMeLink Radar] RADAR_PREFS_ENABLED', {
             enabled: storedPreferences.radarEnabled,
           });
+          console.info('[SafeMeLink Radar] RADAR_ENABLED', {
+            enabled: storedPreferences.radarEnabled,
+          });
           console.info('[SafeMeLink Radar] RADAR_VISIBILITY_ENABLED', {
             enabled: storedPreferences.visibleToNearby,
           });
@@ -342,6 +345,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       let stage: 'location' | 'presence' | 'search' = 'location';
       let presencePublished = false;
       console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLICATION_ATTEMPTED');
+      console.info('[SafeMeLink Radar] RADAR_PRESENCE_ATTEMPT');
       if (isRadarScreenActive) {
         setStatus('searching');
         setError(null);
@@ -360,8 +364,12 @@ export function RadarProvider({ children }: PropsWithChildren) {
         }
 
         console.info('[SafeMeLink Radar] RADAR_GPS_ACQUIRED');
+        console.info('[SafeMeLink Radar] RADAR_PERMISSION', { granted: true });
         if (!RadarService.isLocationAccurateEnough(location)) {
           console.warn('[SafeMeLink Radar] RADAR_GPS_REJECTED_ACCURACY');
+          console.warn('[SafeMeLink Radar] RADAR_PRESENCE_FAILURE', {
+            category: 'accuracy_insufficient',
+          });
           if (isRadarScreenActive) {
             setUsers([]);
             setStatus('accuracy_insufficient');
@@ -380,6 +388,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
         presencePublished = true;
         consecutivePresenceFailures = 0;
         console.info('[SafeMeLink Radar] RADAR_PRESENCE_PUBLISHED');
+        console.info('[SafeMeLink Radar] RADAR_PRESENCE_SUCCESS');
 
         if (!isRadarScreenActive) {
           return;
@@ -398,6 +407,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
         setError(null);
         console.info('[SafeMeLink Radar] RADAR_SEARCH_RESULT_COUNT', {
           nearbyUserCount: nearbyUsers.length,
+        });
+        console.info('[SafeMeLink Radar] RADAR_NEARBY_COUNT', {
+          count: nearbyUsers.length,
         });
       } catch (attemptError: unknown) {
         if (!isAttemptCurrent(generation)) {
@@ -418,6 +430,13 @@ export function RadarProvider({ children }: PropsWithChildren) {
             category: attemptError instanceof Error ? attemptError.name : 'unknown',
           },
         );
+        if (attemptError instanceof LocationPermissionError) {
+          console.info('[SafeMeLink Radar] RADAR_PERMISSION', { granted: false });
+        }
+        console.warn('[SafeMeLink Radar] RADAR_PRESENCE_FAILURE', {
+          category: attemptError instanceof Error ? attemptError.name : 'unknown',
+          stage,
+        });
         if (!isRadarScreenActive) {
           return;
         }
@@ -543,6 +562,9 @@ export function RadarProvider({ children }: PropsWithChildren) {
 
         if (activeUserIdRef.current === userId) {
           console.info('[SafeMeLink Radar] RADAR_PREFS_ENABLED', {
+            enabled: savedPreferences.radarEnabled,
+          });
+          console.info('[SafeMeLink Radar] RADAR_ENABLED', {
             enabled: savedPreferences.radarEnabled,
           });
           console.info('[SafeMeLink Radar] RADAR_VISIBILITY_ENABLED', {

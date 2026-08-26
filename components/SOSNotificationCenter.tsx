@@ -129,6 +129,7 @@ export function SOSNotificationCenter() {
       { ...payload, receivedAt: Date.now() },
     ]);
     setOpenError(null);
+    console.info('[SafeMeLink SOS ricevuto] SOS_NOTIFICATION_FOREGROUND');
     console.info('[SafeMeLink SOS ricevuto] Avviso interno mostrato.');
   }, []);
 
@@ -141,6 +142,8 @@ export function SOSNotificationCenter() {
       if (!payload) {
         return;
       }
+
+      console.info('[SafeMeLink SOS ricevuto] SOS_NOTIFICATION_RESPONSE');
 
       if (eventStatesRef.current.get(payload.sosId) === 'opened') {
         console.info('[SafeMeLink SOS ricevuto] Risposta duplicata ignorata.');

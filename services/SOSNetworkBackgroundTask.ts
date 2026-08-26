@@ -31,6 +31,9 @@ TaskManager.defineTask<BackgroundLocationTaskData>(
     }
 
     try {
+      console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_ATTEMPT', {
+        source: 'background',
+      });
       let session = await AuthService.getSession();
       if (!session) {
         console.info('[SafeMeLink Rete SOS] Aggiornamento ignorato: sessione non disponibile.');
@@ -49,8 +52,9 @@ TaskManager.defineTask<BackgroundLocationTaskData>(
         session.user.id,
       );
     } catch (taskError: unknown) {
-      console.warn('[SafeMeLink Rete SOS] Pubblicazione background non riuscita.', {
+      console.warn('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_FAILURE', {
         category: taskError instanceof Error ? taskError.name : 'unknown',
+        source: 'background',
       });
     }
   },

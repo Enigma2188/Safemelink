@@ -34,6 +34,11 @@ export class SOSNetworkBackgroundUnavailableError extends Error {
   }
 }
 
+export type SOSNetworkPermissionState = {
+  foregroundGranted: boolean;
+  backgroundGranted: boolean;
+};
+
 let publicationInFlight: { userId: string; promise: Promise<boolean> } | null = null;
 
 const publishLocation = async (
@@ -71,21 +76,28 @@ const publishLocation = async (
     observedAt: new Date(location.timestamp).toISOString(),
     source,
   });
-  console.info('[SafeMeLink Rete SOS] Presenza aggiornata.', { source });
+  console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_SUCCESS', { source });
   return true;
 };
 
 export const SOSNetworkPresenceService = {
-  async requestPermissions() {
+  async requestPermissions(): Promise<SOSNetworkPermissionState> {
     const foreground = await Location.requestForegroundPermissionsAsync();
+    console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PERMISSION_FOREGROUND', {
+      granted: foreground.status === 'granted',
+    });
     if (foreground.status !== 'granted') {
       throw new SOSNetworkPermissionError('foreground');
     }
 
     const background = await Location.requestBackgroundPermissionsAsync();
-    if (background.status !== 'granted') {
-      throw new SOSNetworkPermissionError('background');
-    }
+    console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PERMISSION_BACKGROUND', {
+      granted: background.status === 'granted',
+    });
+    return {
+      foregroundGranted: true,
+      backgroundGranted: background.status === 'granted',
+    };
   },
 
   async hasRequiredPermissions() {
@@ -148,6 +160,9 @@ export const SOSNetworkPresenceService = {
     }
 
     const request = (async () => {
+      console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_ATTEMPT', {
+        source: 'foreground',
+      });
       const foreground = await Location.getForegroundPermissionsAsync();
       if (foreground.status !== 'granted') {
         throw new SOSNetworkPermissionError('foreground');
@@ -173,7 +188,15 @@ export const SOSNetworkPresenceService = {
           clearTimeout(timeoutId);
         }
       }
-      return publishLocation(location, 'foreground', expectedUserId);
+      try {
+        return await publishLocation(location, 'foreground', expectedUserId);
+      } catch (error: unknown) {
+        console.warn('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_FAILURE', {
+          category: error instanceof Error ? error.name : 'unknown',
+          source: 'foreground',
+        });
+        throw error;
+      }
     })().finally(() => {
       if (publicationInFlight?.promise === request) {
         publicationInFlight = null;

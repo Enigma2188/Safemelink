@@ -55,6 +55,9 @@ export type Database = {
           accepted_by: string | null;
           closed_at: string | null;
           push_dispatched_at: string | null;
+          push_dispatch_claim_id: string | null;
+          push_dispatch_claimed_at: string | null;
+          push_dispatch_attempted_at: string | null;
         };
         Insert: {
           id?: string;
@@ -69,6 +72,9 @@ export type Database = {
           accepted_by?: string | null;
           closed_at?: string | null;
           push_dispatched_at?: string | null;
+          push_dispatch_claim_id?: string | null;
+          push_dispatch_claimed_at?: string | null;
+          push_dispatch_attempted_at?: string | null;
         };
         Update: Partial<Database['public']['Tables']['sos']['Insert']>;
         Relationships: [];
@@ -362,8 +368,26 @@ export type Database = {
         }[];
       };
       claim_sos_push_dispatch: {
-        Args: { target_sos_id: string };
-        Returns: 'claimed' | 'already_dispatched' | 'rate_limited' | 'unavailable';
+        Args: { target_sos_id: string; requested_claim_id: string };
+        Returns:
+          | 'claimed'
+          | 'already_dispatched'
+          | 'attempt_in_progress'
+          | 'in_progress'
+          | 'rate_limited'
+          | 'unavailable';
+      };
+      mark_sos_push_dispatch_attempted: {
+        Args: { target_sos_id: string; expected_claim_id: string };
+        Returns: boolean;
+      };
+      complete_sos_push_dispatch: {
+        Args: { target_sos_id: string; expected_claim_id: string };
+        Returns: boolean;
+      };
+      release_sos_push_dispatch: {
+        Args: { target_sos_id: string; expected_claim_id: string };
+        Returns: boolean;
       };
       prepare_sos_delivery: {
         Args: { target_sos_id: string };

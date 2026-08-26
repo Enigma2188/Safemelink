@@ -21,6 +21,8 @@ export type SOSDeliveryResult = {
     | 'no_linked_recipients'
     | 'recipients_without_active_tokens'
     | 'already_dispatched'
+    | 'attempt_in_progress'
+    | 'in_progress'
     | 'rate_limited'
     | 'unavailable';
 };
@@ -40,12 +42,15 @@ type SOSPushResponse = {
     | 'no_linked_recipients'
     | 'recipients_without_active_tokens'
     | 'already_dispatched'
+    | 'attempt_in_progress'
+    | 'in_progress'
     | 'rate_limited'
     | 'unavailable';
 };
 
 const inFlightSOS = new Map<string, Promise<SOSDeliveryResult>>();
 const EDGE_FUNCTION_TIMEOUT_MS = 20_000;
+const EDGE_FUNCTION_MAX_ATTEMPTS = 2;
 const SOS_CREATION_TIMEOUT_MS = 20_000;
 
 export class SOSRemoteCreationTimeoutError extends Error {
@@ -153,25 +158,42 @@ async function sendSOSPush(
       authenticated: true,
     });
 
-    let invokeResult: Awaited<ReturnType<typeof client.functions.invoke<SOSPushResponse>>>;
+    let invokeResult: Awaited<ReturnType<typeof client.functions.invoke<SOSPushResponse>>> | null =
+      null;
+    let lastInvokeError: unknown = null;
 
-    try {
-      invokeResult = await invokeWithTimeout(
-        client.functions.invoke<SOSPushResponse>(
-          'send-sos-push',
-          {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
+    for (let attempt = 1; attempt <= EDGE_FUNCTION_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await invokeWithTimeout(
+          client.functions.invoke<SOSPushResponse>(
+            'send-sos-push',
+            {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: {
+                sosId: sos.id,
+              },
             },
-            body: {
-              sosId: sos.id,
-            },
-          },
-        ),
-      );
-    } catch (invokeError) {
+          ),
+        );
+        invokeResult = result;
+        if (!result.error || attempt === EDGE_FUNCTION_MAX_ATTEMPTS) {
+          break;
+        }
+        console.warn('[SafeMeLink Push] Retry Edge Function programmato.', { attempt });
+      } catch (invokeError: unknown) {
+        lastInvokeError = invokeError;
+        if (attempt < EDGE_FUNCTION_MAX_ATTEMPTS) {
+          console.warn('[SafeMeLink Push] Retry Edge Function programmato.', { attempt });
+          continue;
+        }
+      }
+    }
+
+    if (!invokeResult) {
       console.error('[SafeMeLink Push] Edge Function senza risposta.', {
-        category: invokeError instanceof Error ? invokeError.name : 'UnknownError',
+        category: lastInvokeError instanceof Error ? lastInvokeError.name : 'UnknownError',
       });
       return {
         sosCreated: true,
@@ -180,11 +202,7 @@ async function sendSOSPush(
         tokenCount: 0,
         notificationsSent: 0,
         notificationsFailed: 0,
-        errors: [
-          invokeError instanceof Error
-            ? invokeError.message
-            : 'Edge Function send-sos-push senza risposta.',
-        ],
+        errors: ['Edge Function send-sos-push senza risposta.'],
       };
     }
 
@@ -221,14 +239,22 @@ async function sendSOSPush(
     console.info('[SafeMeLink SOS] SOS_NEARBY_RECIPIENT_COUNT', {
       count: data?.nearbyRecipientCount ?? 0,
     });
+    console.info('[SafeMeLink SOS] SOS_DELIVERY_NEARBY_COUNT', {
+      count: data?.nearbyRecipientCount ?? 0,
+    });
     const recipientSelectionSkipped =
       data?.reason === 'already_dispatched' ||
+      data?.reason === 'attempt_in_progress' ||
+      data?.reason === 'in_progress' ||
       data?.reason === 'rate_limited' ||
       data?.reason === 'unavailable';
     if (!recipientSelectionSkipped && (data?.nearbyRecipientCount ?? 0) === 0) {
       console.info('[SafeMeLink SOS] SOS_NEARBY_NO_ELIGIBLE_USERS');
     }
     console.info('[SafeMeLink Push] PUSH_TOKEN_COUNT', {
+      count: data?.tokenCount ?? 0,
+    });
+    console.info('[SafeMeLink Push] SOS_DELIVERY_TOKEN_COUNT', {
       count: data?.tokenCount ?? 0,
     });
     console.info('[SafeMeLink Push] PUSH_SENT_COUNT', {
@@ -241,6 +267,12 @@ async function sendSOSPush(
       count: data?.expoTicketOkCount ?? data?.sent ?? 0,
     });
     console.info('[SafeMeLink Push] EXPO_TICKET_ERROR_COUNT', {
+      count: data?.expoTicketErrorCount ?? data?.failed ?? 0,
+    });
+    console.info('[SafeMeLink Push] SOS_DELIVERY_EXPO_ACCEPTED', {
+      count: data?.expoTicketOkCount ?? data?.sent ?? 0,
+    });
+    console.info('[SafeMeLink Push] SOS_DELIVERY_EXPO_REJECTED', {
       count: data?.expoTicketErrorCount ?? data?.failed ?? 0,
     });
 

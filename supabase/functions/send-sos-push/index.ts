@@ -4,6 +4,7 @@ import { getActiveRecipientTokens } from './pushRecipients.ts';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const SOS_CHANNEL_ID = 'sos-alerts';
+const EXPO_REQUEST_TIMEOUT_MS = 15_000;
 
 type SOSPushRequest = {
   sosId: string;
@@ -32,6 +33,8 @@ type ExpoPushError = {
 type SOSDispatchClaim =
   | 'claimed'
   | 'already_dispatched'
+  | 'attempt_in_progress'
+  | 'in_progress'
   | 'rate_limited'
   | 'unavailable';
 
@@ -98,6 +101,11 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: 'Invalid SOS payload.' }, 400);
   }
 
+  const dispatchClaimId = crypto.randomUUID();
+  let dispatchClaimed = false;
+  let dispatchAttempted = false;
+  let claimedSosId: string | null = null;
+
   try {
     const { data: sosData, error: sosError } = await adminClient
       .from('sos')
@@ -116,9 +124,13 @@ Deno.serve(async (request) => {
     }
 
     const sos = sosData as SOSRecord;
+    claimedSosId = sos.id;
     const { data: dispatchClaimData, error: dispatchClaimError } = await adminClient.rpc(
       'claim_sos_push_dispatch',
-      { target_sos_id: sos.id },
+      {
+        target_sos_id: sos.id,
+        requested_claim_id: dispatchClaimId,
+      },
     );
 
     if (dispatchClaimError) {
@@ -141,6 +153,7 @@ Deno.serve(async (request) => {
         tokenCount: 0,
       });
     }
+    dispatchClaimed = true;
 
     const {
       recipientIds,
@@ -194,7 +207,13 @@ Deno.serve(async (request) => {
     console.info('[send-sos-push] SOS_NEARBY_RECIPIENT_COUNT', {
       count: nearbyRecipientCount,
     });
+    console.info('[send-sos-push] SOS_DELIVERY_NEARBY_COUNT', {
+      count: nearbyRecipientCount,
+    });
     console.info('[send-sos-push] PUSH_TOKEN_COUNT', {
+      count: tokens.length,
+    });
+    console.info('[send-sos-push] SOS_DELIVERY_TOKEN_COUNT', {
       count: tokens.length,
     });
 
@@ -217,6 +236,18 @@ Deno.serve(async (request) => {
       console.info('[send-sos-push] EXPO_TICKET_ERROR_COUNT', { count: 0 });
       console.info('[send-sos-push] PUSH_SENT_COUNT', { count: 0 });
       console.info('[send-sos-push] PUSH_FAILED_COUNT', { count: 0 });
+      console.info('[send-sos-push] SOS_DELIVERY_EXPO_ACCEPTED', { count: 0 });
+      console.info('[send-sos-push] SOS_DELIVERY_EXPO_REJECTED', { count: 0 });
+      const { data: completed, error: completionError } = await adminClient.rpc(
+        'complete_sos_push_dispatch',
+        {
+          target_sos_id: sos.id,
+          expected_claim_id: dispatchClaimId,
+        },
+      );
+      if (completionError || completed !== true) {
+        throw completionError ?? new Error('Dispatch completion not confirmed.');
+      }
       return jsonResponse({
         sent: 0,
         failed: 0,
@@ -248,18 +279,38 @@ Deno.serve(async (request) => {
     const ticketsWithTokens: { ticket: ExpoPushTicket; token: string }[] = [];
     const expoErrors: ExpoPushError[] = [];
 
+    const { data: attemptStarted, error: attemptError } = await adminClient.rpc(
+      'mark_sos_push_dispatch_attempted',
+      {
+        target_sos_id: sos.id,
+        expected_claim_id: dispatchClaimId,
+      },
+    );
+    if (attemptError || attemptStarted !== true) {
+      throw attemptError ?? new Error('Dispatch attempt not confirmed.');
+    }
+    dispatchAttempted = true;
+
     for (let start = 0; start < messages.length; start += 100) {
       const messageBatch = messages.slice(start, start + 100);
       const tokenBatch = tokens.slice(start, start + 100);
-      const expoResponse = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          ...(expoAccessToken ? { authorization: `Bearer ${expoAccessToken}` } : {}),
-        },
-        body: JSON.stringify(messageBatch),
-      });
+      const expoController = new AbortController();
+      const expoTimeoutId = setTimeout(() => expoController.abort(), EXPO_REQUEST_TIMEOUT_MS);
+      let expoResponse: Response;
+      try {
+        expoResponse = await fetch(EXPO_PUSH_URL, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            ...(expoAccessToken ? { authorization: `Bearer ${expoAccessToken}` } : {}),
+          },
+          body: JSON.stringify(messageBatch),
+          signal: expoController.signal,
+        });
+      } finally {
+        clearTimeout(expoTimeoutId);
+      }
 
       if (!expoResponse.ok) {
         console.error('[send-sos-push] Expo Push API non disponibile.', {
@@ -334,6 +385,8 @@ Deno.serve(async (request) => {
     });
     console.info('[send-sos-push] PUSH_SENT_COUNT', { count: sent });
     console.info('[send-sos-push] PUSH_FAILED_COUNT', { count: failed });
+    console.info('[send-sos-push] SOS_DELIVERY_EXPO_ACCEPTED', { count: sent });
+    console.info('[send-sos-push] SOS_DELIVERY_EXPO_REJECTED', { count: failed });
 
     console.log('[send-sos-push] Invio completato.', {
       recipientCount: recipientIds.length,
@@ -343,6 +396,17 @@ Deno.serve(async (request) => {
       sent,
       failed,
     });
+
+    const { data: completed, error: completionError } = await adminClient.rpc(
+      'complete_sos_push_dispatch',
+      {
+        target_sos_id: sos.id,
+        expected_claim_id: dispatchClaimId,
+      },
+    );
+    if (completionError || completed !== true) {
+      throw completionError ?? new Error('Dispatch completion not confirmed.');
+    }
 
     return jsonResponse({
       sent,
@@ -356,6 +420,18 @@ Deno.serve(async (request) => {
       errors: [...expoErrors, ...ticketErrors],
     });
   } catch {
+    if (dispatchClaimed && !dispatchAttempted && claimedSosId) {
+      const { data: released, error: releaseError } = await adminClient.rpc(
+        'release_sos_push_dispatch',
+        {
+          target_sos_id: claimedSosId,
+          expected_claim_id: dispatchClaimId,
+        },
+      );
+      console.warn('[send-sos-push] Claim pre-invio rilasciato.', {
+        released: releaseError ? false : released === true,
+      });
+    }
     console.error('[send-sos-push] Invio fallito.', { category: 'unclassified_error' });
     return jsonResponse({ error: 'Unable to send SOS push notification.' }, 500);
   }
