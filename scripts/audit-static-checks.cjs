@@ -101,6 +101,9 @@ const receivedSOSScreen = read('app/sos/[id].tsx');
 const sosNetworkMigration = read(
   'supabase/migrations/20260825120000_sos_network_presence.sql',
 );
+const sosDeliveryAmbiguityFixMigration = read(
+  'supabase/migrations/20260828120000_fix_prepare_sos_delivery_ambiguity.sql',
+);
 const sosNetworkRepository = read(
   'backend/repositories/SOSNetworkPresenceRepository.ts',
 );
@@ -168,26 +171,30 @@ check('SOS network background location is bounded, opportunistic and account-sco
 });
 
 check('SOS nearby selection uses backend freshness, adaptive radius and deterministic ranking', () => {
-  assert.doesNotMatch(sosNetworkMigration, /sender_network_enabled/);
+  assert.doesNotMatch(sosDeliveryAmbiguityFixMigration, /sender_network_enabled/);
   assert.doesNotMatch(
-    sosNetworkMigration,
+    sosDeliveryAmbiguityFixMigration,
     /sender_preferences[\s\S]*sos_network_enabled = true/,
   );
   assert.match(
-    sosNetworkMigration,
+    sosDeliveryAmbiguityFixMigration,
     /preferences\.user_id = presence\.user_id[\s\S]*preferences\.sos_network_enabled = true/,
   );
-  assert.match(sosNetworkMigration, /presence\.observed_at >= now\(\) - interval '30 minutes'/);
-  assert.match(sosNetworkMigration, /interval '5 minutes' then 0/);
-  assert.match(sosNetworkMigration, /interval '15 minutes' then 1000/);
-  assert.match(sosNetworkMigration, /presence\.accuracy <= 100/);
-  assert.match(sosNetworkMigration, /distance_meters <= 1000/);
-  assert.match(sosNetworkMigration, /distance_meters <= 3000/);
-  assert.match(sosNetworkMigration, /selected_radius_meters integer := 5000/);
-  assert.match(sosNetworkMigration, /reliability_score/);
-  assert.match(sosNetworkMigration, /limit maximum_nearby_recipients/);
-  assert.match(sosNetworkMigration, /group by combined\.user_id/);
-  assert.doesNotMatch(sosNetworkMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /presence\.observed_at >= now\(\) - interval '30 minutes'/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /interval '5 minutes' then 0/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /interval '15 minutes' then 1000/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /presence\.accuracy <= 100/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /eligible\.distance_meters <= 1000/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /eligible\.distance_meters <= 3000/);
+  assert.doesNotMatch(
+    sosDeliveryAmbiguityFixMigration,
+    /filter \(where distance_meters <=/,
+  );
+  assert.match(sosDeliveryAmbiguityFixMigration, /selected_radius_meters integer := 5000/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /reliability_score/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /limit maximum_nearby_recipients/);
+  assert.match(sosDeliveryAmbiguityFixMigration, /group by combined\.user_id/);
+  assert.doesNotMatch(sosDeliveryAmbiguityFixMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
 });
 
 check('SOS nearby boundary scenarios retain valid responders', () => {
