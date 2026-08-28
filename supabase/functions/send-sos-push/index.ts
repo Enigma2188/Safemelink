@@ -59,6 +59,7 @@ const isSOSPushRequest = (value: unknown): value is SOSPushRequest => {
 };
 
 Deno.serve(async (request) => {
+  console.info('[send-sos-push] PUSH_REQUEST_RECEIVED');
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed.' }, 405);
   }
@@ -86,8 +87,10 @@ Deno.serve(async (request) => {
   } = await adminClient.auth.getUser(accessToken);
 
   if (userError || !user) {
+    console.warn('[send-sos-push] PUSH_AUTH_FAILED');
     return jsonResponse({ error: 'Invalid authentication.' }, 401);
   }
+  console.info('[send-sos-push] PUSH_AUTH_VERIFIED');
 
   let body: unknown;
 
@@ -105,6 +108,7 @@ Deno.serve(async (request) => {
   let dispatchClaimed = false;
   let dispatchAttempted = false;
   let claimedSosId: string | null = null;
+  let failureStage = 'load_sos';
 
   try {
     const { data: sosData, error: sosError } = await adminClient
@@ -125,6 +129,7 @@ Deno.serve(async (request) => {
 
     const sos = sosData as SOSRecord;
     claimedSosId = sos.id;
+    failureStage = 'claim_dispatch';
     const { data: dispatchClaimData, error: dispatchClaimError } = await adminClient.rpc(
       'claim_sos_push_dispatch',
       {
@@ -154,7 +159,9 @@ Deno.serve(async (request) => {
       });
     }
     dispatchClaimed = true;
+    console.info('[send-sos-push] PUSH_DISPATCH_CLAIMED');
 
+    failureStage = 'resolve_recipients';
     const {
       recipientIds,
       recipientTokens,
@@ -238,6 +245,7 @@ Deno.serve(async (request) => {
       console.info('[send-sos-push] PUSH_FAILED_COUNT', { count: 0 });
       console.info('[send-sos-push] SOS_DELIVERY_EXPO_ACCEPTED', { count: 0 });
       console.info('[send-sos-push] SOS_DELIVERY_EXPO_REJECTED', { count: 0 });
+      failureStage = 'complete_dispatch';
       const { data: completed, error: completionError } = await adminClient.rpc(
         'complete_sos_push_dispatch',
         {
@@ -248,6 +256,9 @@ Deno.serve(async (request) => {
       if (completionError || completed !== true) {
         throw completionError ?? new Error('Dispatch completion not confirmed.');
       }
+      console.info('[send-sos-push] PUSH_DISPATCH_COMPLETED', {
+        outcome: 'no_notifiable_devices',
+      });
       return jsonResponse({
         sent: 0,
         failed: 0,
@@ -279,6 +290,7 @@ Deno.serve(async (request) => {
     const ticketsWithTokens: { ticket: ExpoPushTicket; token: string }[] = [];
     const expoErrors: ExpoPushError[] = [];
 
+    failureStage = 'mark_attempted';
     const { data: attemptStarted, error: attemptError } = await adminClient.rpc(
       'mark_sos_push_dispatch_attempted',
       {
@@ -290,6 +302,8 @@ Deno.serve(async (request) => {
       throw attemptError ?? new Error('Dispatch attempt not confirmed.');
     }
     dispatchAttempted = true;
+    failureStage = 'expo_request';
+    console.info('[send-sos-push] PUSH_EXPO_ATTEMPTED');
 
     for (let start = 0; start < messages.length; start += 100) {
       const messageBatch = messages.slice(start, start + 100);
@@ -397,6 +411,7 @@ Deno.serve(async (request) => {
       failed,
     });
 
+    failureStage = 'complete_dispatch';
     const { data: completed, error: completionError } = await adminClient.rpc(
       'complete_sos_push_dispatch',
       {
@@ -407,6 +422,9 @@ Deno.serve(async (request) => {
     if (completionError || completed !== true) {
       throw completionError ?? new Error('Dispatch completion not confirmed.');
     }
+    console.info('[send-sos-push] PUSH_DISPATCH_COMPLETED', {
+      outcome: 'expo_processed',
+    });
 
     return jsonResponse({
       sent,
@@ -432,7 +450,9 @@ Deno.serve(async (request) => {
         released: releaseError ? false : released === true,
       });
     }
-    console.error('[send-sos-push] Invio fallito.', { category: 'unclassified_error' });
+    console.error('[send-sos-push] PUSH_DISPATCH_FAILED', {
+      stage: failureStage,
+    });
     return jsonResponse({ error: 'Unable to send SOS push notification.' }, 500);
   }
 });

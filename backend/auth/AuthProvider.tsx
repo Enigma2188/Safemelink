@@ -8,6 +8,8 @@ import {
 } from '@/backend/auth/AuthService';
 import { PushNotificationService } from '@/services/PushNotificationService';
 import { RadarService } from '@/services/RadarService';
+import { SOSNetworkPresenceRepository } from '@/backend/repositories/SOSNetworkPresenceRepository';
+import { SOSNetworkPresenceService } from '@/services/SOSNetworkPresenceService';
 
 type AuthContextValue = {
   session: Session | null;
@@ -225,7 +227,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
       if (isMounted) {
         setSession(nextSession);
-        setIsInitializing(false);
+        setIsInitializing(
+          initializedUserId !== nextSession.user.id || offlineUserId !== null,
+        );
         setError(null);
       }
 
@@ -334,6 +338,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
           if (session) {
             const cleanupResults = await Promise.allSettled([
               RadarService.deactivatePresence(),
+              SOSNetworkPresenceService.stopBackgroundUpdates(),
+              SOSNetworkPresenceRepository.deactivatePresence(),
               PushNotificationService.unregisterDeviceForUser(session.user.id),
             ]);
 

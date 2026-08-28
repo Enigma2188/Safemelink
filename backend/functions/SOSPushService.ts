@@ -24,7 +24,13 @@ export type SOSDeliveryResult = {
     | 'attempt_in_progress'
     | 'in_progress'
     | 'rate_limited'
-    | 'unavailable';
+    | 'unavailable'
+    | 'edge_function_timeout'
+    | 'edge_function_unauthorized'
+    | 'edge_function_unavailable'
+    | 'edge_function_error'
+    | 'remote_creation_timeout'
+    | 'remote_creation_error';
 };
 
 type SOSPushResponse = {
@@ -203,6 +209,10 @@ async function sendSOSPush(
         notificationsSent: 0,
         notificationsFailed: 0,
         errors: ['Edge Function send-sos-push senza risposta.'],
+        reason:
+          lastInvokeError instanceof Error && /timeout/i.test(lastInvokeError.message)
+            ? 'edge_function_timeout'
+            : 'edge_function_unavailable',
       };
     }
 
@@ -222,6 +232,12 @@ async function sendSOSPush(
         notificationsSent: 0,
         notificationsFailed: 0,
         errors: ['Errore Edge Function.'],
+        reason:
+          errorDetails.status === 401
+            ? 'edge_function_unauthorized'
+            : errorDetails.status === 404
+              ? 'edge_function_unavailable'
+              : 'edge_function_error',
       };
     }
 

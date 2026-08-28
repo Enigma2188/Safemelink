@@ -11,9 +11,15 @@ import {
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
-import { SOSNetworkPresenceRepository } from '@/backend/repositories/SOSNetworkPresenceRepository';
+import { BackendError } from '@/backend/errors/BackendError';
+import {
+  SOSNetworkPresenceRepository,
+  SOSNetworkPresenceTimeoutError,
+} from '@/backend/repositories/SOSNetworkPresenceRepository';
 import {
   SOSNetworkBackgroundUnavailableError,
+  SOSNetworkLocationServicesDisabledError,
+  SOSNetworkLocationTimeoutError,
   SOSNetworkPermissionError,
   SOSNetworkPresenceService,
 } from '@/services/SOSNetworkPresenceService';
@@ -22,7 +28,10 @@ export type SOSNetworkAvailabilityStatus =
   | 'loading'
   | 'off'
   | 'available'
-  | 'permission_required'
+  | 'foreground_permission_required'
+  | 'background_permission_required'
+  | 'notification_permission_required'
+  | 'location_services_required'
   | 'offline'
   | 'error';
 
@@ -43,6 +52,14 @@ const userMessageForError = (error: unknown) => {
     return error.message;
   }
   if (error instanceof SOSNetworkBackgroundUnavailableError) {
+    return error.message;
+  }
+  if (
+    error instanceof SOSNetworkLocationServicesDisabledError ||
+    error instanceof SOSNetworkLocationTimeoutError ||
+    error instanceof SOSNetworkPresenceTimeoutError ||
+    error instanceof BackendError
+  ) {
     return error.message;
   }
   return 'Disponibilità rete SOS temporaneamente non verificabile.';
@@ -106,6 +123,9 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         setEnabledState(storedEnabled);
         setLoadedUserId(userId);
         setStatus(storedEnabled ? 'available' : 'off');
+        console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PREFERENCE_LOADED', {
+          enabled: storedEnabled,
+        });
       })
       .catch((loadError: unknown) => {
         if (!isCurrent || generation !== generationRef.current) {
@@ -131,6 +151,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
     let appState: AppStateStatus = AppState.currentState;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let operationInFlight = false;
+    let consecutiveFailures = 0;
     const expectedUserId = userId;
     const shouldRun = Boolean(
       expectedUserId && loadedUserId === expectedUserId && enabled && !isOffline,
@@ -149,7 +170,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
       shouldRun &&
       activeUserIdRef.current === expectedUserId;
 
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (delayMs = FOREGROUND_REFRESH_MS) => {
       clearRefresh();
       if (!isOperationCurrent()) {
         return;
@@ -157,7 +178,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
         void refreshPresence();
-      }, FOREGROUND_REFRESH_MS);
+      }, delayMs);
     };
 
     const refreshPresence = async () => {
@@ -178,11 +199,27 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         if (isOperationCurrent()) {
           const backgroundPermissionMissing =
             backgroundError instanceof SOSNetworkPermissionError;
-          setStatus(backgroundPermissionMissing ? 'permission_required' : backgroundError ? 'error' : 'available');
+          const notificationPermission =
+            await SOSNetworkPresenceService.getNotificationPermissionState();
+          if (!isOperationCurrent()) {
+            return;
+          }
+          consecutiveFailures = published ? 0 : consecutiveFailures + 1;
+          setStatus(
+            backgroundPermissionMissing
+              ? 'background_permission_required'
+              : !notificationPermission.granted
+                ? 'notification_permission_required'
+                : backgroundError
+                  ? 'error'
+                  : 'available',
+          );
           setMessage(
             backgroundPermissionMissing
               ? 'Presenza attiva mentre usi SafeMeLink. Consenti la posizione sempre per ricevere SOS anche in background.'
-              : backgroundError
+                : !notificationPermission.granted
+                  ? 'Rete SOS attiva. Autorizza le notifiche per ricevere le richieste di aiuto.'
+                : backgroundError
                 ? 'Presenza foreground attiva. Aggiornamento background temporaneamente non disponibile.'
                 : published
               ? 'Disponibile per ricevere richieste SOS nelle vicinanze.'
@@ -190,9 +227,17 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           );
         }
       } catch (refreshError: unknown) {
+        consecutiveFailures += 1;
         if (isOperationCurrent()) {
-          const permissionError = refreshError instanceof SOSNetworkPermissionError;
-          setStatus(permissionError ? 'permission_required' : 'error');
+          setStatus(
+            refreshError instanceof SOSNetworkLocationServicesDisabledError
+              ? 'location_services_required'
+              : refreshError instanceof SOSNetworkPermissionError
+                ? refreshError.permission === 'foreground'
+                  ? 'foreground_permission_required'
+                  : 'background_permission_required'
+                : 'error',
+          );
           setMessage(userMessageForError(refreshError));
           console.warn('[SafeMeLink Rete SOS] Disponibilità non aggiornata.', {
             category: refreshError instanceof Error ? refreshError.name : 'unknown',
@@ -200,7 +245,11 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         }
       } finally {
         operationInFlight = false;
-        scheduleRefresh();
+        const retryDelay =
+          consecutiveFailures > 0 && consecutiveFailures <= 3
+            ? 30_000 * 2 ** (consecutiveFailures - 1)
+            : FOREGROUND_REFRESH_MS;
+        scheduleRefresh(retryDelay);
       }
     };
 
@@ -241,44 +290,54 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         setMessage(null);
 
         if (nextEnabled) {
+          console.info('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_REQUESTED');
           const permissionState = await SOSNetworkPresenceService.requestPermissions();
-          try {
-            await SOSNetworkPresenceRepository.updatePreference(true);
-            console.info('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_ENABLED');
-            let backgroundStarted = false;
-            if (permissionState.backgroundGranted) {
-              try {
-                await SOSNetworkPresenceService.startBackgroundUpdates();
-                backgroundStarted = true;
-              } catch (startError: unknown) {
-                console.warn('[SafeMeLink Rete SOS] Task background non avviato.', {
-                  category: startError instanceof Error ? startError.name : 'unknown',
-                });
-              }
-            }
-            const published = await SOSNetworkPresenceService.publishForegroundPresence(
-              expectedUserId,
-            );
-            if (activeUserIdRef.current !== expectedUserId) {
-              return;
-            }
-            setEnabledState(true);
-            setLoadedUserId(expectedUserId);
-            setStatus(backgroundStarted ? 'available' : 'permission_required');
-            setMessage(
-              !permissionState.backgroundGranted
-                ? 'Presenza attiva mentre usi SafeMeLink. Consenti la posizione sempre per ricevere SOS anche in background.'
-                : !backgroundStarted
-                  ? 'Presenza foreground attiva. Aggiornamento background temporaneamente non disponibile.'
-                  : published
-                ? 'Disponibile per ricevere richieste SOS nelle vicinanze.'
-                : 'Rete SOS attiva. La posizione verrà aggiornata appena sarà più precisa.',
-            );
-          } catch (enableError) {
+          await SOSNetworkPresenceRepository.updatePreference(true);
+          console.info('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_ENABLED');
+          if (activeUserIdRef.current !== expectedUserId) {
             await SOSNetworkPresenceService.stopBackgroundUpdates().catch(() => undefined);
-            await SOSNetworkPresenceRepository.updatePreference(false).catch(() => undefined);
-            throw enableError;
+            return;
           }
+          setEnabledState(true);
+          setLoadedUserId(expectedUserId);
+
+          let backgroundStarted = false;
+          if (permissionState.backgroundGranted) {
+            try {
+              await SOSNetworkPresenceService.startBackgroundUpdates();
+              backgroundStarted = true;
+            } catch (startError: unknown) {
+              console.warn('[SafeMeLink Rete SOS] Task background non avviato.', {
+                category: startError instanceof Error ? startError.name : 'unknown',
+              });
+            }
+          }
+          const published = await SOSNetworkPresenceService.publishForegroundPresence(
+            expectedUserId,
+          );
+          const notificationPermission =
+            await SOSNetworkPresenceService.getNotificationPermissionState();
+          if (activeUserIdRef.current !== expectedUserId) {
+            return;
+          }
+          setStatus(
+            !permissionState.backgroundGranted || !backgroundStarted
+              ? 'background_permission_required'
+              : !notificationPermission.granted
+                ? 'notification_permission_required'
+                : 'available',
+          );
+          setMessage(
+            !permissionState.backgroundGranted
+              ? 'Presenza attiva mentre usi SafeMeLink. Consenti la posizione sempre per ricevere SOS anche in background.'
+              : !backgroundStarted
+                ? 'Presenza foreground attiva. Aggiornamento background temporaneamente non disponibile.'
+                : !notificationPermission.granted
+                  ? 'Rete SOS attiva. Autorizza le notifiche per ricevere le richieste di aiuto.'
+                : published
+              ? 'Disponibile per ricevere richieste SOS nelle vicinanze.'
+              : 'Rete SOS attiva. La posizione verrà aggiornata appena sarà più precisa.',
+          );
         } else {
           generationRef.current += 1;
           let stopError: unknown = null;
@@ -305,8 +364,19 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
       })()
         .catch((saveError: unknown) => {
           if (activeUserIdRef.current === expectedUserId) {
-            setStatus(saveError instanceof SOSNetworkPermissionError ? 'permission_required' : 'error');
+            setStatus(
+              saveError instanceof SOSNetworkLocationServicesDisabledError
+                ? 'location_services_required'
+                : saveError instanceof SOSNetworkPermissionError
+                  ? saveError.permission === 'foreground'
+                    ? 'foreground_permission_required'
+                    : 'background_permission_required'
+                  : 'error',
+            );
             setMessage(userMessageForError(saveError));
+            console.warn('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_FAILURE', {
+              category: saveError instanceof Error ? saveError.name : 'unknown',
+            });
           }
           throw saveError;
         })

@@ -1,6 +1,7 @@
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SosStatus } from '@/backend/database.types';
 import {
+  SOSRemoteCreationTimeoutError,
   SOSPushService,
   type SOSDeliveryResult,
 } from '@/backend/functions/SOSPushService';
@@ -126,6 +127,10 @@ export const SOSService = {
             notificationsSent: 0,
             notificationsFailed: 0,
             errors: ['Invio SafeMeLink non disponibile.'],
+            reason:
+              error instanceof SOSRemoteCreationTimeoutError
+                ? ('remote_creation_timeout' as const)
+                : ('remote_creation_error' as const),
           };
         })
       : {

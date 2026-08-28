@@ -357,7 +357,7 @@ export function RadarProvider({ children }: PropsWithChildren) {
       try {
         const location = await LocationService.getCurrentLocation({
           timeoutMs: 15_000,
-          accuracy: 'balanced',
+          accuracy: 'high',
         });
         if (!isAttemptCurrent(generation)) {
           return;

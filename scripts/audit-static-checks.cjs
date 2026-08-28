@@ -130,11 +130,20 @@ check('Visual Radar and SOS network presence are separate and explicitly opted i
 
 check('SOS network background location is bounded, opportunistic and account-scoped', () => {
   assert.match(sosNetworkService, /Accuracy\.Balanced/);
+  assert.match(sosNetworkService, /Accuracy\.High/);
+  assert.match(sosNetworkService, /Location\.hasServicesEnabledAsync\(\)/);
+  assert.match(sosNetworkService, /SOSNetworkLocationServicesDisabledError/);
   assert.match(sosNetworkService, /BACKGROUND_UPDATE_INTERVAL_MS = 15 \* 60 \* 1_000/);
   assert.match(sosNetworkService, /BACKGROUND_UPDATE_DISTANCE_METERS = 500/);
   assert.match(sosNetworkService, /pausesUpdatesAutomatically: true/);
   assert.match(sosNetworkService, /session\?\.user\.id !== expectedUserId/);
   assert.match(sosNetworkProvider, /FOREGROUND_REFRESH_MS = 10 \* 60 \* 1_000/);
+  assert.match(
+    sosNetworkProvider,
+    /consecutiveFailures > 0 && consecutiveFailures <= 3[\s\S]*30_000 \* 2 \*\* \(consecutiveFailures - 1\)/,
+  );
+  assert.match(sosNetworkProvider, /location_services_required/);
+  assert.match(sosNetworkProvider, /notification_permission_required/);
   assert.match(sosNetworkProvider, /AppState\.addEventListener\('change'/);
   assert.doesNotMatch(sosNetworkProvider, /setInterval/);
   assert.doesNotMatch(sosNetworkService, /watchPositionAsync/);
@@ -227,6 +236,10 @@ check('SOS push claim is a recoverable pre-attempt lease with conservative post-
   assert.match(pushFunction, /complete_sos_push_dispatch/);
   assert.match(pushFunction, /dispatchClaimed && !dispatchAttempted/);
   assert.match(pushFunction, /EXPO_REQUEST_TIMEOUT_MS = 15_000/);
+  assert.match(pushFunction, /PUSH_REQUEST_RECEIVED/);
+  assert.match(pushFunction, /PUSH_AUTH_VERIFIED/);
+  assert.match(pushFunction, /failureStage = 'mark_attempted'/);
+  assert.match(pushFunction, /failureStage = 'complete_dispatch'/);
   assert.match(sosPushService, /EDGE_FUNCTION_MAX_ATTEMPTS = 2/);
   assert.match(sosPushService, /attempt <= EDGE_FUNCTION_MAX_ATTEMPTS/);
 });
@@ -832,7 +845,7 @@ check('Radar uses one bounded foreground location acquisition per attempt', () =
   assert.match(radarProvider, /runOneShotRadar/);
   assert.match(
     radarProvider,
-    /LocationService\.getCurrentLocation\(\{[\s\S]*timeoutMs: 15_000,[\s\S]*accuracy: 'balanced'/,
+    /LocationService\.getCurrentLocation\(\{[\s\S]*timeoutMs: 15_000,[\s\S]*accuracy: 'high'/,
   );
   assert.match(
     radarProvider,

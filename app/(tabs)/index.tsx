@@ -101,6 +101,21 @@ const getSOSDeliveryNotice = (
     return `SOS attivo. L’invio alla rete SafeMeLink è già in elaborazione. ${fallbackNotice}`;
   }
 
+  if (result.reason === 'remote_creation_timeout' || result.reason === 'remote_creation_error') {
+    return `SOS attivo, ma il servizio SafeMeLink non ha salvato l’evento remoto. ${fallbackNotice}`;
+  }
+
+  if (result.reason === 'edge_function_unauthorized') {
+    return `SOS attivo, ma la sessione non ha autorizzato l’invio SafeMeLink. ${fallbackNotice}`;
+  }
+
+  if (
+    result.reason === 'edge_function_timeout' ||
+    result.reason === 'edge_function_unavailable'
+  ) {
+    return `SOS attivo, ma il servizio notifiche SafeMeLink non è temporaneamente raggiungibile. ${fallbackNotice}`;
+  }
+
   if (result.errors.length > 0 || result.notificationsFailed > 0) {
     return `SOS attivo, ma l’invio SafeMeLink ha incontrato un problema tecnico. ${fallbackNotice}`;
   }

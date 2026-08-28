@@ -118,11 +118,15 @@ export function RadarScreen() {
       // The provider exposes a sanitized, actionable message next to this switch.
     }
   };
-  const openLocationSettings = async () => {
+  const openLocationSettings = async (locationServices = false) => {
     setActionError(null);
 
     try {
-      await Linking.openSettings();
+      if (Platform.OS === 'android' && locationServices) {
+        await Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+      } else {
+        await Linking.openSettings();
+      }
     } catch {
       if (isMountedRef.current) {
         setActionError('Impossibile aprire le impostazioni. Aprile manualmente e abilita la posizione.');
@@ -149,6 +153,11 @@ export function RadarScreen() {
     status === 'position_unavailable' ||
     status === 'accuracy_insufficient' ||
     status === 'error';
+  const sosNetworkNeedsSettings =
+    sosNetwork.status === 'location_services_required' ||
+    sosNetwork.status === 'foreground_permission_required' ||
+    sosNetwork.status === 'background_permission_required' ||
+    sosNetwork.status === 'notification_permission_required';
 
   return (
     <View style={styles.screen}>
@@ -256,10 +265,10 @@ export function RadarScreen() {
                 <Text style={styles.refreshButtonText}>Riprova</Text>
               </Pressable>
             ) : null}
-            {status === 'permission_required' ? (
+            {status === 'permission_required' || status === 'position_unavailable' ? (
               <Pressable
                 accessibilityRole="button"
-                onPress={() => void openLocationSettings()}
+                onPress={() => void openLocationSettings(status === 'position_unavailable')}
                 style={styles.refreshButton}>
                 <Ionicons color="#DDEEFF" name="settings-outline" size={17} />
                 <Text style={styles.refreshButtonText}>Apri impostazioni</Text>
@@ -301,6 +310,23 @@ export function RadarScreen() {
               }>
               {sosNetwork.message}
             </Text>
+          ) : null}
+          {sosNetworkNeedsSettings ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() =>
+                void openLocationSettings(
+                  sosNetwork.status === 'location_services_required',
+                )
+              }
+              style={styles.refreshButton}>
+              <Ionicons color="#DDEEFF" name="settings-outline" size={17} />
+              <Text style={styles.refreshButtonText}>
+                {sosNetwork.status === 'location_services_required'
+                  ? 'Attiva posizione'
+                  : 'Apri impostazioni'}
+              </Text>
+            </Pressable>
           ) : null}
 
           <View style={styles.settingsDivider} />

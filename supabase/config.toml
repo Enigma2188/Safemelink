@@ -1,0 +1,7 @@
+# The function performs authoritative user-JWT verification with
+# adminClient.auth.getUser() before reading the SOS or using service-role data.
+# Disabling the legacy gateway verifier keeps authenticated calls compatible
+# with projects using asymmetric Auth signing keys without making the handler
+# public.
+[functions.send-sos-push]
+verify_jwt = false

@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
@@ -34,9 +35,28 @@ export class SOSNetworkBackgroundUnavailableError extends Error {
   }
 }
 
+export class SOSNetworkLocationServicesDisabledError extends Error {
+  constructor() {
+    super('Attiva la posizione del dispositivo per renderti disponibile nella Rete SOS.');
+    this.name = 'SOSNetworkLocationServicesDisabledError';
+  }
+}
+
+export class SOSNetworkLocationTimeoutError extends Error {
+  constructor() {
+    super('La posizione non è arrivata in tempo. Controlla il GPS e riprova.');
+    this.name = 'SOSNetworkLocationTimeoutError';
+  }
+}
+
 export type SOSNetworkPermissionState = {
   foregroundGranted: boolean;
   backgroundGranted: boolean;
+};
+
+export type SOSNetworkNotificationPermissionState = {
+  granted: boolean;
+  canAskAgain: boolean;
 };
 
 let publicationInFlight: { userId: string; promise: Promise<boolean> } | null = null;
@@ -82,6 +102,17 @@ const publishLocation = async (
 
 export const SOSNetworkPresenceService = {
   async requestPermissions(): Promise<SOSNetworkPermissionState> {
+    const locationServicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!locationServicesEnabled) {
+      console.info('[SafeMeLink Rete SOS] SOS_NETWORK_LOCATION_SERVICES', {
+        enabled: false,
+      });
+      throw new SOSNetworkLocationServicesDisabledError();
+    }
+    console.info('[SafeMeLink Rete SOS] SOS_NETWORK_LOCATION_SERVICES', {
+      enabled: true,
+    });
+
     const foreground = await Location.requestForegroundPermissionsAsync();
     console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PERMISSION_FOREGROUND', {
       granted: foreground.status === 'granted',
@@ -97,6 +128,14 @@ export const SOSNetworkPresenceService = {
     return {
       foregroundGranted: true,
       backgroundGranted: background.status === 'granted',
+    };
+  },
+
+  async getNotificationPermissionState(): Promise<SOSNetworkNotificationPermissionState> {
+    const permission = await Notifications.getPermissionsAsync();
+    return {
+      granted: permission.granted,
+      canAskAgain: permission.canAskAgain,
     };
   },
 
@@ -168,17 +207,20 @@ export const SOSNetworkPresenceService = {
         throw new SOSNetworkPermissionError('foreground');
       }
       if (!(await Location.hasServicesEnabledAsync())) {
-        throw new Error('Servizi di localizzazione non disponibili.');
+        console.info('[SafeMeLink Rete SOS] SOS_NETWORK_LOCATION_SERVICES', {
+          enabled: false,
+        });
+        throw new SOSNetworkLocationServicesDisabledError();
       }
 
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       let location: Location.LocationObject;
       try {
         location = await Promise.race([
-          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
           new Promise<never>((_, reject) => {
             timeoutId = setTimeout(
-              () => reject(new Error('Acquisizione posizione rete SOS scaduta.')),
+              () => reject(new SOSNetworkLocationTimeoutError()),
               FOREGROUND_LOCATION_TIMEOUT_MS,
             );
           }),
