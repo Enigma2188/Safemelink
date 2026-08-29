@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
@@ -40,7 +40,9 @@ import { SOSStorage } from '@/storage/SOSStorage';
 
 const SAFETY_TIMER_SECONDS = 10;
 const CHECKPOINT_CONFIRM_SECONDS = 30;
-const CHECKPOINT_OPTIONS_MINUTES = [5, 10, 15, 30];
+const CHECKPOINT_MAX_HOURS = 12;
+const CHECKPOINT_MAX_DURATION_MINUTES = CHECKPOINT_MAX_HOURS * 60 + 59;
+const CHECKPOINT_QUICK_DURATIONS = [15, 30, 60] as const;
 const GO_HOME_CONFIRM_SECONDS = 30;
 const GO_HOME_SAFETY_MARGIN = 1.3;
 const GO_HOME_SPEED_KM_H: Record<GoHomeTransportMode, number> = {
@@ -185,6 +187,35 @@ const runGoHomeStepWithTimeout = async <T,>(
   }
 };
 
+const getCheckpointDurationMinutes = (hours: number, minutes: number) => {
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > CHECKPOINT_MAX_HOURS ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  const durationMinutes = hours * 60 + minutes;
+  return durationMinutes >= 1 && durationMinutes <= CHECKPOINT_MAX_DURATION_MINUTES
+    ? durationMinutes
+    : null;
+};
+
+const formatCheckpointDuration = (hours: number, minutes: number) => {
+  const parts: string[] = [];
+  if (hours > 0) {
+    parts.push(`${hours} ${hours === 1 ? 'ora' : 'ore'}`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} ${minutes === 1 ? 'minuto' : 'minuti'}`);
+  }
+  return parts.length > 0 ? `Checkpoint tra ${parts.join(' e ')}` : 'Seleziona una durata';
+};
+
 const runSOSLocalStepWithTimeout = async <T,>(operation: Promise<T>) => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -219,9 +250,14 @@ export default function HomeScreen() {
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
   const [checkpointStatus, setCheckpointStatus] = useState<CheckpointStatus>('idle');
-  const [checkpointMinutes, setCheckpointMinutes] = useState(CHECKPOINT_OPTIONS_MINUTES[0]);
+  const [checkpointMinutes, setCheckpointMinutes] = useState<number>(
+    CHECKPOINT_QUICK_DURATIONS[0],
+  );
+  const [checkpointHoursDraft, setCheckpointHoursDraft] = useState(0);
+  const [checkpointMinutesDraft, setCheckpointMinutesDraft] = useState(15);
   const [checkpointRemainingSeconds, setCheckpointRemainingSeconds] = useState(0);
   const [checkpointConfirmSeconds, setCheckpointConfirmSeconds] = useState(CHECKPOINT_CONFIRM_SECONDS);
+  const [checkpointExpiresAt, setCheckpointExpiresAt] = useState<string | null>(null);
   const [homeLocation, setHomeLocation] = useState<HomeLocation | null>(null);
   const [goHomeTransportMode, setGoHomeTransportMode] =
     useState<GoHomeTransportMode>('walking');
@@ -242,6 +278,12 @@ export default function HomeScreen() {
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
   const sosEndingInFlightRef = useRef(false);
+  const checkpointStartInFlightRef = useRef(false);
+  const checkpointOperationGenerationRef = useRef(0);
+  const checkpointExpirationHandledRef = useRef<string | null>(null);
+  const checkpointOwnerUserIdRef = useRef<string | null>(userId);
+  const checkpointStatusRef = useRef<CheckpointStatus>('idle');
+  const checkpointStorageQueueRef = useRef<Promise<void>>(Promise.resolve());
   const drawerNavigationInFlightRef = useRef(false);
   const pendingDrawerRouteRef = useRef<Href | null>(null);
   const drawerNavigationStartedAtRef = useRef(0);
@@ -251,6 +293,7 @@ export default function HomeScreen() {
   const latestEvent = useMemo(() => lastEvents[0], [lastEvents]);
   activeUserIdRef.current = userId;
   statusRef.current = status;
+  checkpointStatusRef.current = checkpointStatus;
 
   useFocusEffect(
     useCallback(() => {
@@ -297,9 +340,45 @@ export default function HomeScreen() {
     }, [logoGlowPulse, sosGlowPulse]),
   );
 
+  const clearPersistedCheckpoint = useCallback((targetUserId: string | null) => {
+    if (!targetUserId) {
+      return Promise.resolve();
+    }
+    const cleanup = checkpointStorageQueueRef.current
+      .catch(() => {})
+      .then(() => CheckpointStorage.clearActive(targetUserId))
+      .catch(() => {
+        console.warn('[Checkpoint] cleanup sessione locale non completato');
+      });
+    checkpointStorageQueueRef.current = cleanup;
+    return cleanup;
+  }, []);
+
+  const enterCheckpointConfirmation = useCallback((expiresAt: string) => {
+    if (
+      checkpointExpirationHandledRef.current === expiresAt ||
+      checkpointStatusRef.current === 'confirming'
+    ) {
+      return;
+    }
+    checkpointExpirationHandledRef.current = expiresAt;
+    checkpointStatusRef.current = 'confirming';
+    setCheckpointRemainingSeconds(0);
+    setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    setCheckpointStatus('confirming');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+  }, []);
+
   const startSOSCountdown = useCallback(() => {
     loadGenerationRef.current += 1;
     statusRef.current = 'countdown';
+    checkpointOperationGenerationRef.current += 1;
+    checkpointStartInFlightRef.current = false;
+    void clearPersistedCheckpoint(checkpointOwnerUserIdRef.current);
+    checkpointOwnerUserIdRef.current = null;
+    checkpointExpirationHandledRef.current = null;
+    checkpointStatusRef.current = 'idle';
+    setCheckpointExpiresAt(null);
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
@@ -316,7 +395,7 @@ export default function HomeScreen() {
     setPushDeliveryNotice(null);
     setSmsFollowUpAvailable(false);
     setStatus('countdown');
-  }, []);
+  }, [clearPersistedCheckpoint]);
 
   useEffect(
     () =>
@@ -355,6 +434,12 @@ export default function HomeScreen() {
     setIsEndingSOS(false);
     setStatus('idle');
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
+    checkpointOperationGenerationRef.current += 1;
+    checkpointStartInFlightRef.current = false;
+    checkpointOwnerUserIdRef.current = null;
+    checkpointExpirationHandledRef.current = null;
+    checkpointStatusRef.current = 'idle';
+    setCheckpointExpiresAt(null);
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
@@ -381,12 +466,19 @@ export default function HomeScreen() {
     }
 
     try {
-      const [storedContacts, storedEvents, storedHomeLocation, storedTransportMode] =
+      const [
+        storedContacts,
+        storedEvents,
+        storedHomeLocation,
+        storedTransportMode,
+        storedCheckpoint,
+      ] =
         await Promise.all([
           isOffline ? ContactsService.listCached(loadUserId) : ContactsService.list(),
           SOSStorage.listEvents(loadUserId),
           GoHomeStorage.getHomeLocation(loadUserId),
           GoHomeStorage.getTransportMode(loadUserId),
+          CheckpointStorage.getActive(loadUserId),
         ]);
       let nextEvents = storedEvents;
       let restoredActiveEvent: ActiveSOSEvent | null = null;
@@ -486,6 +578,23 @@ export default function HomeScreen() {
           lifecycle: statusRef.current,
         });
       }
+      if (restoredActiveEvent && storedCheckpoint) {
+        void clearPersistedCheckpoint(loadUserId);
+      } else if (checkpointStatusRef.current === 'idle' && storedCheckpoint) {
+        const expiresAtMs = Date.parse(storedCheckpoint.expiresAt);
+        const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+        checkpointOwnerUserIdRef.current = loadUserId;
+        checkpointExpirationHandledRef.current = null;
+        setCheckpointMinutes(storedCheckpoint.durationMinutes);
+        setCheckpointExpiresAt(storedCheckpoint.expiresAt);
+        if (remainingSeconds > 0) {
+          checkpointStatusRef.current = 'running';
+          setCheckpointRemainingSeconds(remainingSeconds);
+          setCheckpointStatus('running');
+        } else {
+          enterCheckpointConfirmation(storedCheckpoint.expiresAt);
+        }
+      }
     } catch (loadError: unknown) {
       if (
         activeUserIdRef.current === loadUserId &&
@@ -499,12 +608,17 @@ export default function HomeScreen() {
         );
       }
     }
-  }, [isInitializing, isOffline, userId]);
+  }, [clearPersistedCheckpoint, enterCheckpointConfirmation, isInitializing, isOffline, userId]);
 
   useEffect(() => {
+    const previousCheckpointUserId = checkpointOwnerUserIdRef.current;
+    if (previousCheckpointUserId && previousCheckpointUserId !== userId) {
+      void clearPersistedCheckpoint(previousCheckpointUserId);
+    }
+    checkpointOwnerUserIdRef.current = null;
     loadGenerationRef.current += 1;
     resetSensitiveState();
-  }, [resetSensitiveState, userId]);
+  }, [clearPersistedCheckpoint, resetSensitiveState, userId]);
 
   useEffect(() => {
     if (status === 'countdown' && voiceCountdownPendingRef.current) {
@@ -570,27 +684,114 @@ export default function HomeScreen() {
     setStatus('idle');
   };
 
-  const startCheckpoint = (minutes: number) => {
+  const startCheckpoint = async (minutes: number) => {
+    if (
+      !Number.isInteger(minutes) ||
+      minutes < 1 ||
+      minutes > CHECKPOINT_MAX_DURATION_MINUTES
+    ) {
+      Alert.alert('Checkpoint', 'Seleziona una durata valida prima di avviare il Checkpoint.');
+      return false;
+    }
     if (status !== 'idle') {
       Alert.alert('Checkpoint', 'Puoi avviare un checkpoint solo quando non ci sono SOS attivi.');
-      return;
+      return false;
     }
     if (goHomeStatus !== 'idle') {
       Alert.alert('Checkpoint', 'Concludi o annulla Torno a casa prima di avviare un Checkpoint.');
-      return;
+      return false;
+    }
+    if (!userId) {
+      Alert.alert('Checkpoint', 'Accedi prima di avviare un Checkpoint.');
+      return false;
     }
 
+    const operationGeneration = checkpointOperationGenerationRef.current + 1;
+    checkpointOperationGenerationRef.current = operationGeneration;
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const expiresAt = new Date(startedAtMs + minutes * 60_000).toISOString();
+
+    try {
+      await checkpointStorageQueueRef.current.catch(() => {});
+      if (
+        checkpointOperationGenerationRef.current !== operationGeneration ||
+        activeUserIdRef.current !== userId
+      ) {
+        return false;
+      }
+      await CheckpointStorage.saveActive(userId, {
+        active: true,
+        durationMinutes: minutes,
+        expiresAt,
+        startedAt,
+      });
+    } catch {
+      Alert.alert('Checkpoint', 'Non riesco a salvare il Checkpoint sul dispositivo. Riprova.');
+      return false;
+    }
+
+    if (
+      checkpointOperationGenerationRef.current !== operationGeneration ||
+      activeUserIdRef.current !== userId ||
+      statusRef.current !== 'idle' ||
+      goHomeStatus !== 'idle'
+    ) {
+      void clearPersistedCheckpoint(userId);
+      return false;
+    }
+
+    checkpointOwnerUserIdRef.current = userId;
+    checkpointExpirationHandledRef.current = null;
+    checkpointStatusRef.current = 'running';
     setCheckpointMinutes(minutes);
-    setCheckpointRemainingSeconds(minutes * 60);
+    setCheckpointExpiresAt(expiresAt);
+    setCheckpointRemainingSeconds(Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000));
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
     setCheckpointStatus('running');
+    return true;
   };
 
-  const cancelCheckpoint = () => {
+  const setCheckpointDurationDraft = (totalMinutes: number) => {
+    const boundedMinutes = Math.min(
+      CHECKPOINT_MAX_DURATION_MINUTES,
+      Math.max(0, Math.trunc(totalMinutes)),
+    );
+    setCheckpointHoursDraft(Math.floor(boundedMinutes / 60));
+    setCheckpointMinutesDraft(boundedMinutes % 60);
+  };
+
+  const adjustCheckpointDuration = (deltaMinutes: number) => {
+    const currentDuration = checkpointHoursDraft * 60 + checkpointMinutesDraft;
+    setCheckpointDurationDraft(currentDuration + deltaMinutes);
+  };
+
+  const startSelectedCheckpoint = async () => {
+    if (checkpointStartInFlightRef.current) {
+      return;
+    }
+    checkpointStartInFlightRef.current = true;
+    const selectedDuration = getCheckpointDurationMinutes(
+      checkpointHoursDraft,
+      checkpointMinutesDraft,
+    );
+    if (selectedDuration === null || !(await startCheckpoint(selectedDuration))) {
+      checkpointStartInFlightRef.current = false;
+    }
+  };
+
+  const cancelCheckpoint = useCallback(() => {
+    checkpointOperationGenerationRef.current += 1;
+    checkpointStartInFlightRef.current = false;
+    void clearPersistedCheckpoint(checkpointOwnerUserIdRef.current);
+    checkpointOwnerUserIdRef.current = null;
+    checkpointExpirationHandledRef.current = null;
+    checkpointStatusRef.current = 'idle';
+    setCheckpointExpiresAt(null);
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
-  };
+  }, [clearPersistedCheckpoint]);
 
   const confirmCheckpoint = async () => {
     if (!userId) {
@@ -1099,23 +1300,56 @@ export default function HomeScreen() {
   }, [completeSOS, remainingSeconds, status]);
 
   useEffect(() => {
-    if (checkpointStatus !== 'running') {
+    if (checkpointStatus !== 'running' || !checkpointExpiresAt) {
       return;
     }
 
-    if (checkpointRemainingSeconds <= 0) {
-      setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
-      setCheckpointStatus('confirming');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    const expiresAtMs = Date.parse(checkpointExpiresAt);
+    const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+    if (remainingSeconds <= 0) {
+      enterCheckpointConfirmation(checkpointExpiresAt);
       return;
+    }
+    if (remainingSeconds !== checkpointRemainingSeconds) {
+      setCheckpointRemainingSeconds(remainingSeconds);
     }
 
     const timeoutId = setTimeout(() => {
-      setCheckpointRemainingSeconds((current) => Math.max(0, current - 1));
+      const nextRemainingSeconds = Math.max(
+        0,
+        Math.ceil((expiresAtMs - Date.now()) / 1000),
+      );
+      setCheckpointRemainingSeconds(nextRemainingSeconds);
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [checkpointRemainingSeconds, checkpointStatus]);
+  }, [
+    checkpointExpiresAt,
+    checkpointRemainingSeconds,
+    checkpointStatus,
+    enterCheckpointConfirmation,
+  ]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (
+        nextState !== 'active' ||
+        checkpointStatusRef.current !== 'running' ||
+        !checkpointExpiresAt
+      ) {
+        return;
+      }
+      const remainingSeconds = Math.max(
+        0,
+        Math.ceil((Date.parse(checkpointExpiresAt) - Date.now()) / 1000),
+      );
+      setCheckpointRemainingSeconds(remainingSeconds);
+      if (remainingSeconds === 0) {
+        enterCheckpointConfirmation(checkpointExpiresAt);
+      }
+    });
+    return () => subscription.remove();
+  }, [checkpointExpiresAt, enterCheckpointConfirmation]);
 
   useEffect(() => {
     if (checkpointStatus !== 'confirming') {
@@ -1123,8 +1357,17 @@ export default function HomeScreen() {
     }
 
     if (checkpointConfirmSeconds <= 0) {
+      const expiringUserId = checkpointOwnerUserIdRef.current;
       cancelCheckpoint();
-      startSOSCountdown();
+      void checkpointStorageQueueRef.current.finally(() => {
+        if (
+          expiringUserId &&
+          activeUserIdRef.current === expiringUserId &&
+          statusRef.current === 'idle'
+        ) {
+          startSOSCountdown();
+        }
+      });
       return;
     }
 
@@ -1133,7 +1376,7 @@ export default function HomeScreen() {
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [checkpointConfirmSeconds, checkpointStatus, startSOSCountdown]);
+  }, [cancelCheckpoint, checkpointConfirmSeconds, checkpointStatus, startSOSCountdown]);
 
   useEffect(() => {
     if (goHomeStatus !== 'running') {
@@ -1595,15 +1838,114 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         ) : (
-          <View style={styles.checkpointOptions}>
-            {CHECKPOINT_OPTIONS_MINUTES.map((minutes) => (
+          <View style={styles.checkpointDurationCard}>
+            <Text style={styles.checkpointPrompt}>CONTROLLAMI TRA</Text>
+            <View style={styles.checkpointDurationSelector}>
+              <View style={styles.checkpointDurationColumn}>
+                <Pressable
+                  accessibilityLabel="Aumenta ore"
+                  accessibilityRole="button"
+                  disabled={checkpointHoursDraft >= CHECKPOINT_MAX_HOURS}
+                  hitSlop={8}
+                  onPress={() => adjustCheckpointDuration(60)}
+                  style={styles.checkpointStepButton}>
+                  <Ionicons color="#a9d7ff" name="chevron-up" size={24} />
+                </Pressable>
+                <Text style={styles.checkpointDurationValue}>
+                  {String(checkpointHoursDraft).padStart(2, '0')}
+                </Text>
+                <Text style={styles.checkpointDurationUnit}>ORE</Text>
+                <Pressable
+                  accessibilityLabel="Diminuisci ore"
+                  accessibilityRole="button"
+                  disabled={checkpointHoursDraft === 0 && checkpointMinutesDraft < 60}
+                  hitSlop={8}
+                  onPress={() => adjustCheckpointDuration(-60)}
+                  style={styles.checkpointStepButton}>
+                  <Ionicons color="#a9d7ff" name="chevron-down" size={24} />
+                </Pressable>
+              </View>
+              <Text style={styles.checkpointDurationSeparator}>:</Text>
+              <View style={styles.checkpointDurationColumn}>
+                <Pressable
+                  accessibilityLabel="Aumenta minuti"
+                  accessibilityRole="button"
+                  disabled={
+                    checkpointHoursDraft * 60 + checkpointMinutesDraft >=
+                    CHECKPOINT_MAX_DURATION_MINUTES
+                  }
+                  hitSlop={8}
+                  onPress={() => adjustCheckpointDuration(1)}
+                  style={styles.checkpointStepButton}>
+                  <Ionicons color="#a9d7ff" name="chevron-up" size={24} />
+                </Pressable>
+                <Text style={styles.checkpointDurationValue}>
+                  {String(checkpointMinutesDraft).padStart(2, '0')}
+                </Text>
+                <Text style={styles.checkpointDurationUnit}>MINUTI</Text>
+                <Pressable
+                  accessibilityLabel="Diminuisci minuti"
+                  accessibilityRole="button"
+                  disabled={checkpointHoursDraft === 0 && checkpointMinutesDraft === 0}
+                  hitSlop={8}
+                  onPress={() => adjustCheckpointDuration(-1)}
+                  style={styles.checkpointStepButton}>
+                  <Ionicons color="#a9d7ff" name="chevron-down" size={24} />
+                </Pressable>
+              </View>
+            </View>
+            <View style={styles.checkpointMinuteSteps}>
               <Pressable
-                key={minutes}
-                style={styles.checkpointButton}
-                onPress={() => startCheckpoint(minutes)}>
-                <Text style={styles.checkpointButtonText}>{minutes} min</Text>
+                accessibilityLabel="Diminuisci di cinque minuti"
+                accessibilityRole="button"
+                onPress={() => adjustCheckpointDuration(-5)}
+                style={styles.checkpointCompactButton}>
+                <Text style={styles.checkpointCompactButtonText}>− 5 min</Text>
               </Pressable>
-            ))}
+              <Pressable
+                accessibilityLabel="Aumenta di cinque minuti"
+                accessibilityRole="button"
+                onPress={() => adjustCheckpointDuration(5)}
+                style={styles.checkpointCompactButton}>
+                <Text style={styles.checkpointCompactButtonText}>+ 5 min</Text>
+              </Pressable>
+            </View>
+            <Text accessibilityLiveRegion="polite" style={styles.checkpointDurationSummary}>
+              {formatCheckpointDuration(checkpointHoursDraft, checkpointMinutesDraft)}
+            </Text>
+            <View style={styles.checkpointOptions}>
+              {CHECKPOINT_QUICK_DURATIONS.map((minutes) => (
+                <Pressable
+                  accessibilityLabel={`Imposta durata ${minutes} minuti`}
+                  accessibilityRole="button"
+                  key={minutes}
+                  onPress={() => setCheckpointDurationDraft(minutes)}
+                  style={styles.checkpointButton}>
+                  <Text style={styles.checkpointButtonText}>
+                    {minutes === 60 ? '1 ora' : `${minutes} min`}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              disabled={
+                getCheckpointDurationMinutes(
+                  checkpointHoursDraft,
+                  checkpointMinutesDraft,
+                ) === null
+              }
+              onPress={() => void startSelectedCheckpoint()}
+              style={({ pressed }) => [
+                styles.checkpointStartButton,
+                pressed && styles.checkpointStartButtonPressed,
+                getCheckpointDurationMinutes(
+                  checkpointHoursDraft,
+                  checkpointMinutesDraft,
+                ) === null && styles.disabledButton,
+              ]}>
+              <Text style={styles.checkpointStartButtonText}>AVVIA CHECKPOINT</Text>
+            </Pressable>
           </View>
         )}
       </View>
@@ -2359,6 +2701,94 @@ const styles = StyleSheet.create({
   },
   goHomeActive: {
     gap: 10,
+  },
+  checkpointDurationCard: {
+    gap: 14,
+  },
+  checkpointPrompt: {
+    color: '#a9d7ff',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+    textAlign: 'center',
+  },
+  checkpointDurationSelector: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  checkpointDurationColumn: {
+    alignItems: 'center',
+    minWidth: 112,
+  },
+  checkpointStepButton: {
+    alignItems: 'center',
+    height: 44,
+    justifyContent: 'center',
+    width: 64,
+  },
+  checkpointDurationValue: {
+    color: '#f7fbff',
+    fontSize: 52,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '900',
+    lineHeight: 58,
+  },
+  checkpointDurationUnit: {
+    color: '#7f97bd',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+  },
+  checkpointDurationSeparator: {
+    color: '#6384b8',
+    fontSize: 42,
+    fontWeight: '700',
+    marginBottom: 20,
+  },
+  checkpointMinuteSteps: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+  },
+  checkpointCompactButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(88, 166, 255, 0.1)',
+    borderColor: 'rgba(88, 166, 255, 0.25)',
+    borderRadius: 12,
+    borderWidth: 1,
+    minHeight: 44,
+    minWidth: 96,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  checkpointCompactButtonText: {
+    color: '#a9d7ff',
+    fontWeight: '800',
+  },
+  checkpointDurationSummary: {
+    color: '#d7e9ff',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  checkpointStartButton: {
+    alignItems: 'center',
+    backgroundColor: '#426ef0',
+    borderRadius: 16,
+    justifyContent: 'center',
+    minHeight: 52,
+    paddingHorizontal: 18,
+  },
+  checkpointStartButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
+  checkpointStartButtonPressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.99 }],
   },
   goHomeActiveMode: {
     alignItems: 'center',

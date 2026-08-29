@@ -54,6 +54,7 @@ const lifecycleMigration = read(
 );
 const accountStorage = read('storage/AccountScopedStorage.ts');
 const homeScreen = read('app/(tabs)/index.tsx');
+const checkpointStorage = read('storage/CheckpointStorage.ts');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
 const voiceProtectionScreen = read('app/voice-protection.tsx');
 const voiceProtectionService = read('services/VoiceProtectionService.ts');
@@ -678,7 +679,10 @@ check('Legacy migration is marked and cannot be claimed by a second account', ()
 });
 
 check('Sensitive React state resets when the active account changes', () => {
-  assert.match(homeScreen, /resetSensitiveState\(\);[\s\S]*\}, \[resetSensitiveState, userId\]\)/);
+  assert.match(
+    homeScreen,
+    /resetSensitiveState\(\);[\s\S]*\}, \[clearPersistedCheckpoint, resetSensitiveState, userId\]\)/,
+  );
   assert.match(contactsScreen, /setContacts\(\[\]\);[\s\S]*\}, \[userId\]\)/);
   assert.match(homeScreen, /activeUserIdRef\.current !== loadUserId/);
   assert.match(contactsScreen, /activeUserIdRef\.current !== loadUserId/);
@@ -1049,12 +1053,66 @@ check('SOS push remains primary and local fallback is bounded and observable', (
 
 check('SOS activation supersedes preventive safety timers', () => {
   const startCountdown = homeScreen.match(
-    /const startSOSCountdown = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[\]\);/,
+    /const startSOSCountdown = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[clearPersistedCheckpoint\]\);/,
   )?.[1];
   assert.ok(startCountdown, 'SOS countdown callback not found.');
   assert.match(startCountdown, /setCheckpointStatus\('idle'\)/);
   assert.match(startCountdown, /goHomeEstimateGenerationRef\.current \+= 1/);
   assert.match(startCountdown, /setGoHomeStatus\('idle'\)/);
+});
+
+check('Checkpoint duration selector is custom, bounded and uses the existing lifecycle', () => {
+  assert.match(homeScreen, /CHECKPOINT_MAX_HOURS = 12/);
+  assert.match(homeScreen, /CHECKPOINT_MAX_DURATION_MINUTES = CHECKPOINT_MAX_HOURS \* 60 \+ 59/);
+  assert.match(homeScreen, /hours \* 60 \+ minutes/);
+  assert.match(homeScreen, /durationMinutes >= 1/);
+  assert.match(homeScreen, /minutes > 59/);
+  assert.match(homeScreen, /startCheckpoint\(selectedDuration\)/);
+  assert.match(homeScreen, /checkpointStartInFlightRef/);
+  assert.match(homeScreen, /Concludi o annulla Torno a casa/);
+  assert.doesNotMatch(homeScreen, /CHECKPOINT_OPTIONS_MINUTES/);
+
+  const toDuration = (hours, minutes) => hours * 60 + minutes;
+  assert.equal(toDuration(0, 0), 0);
+  assert.equal(toDuration(0, 1), 1);
+  assert.equal(toDuration(0, 5), 5);
+  assert.equal(toDuration(0, 59), 59);
+  assert.equal(toDuration(1, 0), 60);
+  assert.equal(toDuration(1, 1), 61);
+  assert.equal(toDuration(1, 30), 90);
+  assert.equal(toDuration(2, 15), 135);
+  assert.equal(toDuration(12, 59), 779);
+});
+
+check('Checkpoint expiry is absolute, persisted, account-scoped and single-fire', () => {
+  assert.match(homeScreen, /const \[checkpointExpiresAt, setCheckpointExpiresAt\]/);
+  assert.match(homeScreen, /startedAtMs \+ minutes \* 60_000/);
+  assert.match(homeScreen, /CheckpointStorage\.saveActive\(userId/);
+  assert.match(homeScreen, /CheckpointStorage\.getActive\(loadUserId\)/);
+  assert.match(homeScreen, /CheckpointStorage\.clearActive\(targetUserId\)/);
+  assert.match(homeScreen, /Date\.parse\(checkpointExpiresAt\) - Date\.now\(\)/);
+  assert.match(homeScreen, /AppState\.addEventListener\('change'/);
+  assert.match(homeScreen, /checkpointExpirationHandledRef\.current === expiresAt/);
+  assert.match(homeScreen, /checkpointOperationGenerationRef\.current/);
+  assert.doesNotMatch(
+    homeScreen,
+    /setCheckpointRemainingSeconds\(\(current\) => Math\.max\(0, current - 1\)\)/,
+  );
+  assert.match(checkpointStorage, /'checkpoint-active'/);
+  assert.match(checkpointStorage, /startedAt: string/);
+  assert.match(checkpointStorage, /expiresAt: string/);
+  assert.match(checkpointStorage, /getAccountStorageItem\(\s*userId/);
+  assert.match(checkpointStorage, /removeAccountStorageItem\(userId, 'checkpoint-active'\)/);
+
+  const remainingSeconds = (expiresAtMs, nowMs) =>
+    Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+  const fiveMinutes = 5 * 60 * 1000;
+  const ninetyMinutes = 90 * 60 * 1000;
+  assert.equal(remainingSeconds(fiveMinutes, 0), 300);
+  assert.equal(remainingSeconds(ninetyMinutes, 0), 5400);
+  assert.equal(remainingSeconds(ninetyMinutes, 10 * 60 * 1000), 4800);
+  assert.equal(remainingSeconds(60_000, 30_000), 30);
+  assert.equal(remainingSeconds(60_000, 60_001), 0);
 });
 
 check('Trusted contact mutations are guarded against duplicate taps', () => {

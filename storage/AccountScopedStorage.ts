@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type AccountStorageNamespace =
+  | 'checkpoint-active'
   | 'checkpoint-events'
   | 'go-home-events'
   | 'go-home-location'
@@ -113,4 +114,11 @@ export async function setAccountStorageItem(
 ) {
   await migrateLegacyValueOnce(userId, namespace, legacyKeys);
   await AsyncStorage.setItem(getAccountStorageKey(userId, namespace), value);
+}
+
+export async function removeAccountStorageItem(
+  userId: string,
+  namespace: AccountStorageNamespace,
+) {
+  await AsyncStorage.removeItem(getAccountStorageKey(userId, namespace));
 }
