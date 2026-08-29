@@ -784,6 +784,10 @@ export default function VoiceProtectionScreen() {
               {toggleUnavailableFeedback || activationFeedback}
             </Text>
           ) : null}
+          <Text style={styles.cardDescription}>
+            Quando è attiva, Android mostra una notifica persistente e mantiene
+            l’ascolto locale anche in background o con lo schermo bloccato.
+          </Text>
           {showPermissionSettings ? (
             <Pressable
               accessibilityRole="button"

@@ -757,6 +757,31 @@ check('Voice Protection foreground service is declared as microphone', () => {
     voiceProtectionPlugin,
     /android:foregroundServiceType'\] = 'microphone'/,
   );
+  assert.match(voiceProtectionPlugin, /android\.permission\.POST_NOTIFICATIONS/);
+});
+
+check('Voice Protection keeps one bounded background recognition owner', () => {
+  assert.match(
+    voiceProtectionLifecycle,
+    /!VoiceProtectionService\.isRunning\(\)/,
+  );
+  assert.doesNotMatch(
+    voiceProtectionLifecycle,
+    /if \(nextState !== 'active'\) \{\s*stopRecognition\(\);/,
+  );
+  assert.match(voiceProtectionLifecycle, /MAX_CONSECUTIVE_FAILURES = 5/);
+  assert.match(voiceProtectionLifecycle, /VOICE_TRIGGER_COOLDOWN_MS = 30_000/);
+  assert.match(voiceProtectionLifecycle, /accountCleanupPromiseRef/);
+  assert.match(
+    voiceProtectionLifecycle,
+    /activeUserIdRef\.current === userId/,
+  );
+  assert.match(voiceProtectionService, /ExpoSpeechRecognitionModule\.abort\(\)/);
+  assert.match(
+    voiceProtectionService,
+    /VoiceProtectionRuntime\.notifySettingsChanged\(taskUserId\)/,
+  );
+  assert.doesNotMatch(voiceProtectionLifecycle, /setInterval\(/);
 });
 
 check('Voice Protection state remains local and account scoped', () => {

@@ -15,11 +15,13 @@ const MIN_RESTART_DELAY_MS = 1_500;
 const MAX_RESTART_DELAY_MS = 30_000;
 const RAPID_TERMINATION_MS = 3_000;
 const MAX_CONSECUTIVE_FAILURES = 5;
+const VOICE_TRIGGER_COOLDOWN_MS = 30_000;
 
 export function VoiceProtectionLifecycle() {
   const { session, isInitializing } = useAuth();
   const userId = session?.user.id ?? null;
   const previousUserIdRef = useRef<string | null>(null);
+  const accountCleanupPromiseRef = useRef<Promise<void>>(Promise.resolve());
   const activeUserIdRef = useRef(userId);
   const passphraseRef = useRef('');
   const cachedSettingsRef = useRef<Awaited<ReturnType<typeof VoiceProtectionStorage.get>> | null>(null);
@@ -30,6 +32,7 @@ export function VoiceProtectionLifecycle() {
   const recognitionStartedAtRef = useRef(0);
   const consecutiveFailuresRef = useRef(0);
   const sosRequestedForSessionRef = useRef(false);
+  const lastVoiceTriggerAtRef = useRef(0);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   activeUserIdRef.current = userId;
 
@@ -80,10 +83,7 @@ export function VoiceProtectionLifecycle() {
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
     const recognitionGeneration = recognitionGenerationRef.current + 1;
     recognitionGenerationRef.current = recognitionGeneration;
-    if (
-      activeUserIdRef.current !== targetUserId ||
-      AppState.currentState !== 'active'
-    ) {
+    if (activeUserIdRef.current !== targetUserId) {
       return;
     }
 
@@ -99,8 +99,7 @@ export function VoiceProtectionLifecycle() {
     }
     if (
       recognitionGenerationRef.current !== recognitionGeneration ||
-      activeUserIdRef.current !== targetUserId ||
-      AppState.currentState !== 'active'
+      activeUserIdRef.current !== targetUserId
     ) {
       return;
     }
@@ -115,13 +114,18 @@ export function VoiceProtectionLifecycle() {
       stopRecognition();
       return;
     }
+    if (!VoiceProtectionService.isRunning()) {
+      console.warn('[VoiceProtection] servizio foreground non disponibile');
+      void disableProtection(targetUserId, 'start');
+      return;
+    }
     const readiness = recognitionReadyRef.current
       ? 'ready'
       : await VoiceProtectionService.getRecognitionReadiness('it-IT');
     if (
       recognitionGenerationRef.current !== recognitionGeneration ||
       activeUserIdRef.current !== targetUserId ||
-      AppState.currentState !== 'active'
+      !VoiceProtectionService.isRunning()
     ) {
       return;
     }
@@ -179,7 +183,7 @@ export function VoiceProtectionLifecycle() {
     if (
       !currentUserId ||
       !shouldListenRef.current ||
-      AppState.currentState !== 'active'
+      !VoiceProtectionService.isRunning()
     ) {
       return;
     }
@@ -231,9 +235,15 @@ export function VoiceProtectionLifecycle() {
         (recognized === expected || ` ${recognized} `.includes(` ${expected} `)),
       );
     });
-    if (matches && !sosRequestedForSessionRef.current) {
+    const now = Date.now();
+    if (
+      matches &&
+      !sosRequestedForSessionRef.current &&
+      now - lastVoiceTriggerAtRef.current >= VOICE_TRIGGER_COOLDOWN_MS
+    ) {
       console.info('[VoiceProtection Lifecycle] VOICE_MATCH_OK');
       sosRequestedForSessionRef.current = true;
+      lastVoiceTriggerAtRef.current = now;
       const currentUserId = activeUserIdRef.current;
       if (currentUserId) {
         VoiceProtectionRuntime.requestSOS(currentUserId);
@@ -291,7 +301,7 @@ export function VoiceProtectionLifecycle() {
       return;
     }
 
-    void (async () => {
+    accountCleanupPromiseRef.current = (async () => {
       try {
         await VoiceProtectionService.stop();
         const previousSettings = await VoiceProtectionStorage.get(previousUserId);
@@ -317,7 +327,14 @@ export function VoiceProtectionLifecycle() {
     cachedSettingsRef.current = null;
     recognitionReadyRef.current = false;
     consecutiveFailuresRef.current = 0;
-    void startRecognition(userId, true);
+    void accountCleanupPromiseRef.current.then(() => {
+      if (activeUserIdRef.current === userId) {
+        return startRecognition(userId, true);
+      }
+      return undefined;
+    }).catch(() => {
+      console.warn('[VoiceProtection] bootstrap account non completato');
+    });
     const removeSettingsListener = VoiceProtectionRuntime.onSettingsChanged(
       (changedUserId) => {
         if (changedUserId === activeUserIdRef.current) {
@@ -333,7 +350,9 @@ export function VoiceProtectionLifecycle() {
       'change',
       (nextState: AppStateStatus) => {
         if (nextState !== 'active') {
-          stopRecognition();
+          if (!VoiceProtectionService.isRunning()) {
+            stopRecognition();
+          }
           return;
         }
         const currentUserId = activeUserIdRef.current;

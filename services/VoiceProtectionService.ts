@@ -3,6 +3,7 @@ import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Linking, Platform } from 'react-native';
 import BackgroundService from 'react-native-background-actions';
 
+import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import {
   type VoiceProtectionDurationMinutes,
   VoiceProtectionStorage,
@@ -43,6 +44,9 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
     const taskUserId = taskData?.userId ?? null;
     if (expiresAtMs !== null && taskUserId && Date.now() >= expiresAtMs) {
       try {
+        try {
+          ExpoSpeechRecognitionModule.abort();
+        } catch {}
         const storedSettings = await VoiceProtectionStorage.get(taskUserId);
         await VoiceProtectionStorage.save(taskUserId, {
           ...storedSettings,
@@ -53,6 +57,7 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       } catch {
         console.warn('[VoiceProtection] scadenza non salvata nello storage locale');
       } finally {
+        VoiceProtectionRuntime.notifySettingsChanged(taskUserId);
         await BackgroundService.stop().catch(() => {});
       }
       break;

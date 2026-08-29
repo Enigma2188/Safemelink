@@ -5,6 +5,7 @@ const REQUIRED_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
   'android.permission.RECORD_AUDIO',
+  'android.permission.POST_NOTIFICATIONS',
 ];
 
 module.exports = function withVoiceProtectionForegroundService(config) {
