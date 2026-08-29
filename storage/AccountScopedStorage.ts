@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type AccountStorageNamespace =
   | 'checkpoint-active'
   | 'checkpoint-events'
+  | 'go-home-active'
   | 'go-home-events'
   | 'go-home-location'
   | 'go-home-transport-mode'

@@ -681,7 +681,7 @@ check('Legacy migration is marked and cannot be claimed by a second account', ()
 check('Sensitive React state resets when the active account changes', () => {
   assert.match(
     homeScreen,
-    /resetSensitiveState\(\);[\s\S]*\}, \[clearPersistedCheckpoint, resetSensitiveState, userId\]\)/,
+    /resetSensitiveState\(\);[\s\S]*\}, \[clearPersistedCheckpoint, clearPersistedGoHome, resetSensitiveState, userId\]\)/,
   );
   assert.match(contactsScreen, /setContacts\(\[\]\);[\s\S]*\}, \[userId\]\)/);
   assert.match(homeScreen, /activeUserIdRef\.current !== loadUserId/);
@@ -1187,6 +1187,42 @@ check('Go Home transport mode is account-scoped and belongs to the active sessio
   assert.match(homeScreen, /Come ti stai spostando\?/);
   assert.match(homeScreen, /estimateGoHomeMinutes\(distanceKm, transportMode\)/);
   assert.match(homeScreen, /transportMode,/);
+});
+
+check('Go Home expiry is absolute, persisted, account-scoped and single-fire', () => {
+  assert.match(homeScreen, /const \[goHomeExpiresAt, setGoHomeExpiresAt\]/);
+  assert.match(homeScreen, /startedAtMs \+ estimatedMinutes \* 60_000/);
+  assert.match(homeScreen, /GoHomeStorage\.saveActive\(actionUserId, session\)/);
+  assert.match(homeScreen, /GoHomeStorage\.getActive\(loadUserId\)/);
+  assert.match(homeScreen, /GoHomeStorage\.clearActive\(targetUserId\)/);
+  assert.match(homeScreen, /Date\.parse\(goHomeExpiresAt\) - Date\.now\(\)/);
+  assert.match(homeScreen, /goHomeExpirationHandledRef\.current === expiresAt/);
+  assert.match(homeScreen, /goHomeOperationGenerationRef\.current/);
+  assert.match(homeScreen, /previousGoHomeUserId/);
+  assert.match(homeScreen, /clearPersistedGoHome\(goHomeOwnerUserIdRef\.current\)/);
+  assert.doesNotMatch(
+    homeScreen,
+    /setGoHomeRemainingSeconds\(\(current\) => Math\.max\(0, current - 1\)\)/,
+  );
+  assert.match(goHomeStorage, /'go-home-active'/);
+  assert.match(goHomeStorage, /startedAt: string/);
+  assert.match(goHomeStorage, /expiresAt: string/);
+  assert.match(goHomeStorage, /getAccountStorageItem\(\s*userId/);
+  assert.match(goHomeStorage, /removeAccountStorageItem\(userId, 'go-home-active'\)/);
+  const activeGoHomeType = goHomeStorage.match(
+    /export type ActiveGoHomeSession = Omit<GoHomeSession, 'homeLocation' \| 'startLocation'> & \{([\s\S]*?)\n\};/,
+  )?.[1];
+  assert.ok(activeGoHomeType, 'Active Go Home session type not found.');
+  assert.doesNotMatch(activeGoHomeType, /startLocation|homeLocation/);
+
+  const remainingSeconds = (expiresAtMs, nowMs) =>
+    Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+  const fiveMinutes = 5 * 60 * 1000;
+  const oneHour = 60 * 60 * 1000;
+  assert.equal(remainingSeconds(fiveMinutes, 0), 300);
+  assert.equal(remainingSeconds(oneHour, 0), 3600);
+  assert.equal(remainingSeconds(oneHour, 20 * 60 * 1000), 2400);
+  assert.equal(remainingSeconds(fiveMinutes, fiveMinutes + 1), 0);
 });
 
 check('Fundamental production queries have bounded access paths', () => {

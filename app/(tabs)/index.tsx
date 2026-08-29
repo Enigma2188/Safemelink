@@ -32,6 +32,7 @@ import {
 import { CheckpointStorage } from '@/storage/CheckpointStorage';
 import {
   GoHomeStorage,
+  type ActiveGoHomeSession,
   type GoHomeSession,
   type GoHomeTransportMode,
   type HomeLocation,
@@ -262,7 +263,10 @@ export default function HomeScreen() {
   const [goHomeTransportMode, setGoHomeTransportMode] =
     useState<GoHomeTransportMode>('walking');
   const [goHomeStatus, setGoHomeStatus] = useState<GoHomeStatus>('idle');
-  const [goHomeSession, setGoHomeSession] = useState<GoHomeSession | null>(null);
+  const [goHomeSession, setGoHomeSession] = useState<
+    ActiveGoHomeSession | GoHomeSession | null
+  >(null);
+  const [goHomeExpiresAt, setGoHomeExpiresAt] = useState<string | null>(null);
   const [goHomeRemainingSeconds, setGoHomeRemainingSeconds] = useState(0);
   const [goHomeConfirmSeconds, setGoHomeConfirmSeconds] = useState(GO_HOME_CONFIRM_SECONDS);
   const [goHomeError, setGoHomeError] = useState('');
@@ -271,6 +275,11 @@ export default function HomeScreen() {
   const [activePanel, setActivePanel] = useState<HomePanel>('home');
   const goHomeEstimateGenerationRef = useRef(0);
   const goHomeEstimateInFlightRef = useRef(false);
+  const goHomeOperationGenerationRef = useRef(0);
+  const goHomeExpirationHandledRef = useRef<string | null>(null);
+  const goHomeOwnerUserIdRef = useRef<string | null>(userId);
+  const goHomeStatusRef = useRef<GoHomeStatus>('idle');
+  const goHomeStorageQueueRef = useRef<Promise<void>>(Promise.resolve());
   const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const statusRef = useRef<SOSStatus>('idle');
@@ -294,6 +303,7 @@ export default function HomeScreen() {
   activeUserIdRef.current = userId;
   statusRef.current = status;
   checkpointStatusRef.current = checkpointStatus;
+  goHomeStatusRef.current = goHomeStatus;
 
   useFocusEffect(
     useCallback(() => {
@@ -369,6 +379,35 @@ export default function HomeScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   }, []);
 
+  const clearPersistedGoHome = useCallback((targetUserId: string | null) => {
+    if (!targetUserId) {
+      return Promise.resolve();
+    }
+    const cleanup = goHomeStorageQueueRef.current
+      .catch(() => {})
+      .then(() => GoHomeStorage.clearActive(targetUserId))
+      .catch(() => {
+        console.warn('[TornoACasa] cleanup sessione locale non completato');
+      });
+    goHomeStorageQueueRef.current = cleanup;
+    return cleanup;
+  }, []);
+
+  const enterGoHomeConfirmation = useCallback((expiresAt: string) => {
+    if (
+      goHomeExpirationHandledRef.current === expiresAt ||
+      goHomeStatusRef.current === 'confirming'
+    ) {
+      return;
+    }
+    goHomeExpirationHandledRef.current = expiresAt;
+    goHomeStatusRef.current = 'confirming';
+    setGoHomeRemainingSeconds(0);
+    setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+    setGoHomeStatus('confirming');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+  }, []);
+
   const startSOSCountdown = useCallback(() => {
     loadGenerationRef.current += 1;
     statusRef.current = 'countdown';
@@ -384,6 +423,12 @@ export default function HomeScreen() {
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
+    goHomeOperationGenerationRef.current += 1;
+    void clearPersistedGoHome(goHomeOwnerUserIdRef.current);
+    goHomeOwnerUserIdRef.current = null;
+    goHomeExpirationHandledRef.current = null;
+    goHomeStatusRef.current = 'idle';
+    setGoHomeExpiresAt(null);
     setGoHomeStatus('idle');
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
@@ -395,7 +440,7 @@ export default function HomeScreen() {
     setPushDeliveryNotice(null);
     setSmsFollowUpAvailable(false);
     setStatus('countdown');
-  }, [clearPersistedCheckpoint]);
+  }, [clearPersistedCheckpoint, clearPersistedGoHome]);
 
   useEffect(
     () =>
@@ -447,9 +492,13 @@ export default function HomeScreen() {
     setGoHomeTransportMode('walking');
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
+    goHomeOperationGenerationRef.current += 1;
+    goHomeExpirationHandledRef.current = null;
+    goHomeStatusRef.current = 'idle';
     homeCaptureInFlightRef.current = false;
     setGoHomeStatus('idle');
     setGoHomeSession(null);
+    setGoHomeExpiresAt(null);
     setGoHomeRemainingSeconds(0);
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
     setGoHomeError('');
@@ -472,6 +521,7 @@ export default function HomeScreen() {
         storedHomeLocation,
         storedTransportMode,
         storedCheckpoint,
+        storedGoHome,
       ] =
         await Promise.all([
           isOffline ? ContactsService.listCached(loadUserId) : ContactsService.list(),
@@ -479,6 +529,7 @@ export default function HomeScreen() {
           GoHomeStorage.getHomeLocation(loadUserId),
           GoHomeStorage.getTransportMode(loadUserId),
           CheckpointStorage.getActive(loadUserId),
+          GoHomeStorage.getActive(loadUserId),
         ]);
       let nextEvents = storedEvents;
       let restoredActiveEvent: ActiveSOSEvent | null = null;
@@ -578,9 +629,17 @@ export default function HomeScreen() {
           lifecycle: statusRef.current,
         });
       }
-      if (restoredActiveEvent && storedCheckpoint) {
-        void clearPersistedCheckpoint(loadUserId);
+      if (restoredActiveEvent) {
+        if (storedCheckpoint) {
+          void clearPersistedCheckpoint(loadUserId);
+        }
+        if (storedGoHome) {
+          void clearPersistedGoHome(loadUserId);
+        }
       } else if (checkpointStatusRef.current === 'idle' && storedCheckpoint) {
+        if (storedGoHome) {
+          void clearPersistedGoHome(loadUserId);
+        }
         const expiresAtMs = Date.parse(storedCheckpoint.expiresAt);
         const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
         checkpointOwnerUserIdRef.current = loadUserId;
@@ -593,6 +652,23 @@ export default function HomeScreen() {
           setCheckpointStatus('running');
         } else {
           enterCheckpointConfirmation(storedCheckpoint.expiresAt);
+        }
+      } else if (goHomeStatusRef.current === 'idle' && storedGoHome) {
+        const remainingSeconds = Math.max(
+          0,
+          Math.ceil((Date.parse(storedGoHome.expiresAt) - Date.now()) / 1000),
+        );
+        goHomeOwnerUserIdRef.current = loadUserId;
+        goHomeExpirationHandledRef.current = null;
+        setGoHomeSession(storedGoHome);
+        setGoHomeTransportMode(storedGoHome.transportMode);
+        setGoHomeExpiresAt(storedGoHome.expiresAt);
+        if (remainingSeconds > 0) {
+          goHomeStatusRef.current = 'running';
+          setGoHomeRemainingSeconds(remainingSeconds);
+          setGoHomeStatus('running');
+        } else {
+          enterGoHomeConfirmation(storedGoHome.expiresAt);
         }
       }
     } catch (loadError: unknown) {
@@ -608,17 +684,30 @@ export default function HomeScreen() {
         );
       }
     }
-  }, [clearPersistedCheckpoint, enterCheckpointConfirmation, isInitializing, isOffline, userId]);
+  }, [
+    clearPersistedCheckpoint,
+    clearPersistedGoHome,
+    enterCheckpointConfirmation,
+    enterGoHomeConfirmation,
+    isInitializing,
+    isOffline,
+    userId,
+  ]);
 
   useEffect(() => {
     const previousCheckpointUserId = checkpointOwnerUserIdRef.current;
+    const previousGoHomeUserId = goHomeOwnerUserIdRef.current;
     if (previousCheckpointUserId && previousCheckpointUserId !== userId) {
       void clearPersistedCheckpoint(previousCheckpointUserId);
     }
     checkpointOwnerUserIdRef.current = null;
+    if (previousGoHomeUserId && previousGoHomeUserId !== userId) {
+      void clearPersistedGoHome(previousGoHomeUserId);
+    }
+    goHomeOwnerUserIdRef.current = null;
     loadGenerationRef.current += 1;
     resetSensitiveState();
-  }, [clearPersistedCheckpoint, resetSensitiveState, userId]);
+  }, [clearPersistedCheckpoint, clearPersistedGoHome, resetSensitiveState, userId]);
 
   useEffect(() => {
     if (status === 'countdown' && voiceCountdownPendingRef.current) {
@@ -879,16 +968,22 @@ export default function HomeScreen() {
     );
   };
 
-  const cancelGoHome = () => {
+  const cancelGoHome = useCallback(() => {
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
+    goHomeOperationGenerationRef.current += 1;
+    void clearPersistedGoHome(goHomeOwnerUserIdRef.current);
+    goHomeOwnerUserIdRef.current = null;
+    goHomeExpirationHandledRef.current = null;
+    goHomeStatusRef.current = 'idle';
+    setGoHomeExpiresAt(null);
     setGoHomeStatus('idle');
     setGoHomeError('');
     setGoHomeErrorAction(null);
     setGoHomeSession(null);
     setGoHomeRemainingSeconds(0);
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
-  };
+  }, [clearPersistedGoHome]);
 
   const selectGoHomeTransportMode = async (mode: GoHomeTransportMode) => {
     const actionUserId = userId;
@@ -1003,16 +1098,6 @@ export default function HomeScreen() {
       const transportMode = goHomeTransportMode;
       const estimatedMinutes = estimateGoHomeMinutes(distanceKm, transportMode);
       console.info('[TornoACasa] stima percorso completata');
-      const session: GoHomeSession = {
-        id: `${Date.now()}`,
-        createdAt: new Date().toISOString(),
-        startLocation,
-        homeLocation: savedHomeLocation,
-        distanceKm,
-        estimatedMinutes,
-        transportMode,
-      };
-
       Alert.alert(
         'Torno a casa',
         `Modalità: ${getGoHomeTransportLabel(transportMode)}\nDistanza stimata: ${distanceKm.toFixed(2)} km\nTempo indicativo: ${estimatedMinutes} min\n\nStima lineare di sicurezza: non considera strade, traffico o deviazioni.`,
@@ -1028,18 +1113,86 @@ export default function HomeScreen() {
           },
           {
             text: 'Avvia',
-            onPress: () => {
+            onPress: () => void (async () => {
               if (
                 activeUserIdRef.current !== actionUserId ||
                 goHomeEstimateGenerationRef.current !== requestGeneration
               ) {
                 return;
               }
-              setGoHomeSession(session);
-              setGoHomeRemainingSeconds(estimatedMinutes * 60);
+              const operationGeneration = goHomeOperationGenerationRef.current + 1;
+              goHomeOperationGenerationRef.current = operationGeneration;
+              const startedAtMs = Date.now();
+              const startedAt = new Date(startedAtMs).toISOString();
+              const expiresAt = new Date(
+                startedAtMs + estimatedMinutes * 60_000,
+              ).toISOString();
+              const session: ActiveGoHomeSession = {
+                active: true,
+                id: `${startedAtMs}`,
+                createdAt: startedAt,
+                distanceKm,
+                estimatedMinutes,
+                expiresAt,
+                startedAt,
+                transportMode,
+              };
+              const runtimeSession: GoHomeSession = {
+                ...session,
+                homeLocation: savedHomeLocation,
+                startLocation,
+              };
+              try {
+                if (
+                  activeUserIdRef.current !== actionUserId ||
+                  goHomeEstimateGenerationRef.current !== requestGeneration ||
+                  goHomeOperationGenerationRef.current !== operationGeneration
+                ) {
+                  return;
+                }
+                const saveOperation = goHomeStorageQueueRef.current
+                  .catch(() => {})
+                  .then(() => GoHomeStorage.saveActive(actionUserId, session));
+                goHomeStorageQueueRef.current = saveOperation
+                  .then(() => undefined)
+                  .catch(() => {});
+                await saveOperation;
+              } catch {
+                if (
+                  activeUserIdRef.current === actionUserId &&
+                  goHomeOperationGenerationRef.current === operationGeneration
+                ) {
+                  Alert.alert(
+                    'Torno a casa',
+                    'Non riesco a salvare la sessione sul dispositivo. Riprova.',
+                  );
+                  setGoHomeStatus('idle');
+                }
+                return;
+              }
+
+              if (
+                activeUserIdRef.current !== actionUserId ||
+                goHomeEstimateGenerationRef.current !== requestGeneration ||
+                goHomeOperationGenerationRef.current !== operationGeneration ||
+                statusRef.current !== 'idle' ||
+                checkpointStatusRef.current !== 'idle'
+              ) {
+                void clearPersistedGoHome(actionUserId);
+                return;
+              }
+
+              goHomeOwnerUserIdRef.current = actionUserId;
+              goHomeExpirationHandledRef.current = null;
+              goHomeStatusRef.current = 'running';
+              setGoHomeSession(runtimeSession);
+              setGoHomeExpiresAt(expiresAt);
+              setGoHomeRemainingSeconds(
+                Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+              );
               setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
               setGoHomeStatus('running');
-            },
+            })(),
           },
         ]
       );
@@ -1379,23 +1532,54 @@ export default function HomeScreen() {
   }, [cancelCheckpoint, checkpointConfirmSeconds, checkpointStatus, startSOSCountdown]);
 
   useEffect(() => {
-    if (goHomeStatus !== 'running') {
+    if (goHomeStatus !== 'running' || !goHomeExpiresAt) {
       return;
     }
 
-    if (goHomeRemainingSeconds <= 0) {
-      setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
-      setGoHomeStatus('confirming');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    const expiresAtMs = Date.parse(goHomeExpiresAt);
+    const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+    if (remainingSeconds <= 0) {
+      enterGoHomeConfirmation(goHomeExpiresAt);
       return;
+    }
+    if (remainingSeconds !== goHomeRemainingSeconds) {
+      setGoHomeRemainingSeconds(remainingSeconds);
     }
 
     const timeoutId = setTimeout(() => {
-      setGoHomeRemainingSeconds((current) => Math.max(0, current - 1));
+      setGoHomeRemainingSeconds(
+        Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000)),
+      );
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [goHomeRemainingSeconds, goHomeStatus]);
+  }, [
+    enterGoHomeConfirmation,
+    goHomeExpiresAt,
+    goHomeRemainingSeconds,
+    goHomeStatus,
+  ]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (
+        nextState !== 'active' ||
+        goHomeStatusRef.current !== 'running' ||
+        !goHomeExpiresAt
+      ) {
+        return;
+      }
+      const remainingSeconds = Math.max(
+        0,
+        Math.ceil((Date.parse(goHomeExpiresAt) - Date.now()) / 1000),
+      );
+      setGoHomeRemainingSeconds(remainingSeconds);
+      if (remainingSeconds === 0) {
+        enterGoHomeConfirmation(goHomeExpiresAt);
+      }
+    });
+    return () => subscription.remove();
+  }, [enterGoHomeConfirmation, goHomeExpiresAt]);
 
   useEffect(() => {
     if (goHomeStatus !== 'confirming') {
@@ -1403,8 +1587,18 @@ export default function HomeScreen() {
     }
 
     if (goHomeConfirmSeconds <= 0) {
+      const expiringUserId = goHomeOwnerUserIdRef.current;
       cancelGoHome();
-      startSOSCountdown();
+      void goHomeStorageQueueRef.current.finally(() => {
+        if (
+          expiringUserId &&
+          activeUserIdRef.current === expiringUserId &&
+          statusRef.current === 'idle' &&
+          checkpointStatusRef.current === 'idle'
+        ) {
+          startSOSCountdown();
+        }
+      });
       return;
     }
 
@@ -1413,7 +1607,7 @@ export default function HomeScreen() {
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [goHomeConfirmSeconds, goHomeStatus, startSOSCountdown]);
+  }, [cancelGoHome, goHomeConfirmSeconds, goHomeStatus, startSOSCountdown]);
 
   const finishSOS = async (terminalStatus: SOSTerminalStatus) => {
     if (sosEndingInFlightRef.current || !activeEvent) {

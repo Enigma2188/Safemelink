@@ -1,8 +1,10 @@
 import {
   getAccountStorageItem,
+  removeAccountStorageItem,
   setAccountStorageItem,
 } from '@/storage/AccountScopedStorage';
 
+const ACTIVE_GO_HOME_STORAGE_KEY = 'safemelink.gohome.active';
 const HOME_LOCATION_STORAGE_KEY = 'safemelink.gohome.homeLocation';
 const GO_HOME_EVENTS_STORAGE_KEY = 'safemelink.gohome.events';
 const GO_HOME_TRANSPORT_MODE_STORAGE_KEY = 'safemelink.gohome.transportMode';
@@ -32,14 +34,78 @@ export type GoHomeSession = {
   transportMode: GoHomeTransportMode;
 };
 
+export type ActiveGoHomeSession = Omit<GoHomeSession, 'homeLocation' | 'startLocation'> & {
+  active: true;
+  expiresAt: string;
+  startedAt: string;
+};
+
 export type GoHomeEvent = {
   id: string;
   createdAt: string;
-  session: GoHomeSession;
+  session: ActiveGoHomeSession | GoHomeSession;
   status: 'completed';
 };
 
+const isActiveGoHomeSession = (value: unknown): value is ActiveGoHomeSession => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<ActiveGoHomeSession>;
+  const createdAtMs = Date.parse(candidate.createdAt ?? '');
+  const startedAtMs = Date.parse(candidate.startedAt ?? '');
+  const expiresAtMs = Date.parse(candidate.expiresAt ?? '');
+  return (
+    candidate.active === true &&
+    typeof candidate.id === 'string' &&
+    candidate.id.length > 0 &&
+    Number.isFinite(createdAtMs) &&
+    Number.isFinite(startedAtMs) &&
+    Number.isFinite(expiresAtMs) &&
+    expiresAtMs > startedAtMs &&
+    Number.isFinite(candidate.distanceKm) &&
+    (candidate.distanceKm ?? -1) >= 0 &&
+    Number.isInteger(candidate.estimatedMinutes) &&
+    (candidate.estimatedMinutes ?? 0) > 0 &&
+    typeof candidate.transportMode === 'string' &&
+    isGoHomeTransportMode(candidate.transportMode)
+  );
+};
+
 export const GoHomeStorage = {
+  async getActive(userId: string): Promise<ActiveGoHomeSession | null> {
+    const storedSession = await getAccountStorageItem(
+      userId,
+      'go-home-active',
+      [ACTIVE_GO_HOME_STORAGE_KEY],
+    );
+
+    if (!storedSession) {
+      return null;
+    }
+
+    try {
+      const parsedSession: unknown = JSON.parse(storedSession);
+      return isActiveGoHomeSession(parsedSession) ? parsedSession : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async saveActive(userId: string, session: ActiveGoHomeSession) {
+    await setAccountStorageItem(
+      userId,
+      'go-home-active',
+      JSON.stringify(session),
+      [ACTIVE_GO_HOME_STORAGE_KEY],
+    );
+  },
+
+  async clearActive(userId: string) {
+    await removeAccountStorageItem(userId, 'go-home-active');
+  },
+
   async getTransportMode(userId: string): Promise<GoHomeTransportMode> {
     const storedMode = await getAccountStorageItem(
       userId,
@@ -114,7 +180,7 @@ export const GoHomeStorage = {
     }));
   },
 
-  async saveCompleted(userId: string, session: GoHomeSession) {
+  async saveCompleted(userId: string, session: ActiveGoHomeSession | GoHomeSession) {
     const events = await GoHomeStorage.listEvents(userId);
     const event: GoHomeEvent = {
       id: `${Date.now()}`,
