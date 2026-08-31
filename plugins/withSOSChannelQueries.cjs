@@ -3,9 +3,7 @@ const { withAndroidManifest } = require('@expo/config-plugins');
 const QUERY_INTENTS = [
   { action: 'android.intent.action.SENDTO', scheme: 'sms' },
   { action: 'android.intent.action.SENDTO', scheme: 'smsto' },
-  { action: 'android.intent.action.VIEW', scheme: 'whatsapp' },
 ];
-const WHATSAPP_PACKAGES = ['com.whatsapp', 'com.whatsapp.w4b'];
 
 module.exports = function withSOSChannelQueries(config) {
   return withAndroidManifest(config, (androidConfig) => {
@@ -13,7 +11,6 @@ module.exports = function withSOSChannelQueries(config) {
     manifest.queries ??= [{}];
     const queries = manifest.queries[0];
     queries.intent ??= [];
-    queries.package ??= [];
 
     for (const requiredIntent of QUERY_INTENTS) {
       const exists = queries.intent.some(
@@ -26,15 +23,6 @@ module.exports = function withSOSChannelQueries(config) {
           action: [{ $: { 'android:name': requiredIntent.action } }],
           data: [{ $: { 'android:scheme': requiredIntent.scheme } }],
         });
-      }
-    }
-
-    for (const packageName of WHATSAPP_PACKAGES) {
-      const exists = queries.package.some(
-        (entry) => entry.$?.['android:name'] === packageName,
-      );
-      if (!exists) {
-        queries.package.push({ $: { 'android:name': packageName } });
       }
     }
 

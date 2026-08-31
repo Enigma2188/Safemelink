@@ -1,4 +1,5 @@
 import { createBackendError } from '@/backend/errors/BackendError';
+import { runRemoteRequest } from '@/backend/remoteRequest';
 import { requireSupabaseClient } from '@/backend/supabaseClient';
 
 export type EmergencyProfileUpdate = {
@@ -23,9 +24,14 @@ const emergencyProfileErrorMessages = {
 
 export const EmergencyProfileRepository = {
   async getCurrent() {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('get_my_emergency_profile')
-      .maybeSingle();
+    const client = requireSupabaseClient();
+    const { data, error } = await runRemoteRequest(
+      async (signal) => await client
+        .rpc('get_my_emergency_profile')
+        .abortSignal(signal)
+        .maybeSingle(),
+      'Il caricamento sta impiegando troppo tempo. Controlla la connessione e riprova.',
+    );
 
     if (error) {
       throw createBackendError(
@@ -42,8 +48,9 @@ export const EmergencyProfileRepository = {
   },
 
   async updateCurrent(profile: EmergencyProfileUpdate) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('update_my_emergency_profile', {
+    const client = requireSupabaseClient();
+    const { data, error } = await runRemoteRequest(
+      async (signal) => await client.rpc('update_my_emergency_profile', {
         next_declared_blood_group: profile.declaredBloodGroup,
         next_severe_allergies: profile.severeAllergies,
         next_important_conditions: profile.importantConditions,
@@ -53,8 +60,9 @@ export const EmergencyProfileRepository = {
         next_emergency_notes: profile.emergencyNotes,
         next_share_medical_data_during_sos: profile.shareMedicalDataDuringSOS,
         next_share_ice_contact_during_sos: profile.shareICEContactDuringSOS,
-      })
-      .single();
+      }).abortSignal(signal).single(),
+      'Il salvataggio sta impiegando troppo tempo. Verifica la connessione e riprova.',
+    );
 
     if (error) {
       throw createBackendError(
@@ -71,9 +79,14 @@ export const EmergencyProfileRepository = {
   },
 
   async getForReceivedSOS(sosId: string) {
-    const { data, error } = await requireSupabaseClient()
-      .rpc('get_received_sos_emergency_profile', { target_sos_id: sosId })
-      .maybeSingle();
+    const client = requireSupabaseClient();
+    const { data, error } = await runRemoteRequest(
+      async (signal) => await client
+        .rpc('get_received_sos_emergency_profile', { target_sos_id: sosId })
+        .abortSignal(signal)
+        .maybeSingle(),
+      'Il caricamento dei dati condivisi sta impiegando troppo tempo. Riprova.',
+    );
 
     if (error) {
       throw createBackendError(

@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -16,6 +17,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
+import { SOSAutomaticSmsService } from '@/services/SOSAutomaticSmsService';
 import {
   TrustedLinksService,
   type TrustedLinkRequest,
@@ -46,6 +48,13 @@ export function TrustedContactsScreen() {
   const [showQr, setShowQr] = useState(false);
   const [linkActionPending, setLinkActionPending] = useState(false);
   const [contactActionPending, setContactActionPending] = useState(false);
+  const [isLoadingContacts, setIsLoadingContacts] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [smsConsent, setSmsConsent] = useState(false);
+  const [smsPermission, setSmsPermission] = useState(false);
+  const [smsSupported, setSmsSupported] = useState(Platform.OS === 'android');
+  const [smsAuthorizationPending, setSmsAuthorizationPending] = useState(false);
+  const isFocusedRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
   const linkActionGenerationRef = useRef(0);
@@ -62,6 +71,9 @@ export function TrustedContactsScreen() {
     if (isInitializing || !loadUserId) {
       return;
     }
+
+    setIsLoadingContacts(true);
+    setLoadError(null);
 
     try {
       if (isOffline) {
@@ -94,15 +106,45 @@ export function TrustedContactsScreen() {
       setLegacyContacts(overview.legacyContacts);
       setPublicCode(overview.publicCode);
       setRequests(overview.requests);
-    } catch {
+    } catch (error) {
       if (
+        isFocusedRef.current &&
         activeUserIdRef.current === loadUserId &&
         loadGenerationRef.current === loadGeneration
       ) {
-        Alert.alert('Contatti fidati', 'Non riesco a caricare i contatti salvati.');
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : 'Impossibile caricare i dati. Controlla la connessione e riprova.',
+        );
+      }
+    } finally {
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === loadUserId &&
+        loadGenerationRef.current === loadGeneration
+      ) {
+        setIsLoadingContacts(false);
       }
     }
   }, [isInitializing, isOffline, userId]);
+
+  const loadSmsAuthorization = useCallback(async () => {
+    const expectedUserId = userId;
+    if (!expectedUserId) return;
+    try {
+      const state = await SOSAutomaticSmsService.getAuthorizationState(expectedUserId);
+      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId) {
+        setSmsConsent(state.consent);
+        setSmsPermission(state.permission);
+        setSmsSupported(state.supported);
+      }
+    } catch {
+      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId) {
+        setSmsPermission(false);
+      }
+    }
+  }, [userId]);
 
   useEffect(() => {
     loadGenerationRef.current += 1;
@@ -120,17 +162,63 @@ export function TrustedContactsScreen() {
     contactActionGenerationRef.current += 1;
     contactActionInFlightRef.current = false;
     setContactActionPending(false);
+    setIsLoadingContacts(false);
+    setLoadError(null);
+    setSmsConsent(false);
+    setSmsPermission(false);
+    setSmsAuthorizationPending(false);
   }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
+      isFocusedRef.current = true;
+      setContactActionPending(contactActionInFlightRef.current);
+      setLinkActionPending(linkActionInFlightRef.current);
       void loadContacts();
+      void loadSmsAuthorization();
 
       return () => {
+        isFocusedRef.current = false;
         loadGenerationRef.current += 1;
       };
-    }, [loadContacts]),
+    }, [loadContacts, loadSmsAuthorization]),
   );
+
+  const setAutomaticSmsEnabled = async (nextEnabled: boolean) => {
+    const expectedUserId = userId;
+    if (!expectedUserId || smsAuthorizationPending) return;
+    setSmsAuthorizationPending(true);
+    try {
+      if (!nextEnabled) {
+        await SOSAutomaticSmsService.revokeAuthorization(expectedUserId);
+        if (activeUserIdRef.current === expectedUserId) {
+          setSmsConsent(false);
+        }
+        return;
+      }
+      const state = await SOSAutomaticSmsService.requestAuthorization(expectedUserId);
+      if (activeUserIdRef.current !== expectedUserId) return;
+      setSmsConsent(state.consent);
+      setSmsPermission(state.permission);
+      setSmsSupported(state.supported);
+      if (!state.supported) {
+        Alert.alert('SMS automatici', 'L’invio automatico SMS non è disponibile su questo dispositivo.');
+      } else if (!state.permission) {
+        Alert.alert(
+          'SMS automatici non attivi',
+          'Il permesso SMS non è stato concesso. SafeMeLink userà il composer SMS come fallback.',
+        );
+      }
+    } catch {
+      if (activeUserIdRef.current === expectedUserId) {
+        Alert.alert('SMS automatici', 'Impossibile aggiornare ora questa autorizzazione. Riprova.');
+      }
+    } finally {
+      if (activeUserIdRef.current === expectedUserId) {
+        setSmsAuthorizationPending(false);
+      }
+    }
+  };
 
   const resetForm = () => {
     setForm(emptyForm);
@@ -159,17 +247,31 @@ export function TrustedContactsScreen() {
         ? await ContactsService.update(editingId, form)
         : await ContactsService.add(form);
 
-      if (activeUserIdRef.current === actionUserId) {
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        contactActionGenerationRef.current === actionGeneration
+      ) {
         setContacts(nextContacts);
         resetForm();
       }
     } catch (error) {
-      Alert.alert('Contatti fidati', error instanceof Error ? error.message : 'Errore inatteso.');
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        contactActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Contatti fidati',
+          error instanceof Error ? error.message : 'Salvataggio non completato. Riprova.',
+        );
+      }
     } finally {
       if (contactActionGenerationRef.current === actionGeneration) {
         contactActionInFlightRef.current = false;
       }
       if (
+        isFocusedRef.current &&
         activeUserIdRef.current === actionUserId &&
         contactActionGenerationRef.current === actionGeneration
       ) {
@@ -183,7 +285,7 @@ export function TrustedContactsScreen() {
     setForm({
       name: contact.name,
       phone: contact.phone,
-      preferredChannel: contact.preferredChannel,
+      preferredChannel: 'sms',
     });
   };
 
@@ -211,19 +313,35 @@ export function TrustedContactsScreen() {
           try {
             const nextContacts = await ContactsService.remove(contact.id);
 
-            if (activeUserIdRef.current === actionUserId) {
+            if (
+              isFocusedRef.current &&
+              activeUserIdRef.current === actionUserId &&
+              contactActionGenerationRef.current === actionGeneration
+            ) {
               setContacts(nextContacts);
               if (editingId === contact.id) {
                 resetForm();
               }
             }
-          } catch {
-            Alert.alert('Contatti fidati', 'Non riesco a eliminare il contatto.');
+          } catch (error) {
+            if (
+              isFocusedRef.current &&
+              activeUserIdRef.current === actionUserId &&
+              contactActionGenerationRef.current === actionGeneration
+            ) {
+              Alert.alert(
+                'Contatti fidati',
+                error instanceof Error
+                  ? error.message
+                  : 'Eliminazione non completata. Aggiorna i contatti e riprova.',
+              );
+            }
           } finally {
             if (contactActionGenerationRef.current === actionGeneration) {
               contactActionInFlightRef.current = false;
             }
             if (
+              isFocusedRef.current &&
               activeUserIdRef.current === actionUserId &&
               contactActionGenerationRef.current === actionGeneration
             ) {
@@ -236,7 +354,8 @@ export function TrustedContactsScreen() {
   };
 
   const importLegacyContact = async (contact: TrustedContact) => {
-    if (!userId || contactActionInFlightRef.current) {
+    const actionUserId = userId;
+    if (!actionUserId || contactActionInFlightRef.current) {
       return;
     }
 
@@ -249,15 +368,25 @@ export function TrustedContactsScreen() {
       await ContactsService.importLegacy(contact.id);
       await loadContacts();
     } catch (error) {
-      Alert.alert(
-        'Importa contatto',
-        error instanceof Error ? error.message : 'Non riesco a importare il contatto.',
-      );
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        contactActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Importa contatto',
+          error instanceof Error ? error.message : 'Non riesco a importare il contatto.',
+        );
+      }
     } finally {
       if (contactActionGenerationRef.current === actionGeneration) {
         contactActionInFlightRef.current = false;
       }
-      if (contactActionGenerationRef.current === actionGeneration) {
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        contactActionGenerationRef.current === actionGeneration
+      ) {
         setContactActionPending(false);
       }
     }
@@ -273,11 +402,36 @@ export function TrustedContactsScreen() {
           text: 'Rimuovi',
           style: 'destructive',
           onPress: async () => {
+            const actionUserId = userId;
+            if (!actionUserId || contactActionInFlightRef.current) {
+              return;
+            }
+            contactActionInFlightRef.current = true;
+            const actionGeneration = contactActionGenerationRef.current + 1;
+            contactActionGenerationRef.current = actionGeneration;
+            setContactActionPending(true);
             try {
               await ContactsService.discardLegacy(contact.id);
               await loadContacts();
             } catch {
-              Alert.alert('Contatti fidati', 'Non riesco a rimuovere il dato locale.');
+              if (
+                isFocusedRef.current &&
+                activeUserIdRef.current === actionUserId &&
+                contactActionGenerationRef.current === actionGeneration
+              ) {
+                Alert.alert('Contatti fidati', 'Non riesco a rimuovere il dato locale.');
+              }
+            } finally {
+              if (contactActionGenerationRef.current === actionGeneration) {
+                contactActionInFlightRef.current = false;
+              }
+              if (
+                isFocusedRef.current &&
+                activeUserIdRef.current === actionUserId &&
+                contactActionGenerationRef.current === actionGeneration
+              ) {
+                setContactActionPending(false);
+              }
             }
           },
         },
@@ -309,23 +463,40 @@ export function TrustedContactsScreen() {
     try {
       await TrustedLinksService.sendRequest(linkCode);
 
-      if (activeUserIdRef.current !== actionUserId) {
+      if (
+        !isFocusedRef.current ||
+        activeUserIdRef.current !== actionUserId ||
+        linkActionGenerationRef.current !== actionGeneration
+      ) {
         return;
       }
 
       setLinkCode('');
       await loadContacts();
-      Alert.alert('Collegamento SafeMeLink', 'Richiesta inviata.');
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert('Collegamento SafeMeLink', 'Richiesta inviata.');
+      }
     } catch (error) {
-      Alert.alert(
-        'Collegamento SafeMeLink',
-        error instanceof Error ? error.message : 'Impossibile inviare la richiesta.',
-      );
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Collegamento SafeMeLink',
+          error instanceof Error ? error.message : 'Impossibile inviare la richiesta.',
+        );
+      }
     } finally {
       if (linkActionGenerationRef.current === actionGeneration) {
         linkActionInFlightRef.current = false;
       }
       if (
+        isFocusedRef.current &&
         activeUserIdRef.current === actionUserId &&
         linkActionGenerationRef.current === actionGeneration
       ) {
@@ -353,25 +524,42 @@ export function TrustedContactsScreen() {
     try {
       await TrustedLinksService.respond(requestId, accept);
 
-      if (activeUserIdRef.current !== actionUserId) {
+      if (
+        !isFocusedRef.current ||
+        activeUserIdRef.current !== actionUserId ||
+        linkActionGenerationRef.current !== actionGeneration
+      ) {
         return;
       }
 
       await loadContacts();
-      Alert.alert(
-        'Collegamento SafeMeLink',
-        accept ? 'Contatto SafeMeLink collegato.' : 'Richiesta rifiutata.',
-      );
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Collegamento SafeMeLink',
+          accept ? 'Contatto SafeMeLink collegato.' : 'Richiesta rifiutata.',
+        );
+      }
     } catch (error) {
-      Alert.alert(
-        'Collegamento SafeMeLink',
-        error instanceof Error ? error.message : 'Impossibile aggiornare la richiesta.',
-      );
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Collegamento SafeMeLink',
+          error instanceof Error ? error.message : 'Impossibile aggiornare la richiesta.',
+        );
+      }
     } finally {
       if (linkActionGenerationRef.current === actionGeneration) {
         linkActionInFlightRef.current = false;
       }
       if (
+        isFocusedRef.current &&
         activeUserIdRef.current === actionUserId &&
         linkActionGenerationRef.current === actionGeneration
       ) {
@@ -405,15 +593,22 @@ export function TrustedContactsScreen() {
 
       await loadContacts();
     } catch (error) {
-      Alert.alert(
-        'Collegamento SafeMeLink',
-        error instanceof Error ? error.message : 'Impossibile annullare la richiesta.',
-      );
+      if (
+        isFocusedRef.current &&
+        activeUserIdRef.current === actionUserId &&
+        linkActionGenerationRef.current === actionGeneration
+      ) {
+        Alert.alert(
+          'Collegamento SafeMeLink',
+          error instanceof Error ? error.message : 'Impossibile annullare la richiesta.',
+        );
+      }
     } finally {
       if (linkActionGenerationRef.current === actionGeneration) {
         linkActionInFlightRef.current = false;
       }
       if (
+        isFocusedRef.current &&
         activeUserIdRef.current === actionUserId &&
         linkActionGenerationRef.current === actionGeneration
       ) {
@@ -431,11 +626,12 @@ export function TrustedContactsScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.screen}>
     <ScrollView
+      automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       contentContainerStyle={styles.container}
-      keyboardDismissMode="on-drag"
+      keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
       keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
         <Text style={styles.title}>Contatti fidati</Text>
@@ -543,10 +739,31 @@ export function TrustedContactsScreen() {
       )}
 
       <View style={styles.section}>
+        <View style={styles.smsConsentRow}>
+          <View style={styles.smsConsentCopy}>
+            <Text style={styles.sectionTitle}>SMS automatici di emergenza</Text>
+            <Text style={styles.sectionHelp}>
+              Con il tuo consenso, SafeMeLink invia direttamente un SMS ai numeri fidati quando parte un SOS.
+            </Text>
+            {!smsSupported ? (
+              <Text style={styles.legacyPhoneWarning}>Funzione disponibile soltanto su Android.</Text>
+            ) : smsConsent && !smsPermission ? (
+              <Text style={styles.legacyPhoneWarning}>Permesso SMS revocato: riattiva l’opzione per richiederlo.</Text>
+            ) : null}
+          </View>
+          <Switch
+            disabled={!userId || smsAuthorizationPending || !smsSupported}
+            onValueChange={(value) => void setAutomaticSmsEnabled(value)}
+            value={smsConsent && smsPermission}
+          />
+        </View>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
         <Text style={styles.sectionHelp}>
           Usa il numero completo di prefisso internazionale (per esempio +39). Il numero viene
-          sincronizzato come fallback SMS/WhatsApp, ma non collega un account SafeMeLink.
+          sincronizzato per il canale SMS, ma non collega un account SafeMeLink.
         </Text>
         <TextInput
           editable={!contactActionPending}
@@ -556,27 +773,7 @@ export function TrustedContactsScreen() {
           value={form.name}
           onChangeText={(name) => setForm((current) => ({ ...current, name }))}
         />
-        <Text style={styles.channelLabel}>Canale locale preferito</Text>
-        <View style={styles.channelRow}>
-          {(['sms', 'whatsapp'] as const).map((channel) => (
-            <Pressable
-              disabled={contactActionPending}
-              key={channel}
-              onPress={() => setForm((current) => ({ ...current, preferredChannel: channel }))}
-              style={[
-                styles.channelButton,
-                form.preferredChannel === channel && styles.channelButtonSelected,
-              ]}>
-              <Text
-                style={[
-                  styles.channelButtonText,
-                  form.preferredChannel === channel && styles.channelButtonTextSelected,
-                ]}>
-                {channel === 'sms' ? 'SMS' : 'WhatsApp'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text style={styles.channelLabel}>Canale locale: SMS</Text>
         <TextInput
           editable={!contactActionPending}
           style={styles.input}
@@ -622,13 +819,11 @@ export function TrustedContactsScreen() {
                       ? 'SafeMeLink collegato + numero locale'
                       : 'SafeMeLink collegato'
                     : 'Solo numero locale'}
-                  {contact.phone
-                    ? ` · Fallback ${contact.preferredChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'}`
-                    : ''}
+                  {contact.phone ? ' · Canale SMS' : ''}
                 </Text>
                 {contact.phone && !contact.phoneE164 ? (
                   <Text style={styles.legacyPhoneWarning}>
-                    Aggiungi il prefisso internazionale per usare WhatsApp.
+                    Aggiungi il prefisso internazionale per identificare correttamente il numero.
                   </Text>
                 ) : null}
               </View>
@@ -650,6 +845,18 @@ export function TrustedContactsScreen() {
           ))
         )}
       </View>
+
+      {isLoadingContacts ? (
+        <Text style={styles.loadingText}>Aggiornamento contatti in corso…</Text>
+      ) : null}
+      {loadError ? (
+        <View style={styles.loadErrorCard}>
+          <Text style={styles.loadErrorText}>{loadError}</Text>
+          <Pressable style={styles.secondaryButton} onPress={() => void loadContacts()}>
+            <Text style={styles.secondaryButtonText}>Riprova</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {legacyContacts.length > 0 ? (
         <View style={styles.section}>
@@ -747,11 +954,35 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     padding: 12,
   },
+  loadingText: {
+    color: '#52616b',
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  loadErrorCard: {
+    backgroundColor: '#fff3f3',
+    borderRadius: 8,
+    marginBottom: 18,
+    padding: 14,
+  },
+  loadErrorText: {
+    color: '#9f1d1d',
+    fontSize: 14,
+    lineHeight: 20,
+  },
   channelLabel: {
     color: '#52616b',
     fontSize: 13,
     fontWeight: '700',
     marginBottom: 8,
+  },
+  smsConsentRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+  },
+  smsConsentCopy: {
+    flex: 1,
   },
   channelRow: {
     flexDirection: 'row',

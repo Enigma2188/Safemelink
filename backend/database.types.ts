@@ -445,6 +445,13 @@ export type Database = {
         Args: Record<string, never>;
         Returns: undefined;
       };
+      list_my_active_received_sos: {
+        Args: Record<string, never>;
+        Returns: {
+          sos_id: string;
+          event_time: string;
+        }[];
+      };
       get_my_sos_network_preference: {
         Args: Record<string, never>;
         Returns: boolean;

@@ -25,12 +25,14 @@ export function useEmergencyProfile() {
   const [hasLoadedProfile, setHasLoadedProfile] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const isFocusedRef = useRef(false);
+  const activeUserIdRef = useRef<string | null>(session?.user.id ?? null);
   const loadGenerationRef = useRef(0);
   const loadRequestKeyRef = useRef('');
   const saveInFlightRef = useRef<{
     userId: string;
     promise: Promise<EmergencyProfile>;
   } | null>(null);
+  activeUserIdRef.current = session?.user.id ?? null;
 
   useFocusEffect(
     useCallback(() => {
@@ -66,6 +68,7 @@ export function useEmergencyProfile() {
         .then((profile) => {
           if (
             isFocusedRef.current &&
+            activeUserIdRef.current === session.user.id &&
             loadGenerationRef.current === loadGeneration &&
             loadRequestKeyRef.current === loadRequestKey
           ) {
@@ -78,6 +81,7 @@ export function useEmergencyProfile() {
         .catch((loadError: unknown) => {
           if (
             isFocusedRef.current &&
+            activeUserIdRef.current === session.user.id &&
             loadGenerationRef.current === loadGeneration &&
             loadRequestKeyRef.current === loadRequestKey
           ) {
@@ -117,6 +121,7 @@ export function useEmergencyProfile() {
 
       if (
         isFocusedRef.current &&
+        activeUserIdRef.current === userId &&
         loadGenerationRef.current === saveGeneration
       ) {
         setDraft(savedProfile);
@@ -128,6 +133,7 @@ export function useEmergencyProfile() {
     } catch (saveError: unknown) {
       if (
         isFocusedRef.current &&
+        activeUserIdRef.current === userId &&
         loadGenerationRef.current === saveGeneration
       ) {
         setStatus('error');

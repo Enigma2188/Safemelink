@@ -176,7 +176,7 @@ export const VoiceProtectionService = {
         type: 'mipmap',
       },
       color: '#7868FF',
-      foregroundServiceType: ['microphone'],
+      foregroundServiceType: ['microphone', 'location'],
       linkingURI: 'safemelink://voice-protection',
       parameters: {
         expiresAt,

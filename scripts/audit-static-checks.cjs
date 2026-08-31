@@ -35,6 +35,9 @@ const emergencyService = read('services/EmergencyProfileService.ts');
 const emergencyRepository = read(
   'backend/repositories/EmergencyProfileRepository.ts',
 );
+const remoteRequest = read('backend/remoteRequest.ts');
+const trustedContactsRepository = read('backend/repositories/TrustedContactsRepository.ts');
+const trustedLinksRepository = read('backend/repositories/TrustedLinksRepository.ts');
 const emergencyHook = read('hooks/useEmergencyProfile.ts');
 const emergencyScreen = read('screens/EmergencyProfileScreen.tsx');
 const radarScreen = read('screens/RadarScreen.tsx');
@@ -95,9 +98,18 @@ const offlineStatusBanner = read('components/OfflineStatusBanner.tsx');
 const locationService = read('services/LocationService.ts');
 const sosService = read('services/SOSService.ts');
 const sosAlertService = read('services/SOSAlertService.ts');
+const sosAutomaticSmsService = read('services/SOSAutomaticSmsService.ts');
+const sosAutomaticSmsStorage = read('storage/SOSAutomaticSmsStorage.ts');
+const sosNetworkLocationStorage = read('storage/SOSNetworkLocationStorage.ts');
+const smsNativeModule = read(
+  'modules/safemelink-sms/android/src/main/java/com/tiziano/safemelink/sms/SafeMeLinkSmsModule.kt',
+);
 const trustedLinksService = read('services/TrustedLinksService.ts');
 const sosChannelQueriesPlugin = read('plugins/withSOSChannelQueries.cjs');
 const receivedSOSRepository = read('backend/repositories/ReceivedSOSRepository.ts');
+const receivedSOSInboxMigration = read(
+  'supabase/migrations/20260831120000_received_sos_inbox.sql',
+);
 const receivedSOSScreen = read('app/sos/[id].tsx');
 const sosNetworkMigration = read(
   'supabase/migrations/20260825120000_sos_network_presence.sql',
@@ -137,8 +149,8 @@ check('SOS network background location is bounded, opportunistic and account-sco
   assert.match(sosNetworkService, /Accuracy\.High/);
   assert.match(sosNetworkService, /Location\.hasServicesEnabledAsync\(\)/);
   assert.match(sosNetworkService, /SOSNetworkLocationServicesDisabledError/);
-  assert.match(sosNetworkService, /BACKGROUND_UPDATE_INTERVAL_MS = 15 \* 60 \* 1_000/);
-  assert.match(sosNetworkService, /BACKGROUND_UPDATE_DISTANCE_METERS = 500/);
+  assert.match(sosNetworkService, /BACKGROUND_UPDATE_INTERVAL_MS = 10 \* 60 \* 1_000/);
+  assert.match(sosNetworkService, /BACKGROUND_UPDATE_DISTANCE_METERS = 100/);
   assert.match(sosNetworkService, /pausesUpdatesAutomatically: true/);
   assert.match(sosNetworkService, /session\?\.user\.id !== expectedUserId/);
   assert.match(sosNetworkProvider, /FOREGROUND_REFRESH_MS = 10 \* 60 \* 1_000/);
@@ -210,6 +222,9 @@ check('SOS nearby boundary scenarios retain valid responders', () => {
   };
 
   assert.deepEqual(selected([150]), [150]);
+  for (const distance of [20, 100, 500, 1_000, 3_000, 5_000]) {
+    assert.deepEqual(selected([distance]), [distance]);
+  }
   assert.deepEqual(selected([150, 250]), [150, 250]);
   assert.deepEqual(selected([150, 250, 350, 450]), [150, 250, 350, 450]);
   assert.equal(chooseRadius([100, 200, 300, 400, 500]), 1_000);
@@ -229,6 +244,9 @@ check('SOS nearby boundary scenarios retain valid responders', () => {
   assert.equal(freshnessPenalty(15 * 60 + 1), 3_000);
   assert.equal(isFresh(29 * 60 + 59), true);
   assert.equal(isFresh(30 * 60 + 1), false);
+  const hasValidAccuracy = (accuracy) => accuracy >= 0 && accuracy <= 100;
+  assert.equal(hasValidAccuracy(100), true);
+  assert.equal(hasValidAccuracy(100.01), false);
 });
 
 check('SOS push claim is a recoverable pre-attempt lease with conservative post-attempt handling', () => {
@@ -751,7 +769,7 @@ check('Voice Protection recognition stays local and delegates SOS through runtim
 check('Voice Protection foreground service is declared as microphone', () => {
   assert.match(
     voiceProtectionService,
-    /foregroundServiceType: \['microphone'\]/,
+    /foregroundServiceType: \['microphone', 'location'\]/,
   );
   assert.match(
     voiceProtectionPlugin,
@@ -759,9 +777,14 @@ check('Voice Protection foreground service is declared as microphone', () => {
   );
   assert.match(
     voiceProtectionPlugin,
-    /android:foregroundServiceType'\] = 'microphone'/,
+    /android\.permission\.FOREGROUND_SERVICE_LOCATION/,
+  );
+  assert.match(
+    voiceProtectionPlugin,
+    /android:foregroundServiceType'\] = 'microphone\|location'/,
   );
   assert.match(voiceProtectionPlugin, /android\.permission\.POST_NOTIFICATIONS/);
+  assert.match(voiceProtectionScreen, /Location\.requestForegroundPermissionsAsync\(\)/);
 });
 
 check('Voice Protection keeps one bounded background recognition owner', () => {
@@ -840,6 +863,11 @@ check('Received SOS notifications use one global event-driven center', () => {
   assert.doesNotMatch(pushTokenRegistrar, /addNotificationReceivedListener/);
   assert.doesNotMatch(pushTokenRegistrar, /addNotificationResponseReceivedListener/);
   assert.doesNotMatch(sosNotificationCenter, /setInterval\(/);
+  assert.match(sosNotificationCenter, /ReceivedSOSRepository\.listActive\(\)/);
+  assert.match(sosNotificationCenter, /AppState\.addEventListener\('change'/);
+  assert.match(receivedSOSInboxMigration, /list_my_active_received_sos/);
+  assert.match(receivedSOSInboxMigration, /target\.status in \('open', 'accepted'\)/);
+  assert.doesNotMatch(receivedSOSInboxMigration, /target\.latitude|target\.longitude/);
 });
 
 check('Received SOS events validate and deduplicate the real SOS identifier', () => {
@@ -1040,22 +1068,74 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(voiceProtectionLifecycle, /VOICE_MATCH_OK/);
   assert.match(voiceProtectionRuntime, /VOICE_SOS_REQUESTED/);
   assert.match(voiceProtectionRuntime, /VOICE_REQUEST_QUEUED/);
+  assert.match(homeScreen, /countdownExpiresAtRef\.current = Date\.now\(\)/);
+  assert.match(homeScreen, /expiresAt - Date\.now\(\)/);
+  assert.match(homeScreen, /countdownCompletionHandledRef/);
 });
 
-check('SOS push remains primary and local fallback is bounded and observable', () => {
-  assert.match(sosService, /if \(pushResult\.notificationsSent === 0\)/);
+check('SOS push and trusted automatic SMS run independently with bounded fallback', () => {
+  assert.match(sosService, /const automaticSmsPromise/);
+  assert.match(sosService, /SOSAutomaticSmsService\.sendForSOS\(expectedUserId, event, contacts\)/);
+  assert.doesNotMatch(sosService, /notificationsSent === 0[\s\S]{0,200}sendForSOS/);
+  assert.match(sosService, /if \(automaticSmsResult\.status !== 'sent'\)/);
   assert.match(sosService, /localDeliveryResult = await sendSosAlert/);
   assert.match(sosAlertService, /LOCAL_FALLBACK_DEADLINE_MS = 12_000/);
   assert.match(sosAlertService, /Linking\.canOpenURL/);
-  assert.match(sosAlertService, /contact\.preferredChannel === 'whatsapp'/);
+  assert.match(sosAlertService, /SMS_COMPOSER_OPENED/);
+  assert.doesNotMatch(sosAlertService, /whatsapp:\/\/|wa\.me|WHATSAPP_/i);
   assert.doesNotMatch(sosAlertService, /Alert\.alert/);
 });
 
+check('Automatic trusted SMS requires account consent and Android SEND_SMS permission', () => {
+  assert.match(appConfig, /android\.permission\.SEND_SMS/);
+  assert.match(sosAutomaticSmsService, /SOSAutomaticSmsStorage\.hasConsent\(userId\)/);
+  assert.match(sosAutomaticSmsService, /PermissionsAndroid\.PERMISSIONS\.SEND_SMS/);
+  assert.match(sosAutomaticSmsService, /PermissionsAndroid\.request/);
+  assert.match(sosAutomaticSmsService, /getUniquePhones/);
+  assert.match(sosAutomaticSmsService, /SOSAutomaticSmsStorage\.markAttempted/);
+  assert.match(sosAutomaticSmsStorage, /'sos-sms-consent'/);
+  assert.match(sosAutomaticSmsStorage, /'sos-sms-dispatch'/);
+  assert.match(smsNativeModule, /Manifest\.permission\.SEND_SMS/);
+  assert.match(smsNativeModule, /sendTextMessage|sendMultipartTextMessage/);
+  assert.doesNotMatch(sosAutomaticSmsService, /whatsapp|wa\.me/i);
+  const smsLogStatements = (
+    sosAutomaticSmsService.match(/console\.(?:log|info|warn)\([\s\S]*?\);/g) ?? []
+  ).join('\n');
+  assert.doesNotMatch(smsLogStatements, /\bphone\b|latitude|longitude|event\.message/);
+});
+
+check('Voice SOS can use only a fresh accurate account-scoped network location fallback', () => {
+  assert.match(homeScreen, /startSOSCountdown\('voice'\)/);
+  assert.match(homeScreen, /allowRecentNetworkLocation: sosTriggerSourceRef\.current === 'voice'/);
+  assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS = 10 \* 60 \* 1_000/);
+  assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS = 100/);
+  assert.match(locationService, /cachedAgeMs >= 0/);
+  assert.match(locationService, /allowRecentNetworkLocationForUserId/);
+  assert.match(sosNetworkLocationStorage, /getAccountStorageItem\(userId, NAMESPACE/);
+  assert.match(sosNetworkLocationStorage, /value\.latitude! < -90/);
+  assert.match(sosNetworkLocationStorage, /value\.longitude! > 180/);
+  assert.match(sosNetworkService, /SOSNetworkLocationStorage\.save\(expectedUserId/);
+  assert.match(sosNetworkProvider, /SOSNetworkLocationStorage\.clear\(expectedUserId\)/);
+});
+
+check('Fresh-user and trusted-contact forms keep keyboard-visible stable scroll containers', () => {
+  assert.match(accountAccessPanel, /placeholderTextColor="#7180A3"/);
+  assert.match(contactsScreen, /behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}/);
+  assert.match(contactsScreen, /keyboardDismissMode=\{Platform\.OS === 'ios' \? 'interactive' : 'none'\}/);
+  assert.match(contactsScreen, /keyboardShouldPersistTaps="handled"/);
+  assert.doesNotMatch(contactsScreen, /key=\{(?:form|linkCode|editingId)/);
+});
+
 check('SOS activation supersedes preventive safety timers', () => {
-  const startCountdown = homeScreen.match(
-    /const startSOSCountdown = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[clearPersistedCheckpoint\]\);/,
-  )?.[1];
-  assert.ok(startCountdown, 'SOS countdown callback not found.');
+  const startCountdownStart = homeScreen.indexOf(
+    'const startSOSCountdown = useCallback(',
+  );
+  const startCountdownEnd = homeScreen.indexOf('\n\n  useEffect(', startCountdownStart);
+  assert.ok(
+    startCountdownStart >= 0 && startCountdownEnd > startCountdownStart,
+    'SOS countdown callback not found.',
+  );
+  const startCountdown = homeScreen.slice(startCountdownStart, startCountdownEnd);
   assert.match(startCountdown, /setCheckpointStatus\('idle'\)/);
   assert.match(startCountdown, /goHomeEstimateGenerationRef\.current \+= 1/);
   assert.match(startCountdown, /setGoHomeStatus\('idle'\)/);
@@ -1123,18 +1203,30 @@ check('Trusted contact mutations are guarded against duplicate taps', () => {
   assert.match(contactsScreen, /disabled=\{contactActionPending\}/);
 });
 
-check('WhatsApp fallback prefers the native scheme and never invents a country code', () => {
+check('SOS local dispatch is SMS-only and never invents a country code', () => {
   assert.match(phoneIdentity, /E164_PATTERN = \/\^\\\+\[1-9\]\\d\{6,14\}\$\//);
-  assert.match(
-    sosAlertService,
-    /return \[\s*`whatsapp:\/\/send[\s\S]*`https:\/\/wa\.me/,
-  );
+  assert.match(sosAlertService, /`smsto:\$\{contact\.phone\}/);
+  assert.match(sosAlertService, /`sms:\$\{contact\.phone\}/);
   assert.doesNotMatch(sosAlertService, /\+39|defaultCountry|countryCode/);
-  assert.match(sosAlertService, /contact\.phoneE164/);
-  assert.match(sosAlertService, /WHATSAPP_COMPOSER_OPENED/);
-  assert.match(sosAlertService, /smsFollowUpAvailable: true/);
+  assert.doesNotMatch(sosAlertService, /whatsapp|wa\.me/i);
+  assert.doesNotMatch(contactsScreen, /Canale locale preferito|Fallback WhatsApp/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LINKED/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LOCAL/);
+});
+
+check('Emergency profile and trusted contact requests have bounded cancellable operations', () => {
+  assert.match(remoteRequest, /REMOTE_REQUEST_TIMEOUT_MS = 15_000/);
+  assert.match(remoteRequest, /new AbortController\(\)/);
+  assert.match(remoteRequest, /controller\.abort\(\)/);
+  assert.match(remoteRequest, /clearTimeout\(timeoutId\)/);
+  assert.equal((emergencyRepository.match(/runRemoteRequest\(/g) ?? []).length, 3);
+  assert.equal((trustedContactsRepository.match(/runRemoteRequest\(/g) ?? []).length, 4);
+  assert.equal((trustedLinksRepository.match(/runRemoteRequest\(/g) ?? []).length, 5);
+  assert.match(emergencyHook, /activeUserIdRef\.current === userId/);
+  assert.match(contactsScreen, /isFocusedRef\.current/);
+  assert.match(contactsScreen, /loadGenerationRef\.current === loadGeneration/);
+  assert.match(contactsScreen, /Aggiornamento contatti in corso/);
+  assert.match(contactsScreen, />Riprova</);
 });
 
 check('Sensitive errors are categorized rather than logged as raw objects', () => {
@@ -1265,12 +1357,11 @@ check('Production source contains no hardcoded test accounts or credentials', ()
   );
 });
 
-check('Android package visibility exposes SOS fallback channels', () => {
+check('Android package visibility exposes only SOS SMS fallback channels', () => {
   assert.match(sosChannelQueriesPlugin, /android\.intent\.action\.SENDTO/);
   assert.match(sosChannelQueriesPlugin, /scheme: 'sms'/);
   assert.match(sosChannelQueriesPlugin, /scheme: 'smsto'/);
-  assert.match(sosChannelQueriesPlugin, /scheme: 'whatsapp'/);
-  assert.match(sosChannelQueriesPlugin, /com\.whatsapp\.w4b/);
+  assert.doesNotMatch(sosChannelQueriesPlugin, /whatsapp/i);
 });
 
 process.stdout.write('All static audit checks passed.\n');

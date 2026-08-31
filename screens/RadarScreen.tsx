@@ -169,11 +169,12 @@ export function RadarScreen() {
         <View style={[styles.backgroundPoint, styles.backgroundPointThree]} />
       </View>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardAvoidingView}>
       <ScrollView
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         contentContainerStyle={styles.container}
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}>
         <View style={styles.heading}>

@@ -9,6 +9,9 @@ export type AccountStorageNamespace =
   | 'go-home-transport-mode'
   | 'passphrase'
   | 'sos-events'
+  | 'sos-network-location'
+  | 'sos-sms-consent'
+  | 'sos-sms-dispatch'
   | 'trusted-contacts'
   | 'voice-protection';
 

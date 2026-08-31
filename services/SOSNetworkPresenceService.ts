@@ -8,11 +8,12 @@ import {
   SOSNetworkPresenceRepository,
   type SOSNetworkPresenceSource,
 } from '@/backend/repositories/SOSNetworkPresenceRepository';
+import { SOSNetworkLocationStorage } from '@/storage/SOSNetworkLocationStorage';
 
 export const SOS_NETWORK_LOCATION_TASK = 'SAFEMELINK_SOS_NETWORK_LOCATION';
 export const SOS_NETWORK_MAX_ACCURACY_METERS = 100;
-const BACKGROUND_UPDATE_INTERVAL_MS = 15 * 60 * 1_000;
-const BACKGROUND_UPDATE_DISTANCE_METERS = 500;
+const BACKGROUND_UPDATE_INTERVAL_MS = 10 * 60 * 1_000;
+const BACKGROUND_UPDATE_DISTANCE_METERS = 100;
 const FOREGROUND_LOCATION_TIMEOUT_MS = 20_000;
 
 export class SOSNetworkPermissionError extends Error {
@@ -95,6 +96,16 @@ const publishLocation = async (
     accuracy,
     observedAt: new Date(location.timestamp).toISOString(),
     source,
+  });
+  await SOSNetworkLocationStorage.save(expectedUserId, {
+    latitude: location.coords.latitude,
+    longitude: location.coords.longitude,
+    accuracy,
+    observedAt: new Date(location.timestamp).toISOString(),
+  }).catch(() => {
+    console.warn('[SafeMeLink Rete SOS] Cache posizione non aggiornata.', {
+      category: 'local_storage',
+    });
   });
   console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_SUCCESS', { source });
   return true;

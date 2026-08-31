@@ -4,13 +4,11 @@ import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
 import type { ActiveSOSEvent } from '@/services/SOSService';
 import {
   getPhoneIdentityKey,
-  isValidE164Phone,
 } from '@/services/PhoneIdentity';
 
 export type SOSLocalDeliveryResult = {
-  status: 'not_needed' | 'whatsapp_opened' | 'sms_opened' | 'no_channel' | 'technical_error';
-  channel: 'whatsapp' | 'sms' | null;
-  smsFollowUpAvailable?: boolean;
+  status: 'not_needed' | 'sms_opened' | 'no_channel' | 'technical_error';
+  channel: 'sms' | null;
 };
 
 type UrlOpenResult = {
@@ -91,39 +89,11 @@ const createSmsUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
 const createGenericSmsUrl = (event: ActiveSOSEvent) =>
   `sms:?body=${encodeURIComponent(event.message)}`;
 
-const createWhatsAppUrls = (event: ActiveSOSEvent, contact: SafeMeLinkContact) => {
-  const message = encodeURIComponent(event.message);
-  const compactPhone = contact.phoneE164;
-
-  if (!isValidE164Phone(compactPhone)) {
-    console.info('[SafeMeLink SOS] PHONE_CANONICAL_INVALID', {
-      channel: 'whatsapp',
-      outcome: 'skipped',
-    });
-    return [];
-  }
-
-  console.info('[SafeMeLink SOS] PHONE_CANONICAL_VALID');
-
-  const phone = compactPhone!.slice(1);
-
-  return [
-    `whatsapp://send?phone=${phone}&text=${message}`,
-    `https://wa.me/${phone}?text=${message}`,
-  ];
-};
-
 const getUrlDiagnostics = (url: string) => {
   const rawScheme = url.slice(0, Math.max(0, url.indexOf(':'))).toLowerCase();
-  const isWhatsAppWebLink = rawScheme === 'https' && /^https:\/\/wa\.me\//i.test(url);
-  const scheme = isWhatsAppWebLink
-    ? 'https'
-    : ['sms', 'smsto', 'whatsapp'].includes(rawScheme)
-      ? rawScheme
-      : 'unknown';
-  const channel = scheme === 'whatsapp' || isWhatsAppWebLink ? 'whatsapp' : 'sms';
+  const scheme = ['sms', 'smsto'].includes(rawScheme) ? rawScheme : 'unknown';
 
-  return { channel, scheme } as const;
+  return { channel: 'sms' as const, scheme };
 };
 
 const getGenericErrorCategory = (error: unknown) =>
@@ -131,16 +101,8 @@ const getGenericErrorCategory = (error: unknown) =>
 
 const openUrlWithDiagnostics = async (url: string): Promise<UrlOpenResult> => {
   const diagnostics = getUrlDiagnostics(url);
-  const availabilityUrl =
-    diagnostics.channel === 'whatsapp' ? 'whatsapp://send' : url;
-
   try {
-    const canOpen = await runLinkingOperation(Linking.canOpenURL(availabilityUrl));
-    if (diagnostics.channel === 'whatsapp') {
-      console.info(
-        `[SafeMeLink SOS] ${canOpen ? 'WHATSAPP_HANDLER_AVAILABLE' : 'WHATSAPP_HANDLER_UNAVAILABLE'}`,
-      );
-    }
+    const canOpen = await runLinkingOperation(Linking.canOpenURL(url));
     console.log('[SafeMeLink SOS] verifica apertura canale', {
       ...diagnostics,
       outcome: canOpen ? 'success' : 'failure',
@@ -159,9 +121,7 @@ const openUrlWithDiagnostics = async (url: string): Promise<UrlOpenResult> => {
 
   try {
     await runLinkingOperation(Linking.openURL(url));
-    console.info(
-      `[SafeMeLink SOS] ${diagnostics.channel === 'whatsapp' ? 'WHATSAPP_COMPOSER_OPENED' : 'SMS_COMPOSER_OPENED'}`,
-    );
+    console.info('[SafeMeLink SOS] SMS_COMPOSER_OPENED');
     console.log('[SafeMeLink SOS] apertura canale completata', {
       ...diagnostics,
       outcome: 'success',
@@ -215,32 +175,16 @@ export const sendSosAlert = async (
     console.info('[SafeMeLink SOS] destinatario fallback valutato', {
       contactSource: contact.userId ? 'CONTACT_SOURCE_LINKED' : 'CONTACT_SOURCE_LOCAL',
       phonePresent: true,
-      phoneE164Valid: isValidE164Phone(contact.phoneE164),
+      phoneCanonicalAvailable: Boolean(contact.phoneE164),
     });
-    console.info(
-      `[SafeMeLink SOS] ${contact.preferredChannel === 'whatsapp' ? 'PREFERRED_WHATSAPP' : 'PREFERRED_SMS'}`,
-    );
-    const preferredUrls =
-      contact.preferredChannel === 'whatsapp'
-        ? createWhatsAppUrls(event, contact)
-        : createSmsUrls(event, contact);
-    const fallbackUrls =
-      contact.preferredChannel === 'whatsapp'
-        ? createSmsUrls(event, contact)
-        : createWhatsAppUrls(event, contact);
-    const preferredResult = await tryOpenUrls(preferredUrls, deadlineAt);
-    technicalFailure ||= preferredResult.technicalFailure;
-    const fallbackResult = preferredResult.channel
-      ? null
-      : await tryOpenUrls(fallbackUrls, deadlineAt);
-    technicalFailure ||= fallbackResult?.technicalFailure ?? false;
-    const channel = preferredResult.channel ?? fallbackResult?.channel ?? null;
+    const result = await tryOpenUrls(createSmsUrls(event, contact), deadlineAt);
+    technicalFailure ||= result.technicalFailure;
+    const channel = result.channel;
 
     if (channel) {
       return {
-        status: channel === 'whatsapp' ? 'whatsapp_opened' : 'sms_opened',
-        channel,
-        ...(channel === 'whatsapp' ? { smsFollowUpAvailable: true } : {}),
+        status: 'sms_opened',
+        channel: 'sms',
       };
     }
   }

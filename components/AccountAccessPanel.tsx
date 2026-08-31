@@ -123,6 +123,7 @@ export function AccountAccessPanel() {
                 setFeedback(null);
               }}
               placeholder="Email"
+              placeholderTextColor="#7180A3"
               style={styles.input}
               value={email}
             />
@@ -140,6 +141,7 @@ export function AccountAccessPanel() {
                 }
               }}
               placeholder={isSignup ? 'Password (almeno 8 caratteri)' : 'Password'}
+              placeholderTextColor="#7180A3"
               secureTextEntry
               style={styles.input}
               value={password}
@@ -155,6 +157,7 @@ export function AccountAccessPanel() {
                 }}
                 onSubmitEditing={() => void handleSubmit()}
                 placeholder="Conferma password"
+                placeholderTextColor="#7180A3"
                 secureTextEntry
                 style={styles.input}
                 value={passwordConfirmation}

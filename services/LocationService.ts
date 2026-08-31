@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { SOSNetworkLocationStorage } from '@/storage/SOSNetworkLocationStorage';
 
 export type SOSLocation = {
   latitude: number;
@@ -8,6 +9,8 @@ export type SOSLocation = {
 
 export const CURRENT_LOCATION_TIMEOUT_MS = 30_000;
 export const INTERACTIVE_LOCATION_TIMEOUT_MS = 15_000;
+const SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS = 10 * 60 * 1_000;
+const SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS = 100;
 
 export class LocationPermissionError extends Error {
   constructor() {
@@ -59,6 +62,7 @@ export const LocationService = {
   async getCurrentLocation(options?: {
     timeoutMs?: number;
     accuracy?: 'balanced' | 'high';
+    allowRecentNetworkLocationForUserId?: string;
   }): Promise<SOSLocation> {
     const permission = await Location.requestForegroundPermissionsAsync();
 
@@ -85,6 +89,29 @@ export const LocationService = {
       console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', {
         category: error instanceof Error ? error.name : 'unknown',
       });
+      const fallbackUserId = options?.allowRecentNetworkLocationForUserId;
+      if (fallbackUserId) {
+        const cached = await SOSNetworkLocationStorage.get(fallbackUserId).catch(() => null);
+        const observedAtMs = cached ? Date.parse(cached.observedAt) : Number.NaN;
+        const cachedAgeMs = Date.now() - observedAtMs;
+        if (
+          cached &&
+          Number.isFinite(observedAtMs) &&
+          cachedAgeMs >= 0 &&
+          cachedAgeMs <= SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS &&
+          cached.accuracy >= 0 &&
+          cached.accuracy <= SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS
+        ) {
+          console.info('[SafeMeLink Location] Posizione recente Rete SOS utilizzata.', {
+            category: 'recent_network_location',
+          });
+          return {
+            latitude: cached.latitude,
+            longitude: cached.longitude,
+            accuracy: cached.accuracy,
+          };
+        }
+      }
       if (error instanceof LocationTimeoutError) {
         throw error;
       }

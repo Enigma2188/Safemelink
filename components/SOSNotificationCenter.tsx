@@ -6,10 +6,11 @@ import {
   useRouter,
 } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { ReceivedSOSRepository } from '@/backend/repositories/ReceivedSOSRepository';
 import {
   isActiveSOSStatus,
   SOSLifecycleDiagnosticError,
@@ -56,6 +57,8 @@ export function SOSNotificationCenter() {
   const navigationReadyRef = useRef(Boolean(rootNavigationState?.key));
   const authReadyRef = useRef(!isInitializing && Boolean(session?.user.id));
   const pendingResponseRef = useRef<SOSNotificationPayload | null>(null);
+  const inboxRequestGenerationRef = useRef(0);
+  const inboxRequestInFlightRef = useRef(false);
 
   pathnameRef.current = pathname;
   userIdRef.current = session?.user.id;
@@ -133,6 +136,61 @@ export function SOSNotificationCenter() {
     console.info('[SafeMeLink SOS ricevuto] Avviso interno mostrato.');
   }, []);
 
+  const refreshActiveInbox = useCallback(async () => {
+    const expectedUserId = userIdRef.current;
+    if (!expectedUserId || inboxRequestInFlightRef.current) {
+      return;
+    }
+
+    inboxRequestInFlightRef.current = true;
+    const requestGeneration = ++inboxRequestGenerationRef.current;
+    try {
+      const activeRows = await ReceivedSOSRepository.listActive();
+      if (
+        !isMountedRef.current ||
+        userIdRef.current !== expectedUserId ||
+        inboxRequestGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
+
+      const activeIds = new Set(activeRows.map((row) => row.sos_id));
+      eventStatesRef.current.forEach((state, sosId) => {
+        if (state === 'unread' && !activeIds.has(sosId)) {
+          eventStatesRef.current.delete(sosId);
+        }
+      });
+      setEvents((currentEvents) => {
+        const retained = currentEvents.filter((event) => activeIds.has(event.sosId));
+        const retainedIds = new Set(retained.map((event) => event.sosId));
+        const recovered = activeRows
+          .filter(
+            (row) =>
+              !retainedIds.has(row.sos_id) &&
+              !eventStatesRef.current.has(row.sos_id),
+          )
+          .map((row) => {
+            eventStatesRef.current.set(row.sos_id, 'unread');
+            return {
+              type: 'sos_alert' as const,
+              sosId: row.sos_id,
+              receivedAt: Date.parse(row.event_time) || Date.now(),
+            };
+          });
+        return [...retained, ...recovered];
+      });
+      setOpenError(null);
+    } catch (error: unknown) {
+      console.warn('[SafeMeLink SOS ricevuto] Inbox non aggiornata.', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
+    } finally {
+      if (inboxRequestGenerationRef.current === requestGeneration) {
+        inboxRequestInFlightRef.current = false;
+      }
+    }
+  }, []);
+
   const handleNotificationResponse = useCallback(
     (response: Notifications.NotificationResponse) => {
       const payload = parseSOSNotificationPayload(
@@ -201,6 +259,29 @@ export function SOSNotificationCenter() {
   }, [enqueueForegroundSOS, handleNotificationResponse]);
 
   useEffect(() => {
+    if (isInitializing || !session?.user.id) {
+      return;
+    }
+
+    const expectedUserId = session.user.id;
+    queueMicrotask(() => {
+      if (userIdRef.current === expectedUserId) {
+        void refreshActiveInbox();
+      }
+    });
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void refreshActiveInbox();
+      }
+    });
+    return () => {
+      subscription.remove();
+      inboxRequestGenerationRef.current += 1;
+      inboxRequestInFlightRef.current = false;
+    };
+  }, [isInitializing, refreshActiveInbox, session?.user.id]);
+
+  useEffect(() => {
     if (
       !rootNavigationState?.key ||
       isInitializing ||
@@ -225,6 +306,8 @@ export function SOSNotificationCenter() {
     setIsOpening(false);
     navigationInFlightRef.current = false;
     openRequestGenerationRef.current += 1;
+    inboxRequestGenerationRef.current += 1;
+    inboxRequestInFlightRef.current = false;
   }, [session?.user.id]);
 
   const currentEvent = events[0] ?? null;

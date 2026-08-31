@@ -15,6 +15,33 @@ export const ReceivedSOSRepository = {
   getStatus: SOSLifecycleRepository.getStatus,
   accept: SOSLifecycleRepository.accept,
 
+  async listActive() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      RECEIVED_SOS_REQUEST_TIMEOUT_MS,
+    );
+
+    try {
+      const { data, error } = await requireSupabaseClient()
+        .rpc('list_my_active_received_sos')
+        .abortSignal(controller.signal);
+
+      if (error) {
+        throw new BackendError('Impossibile aggiornare gli SOS ricevuti.', error);
+      }
+
+      return data ?? [];
+    } catch (error: unknown) {
+      if (controller.signal.aborted) {
+        throw new ReceivedSOSRequestTimeoutError();
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
+
   async getById(sosId: string) {
     const controller = new AbortController();
     const timeoutId = setTimeout(

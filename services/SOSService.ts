@@ -13,6 +13,10 @@ import {
   type SOSLocalDeliveryResult,
 } from '@/services/SOSAlertService';
 import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
+import {
+  SOSAutomaticSmsService,
+  type SOSAutomaticSmsResult,
+} from '@/services/SOSAutomaticSmsService';
 import { SOSStorage } from '@/storage/SOSStorage';
 
 export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
@@ -70,7 +74,10 @@ export const SOSService = {
 
   async completeSOS(
     expectedUserId: string,
-    options: { allowRemoteDelivery?: boolean } = {},
+    options: {
+      allowRemoteDelivery?: boolean;
+      allowRecentNetworkLocation?: boolean;
+    } = {},
   ) {
     const allowRemoteDelivery = options.allowRemoteDelivery ?? true;
     const initialSession = await getSOSSessionWithTimeout();
@@ -79,7 +86,14 @@ export const SOSService = {
       throw new Error('Sessione cambiata: riavvia l’SOS con l’account attivo.');
     }
 
-    const location = await LocationService.getCurrentLocation();
+    const location = await LocationService.getCurrentLocation({
+      ...(options.allowRecentNetworkLocation
+        ? {
+            timeoutMs: 12_000,
+            allowRecentNetworkLocationForUserId: expectedUserId,
+          }
+        : {}),
+    });
     const currentSession = await getSOSSessionWithTimeout();
 
     if (currentSession?.user.id !== expectedUserId) {
@@ -114,6 +128,13 @@ export const SOSService = {
       contactIds: contacts.map((contact) => contact.id),
     };
 
+    const automaticSmsPromise: Promise<SOSAutomaticSmsResult> =
+      SOSAutomaticSmsService.sendForSOS(expectedUserId, event, contacts).catch(() => ({
+        status: 'failed' as const,
+        sentCount: 0,
+        failedCount: 0,
+      }));
+
     const pushResult: SOSDeliveryResult = allowRemoteDelivery
       ? await SOSPushService.send(event, expectedUserId).catch((error: unknown) => {
           console.error('[SafeMeLink Push] Flusso push SOS terminato con errore.', {
@@ -143,6 +164,8 @@ export const SOSService = {
           errors: ['Invio SafeMeLink non disponibile offline.'],
           reason: 'unavailable',
         };
+
+    const automaticSmsResult = await automaticSmsPromise;
 
     if (!allowRemoteDelivery) {
       console.info('[SafeMeLink SOS] Consegna remota ignorata in modalità offline.', {
@@ -193,7 +216,7 @@ export const SOSService = {
       status: 'not_needed',
       channel: null,
     };
-    if (pushResult.notificationsSent === 0) {
+    if (automaticSmsResult.status !== 'sent') {
       localDeliveryResult = await sendSosAlert(completedEvent, contacts).catch(() => {
         console.warn('[SafeMeLink SOS] Fallback locale non completato.', {
           category: 'local_fallback_unavailable',
@@ -206,6 +229,7 @@ export const SOSService = {
       event: completedEvent,
       events,
       pushResult,
+      automaticSmsResult,
       localDeliveryResult,
       localPersistenceFailed,
     };

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useFocusEffect } from 'expo-router';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -491,6 +492,24 @@ export default function VoiceProtectionScreen() {
       if (!permissions.notificationsGranted) {
         const feedback =
           'Autorizza le notifiche per avviare l’avviso persistente di protezione.';
+        setMicrophoneState('error');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+
+      if (!(await Location.hasServicesEnabledAsync())) {
+        const feedback =
+          'Attiva la posizione per consentire alla protezione di completare un SOS.';
+        setMicrophoneState('error');
+        setActivationFeedback(feedback);
+        setMessage(feedback);
+        return;
+      }
+      const locationPermission = await Location.requestForegroundPermissionsAsync();
+      if (locationPermission.status !== 'granted') {
+        const feedback =
+          'Autorizza la posizione per consentire alla protezione di completare un SOS.';
         setMicrophoneState('error');
         setActivationFeedback(feedback);
         setMessage(feedback);

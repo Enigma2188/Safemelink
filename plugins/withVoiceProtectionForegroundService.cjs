@@ -4,6 +4,7 @@ const SERVICE_NAME = 'com.asterinet.react.bgactions.RNBackgroundActionsTask';
 const REQUIRED_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_LOCATION',
   'android.permission.RECORD_AUDIO',
   'android.permission.POST_NOTIFICATIONS',
 ];
@@ -49,7 +50,7 @@ module.exports = function withVoiceProtectionForegroundService(config) {
 
     service.$ ??= {};
     service.$['android:exported'] = 'false';
-    service.$['android:foregroundServiceType'] = 'microphone';
+    service.$['android:foregroundServiceType'] = 'microphone|location';
 
     return androidConfig;
   });

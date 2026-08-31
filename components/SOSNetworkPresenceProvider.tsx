@@ -23,6 +23,7 @@ import {
   SOSNetworkPermissionError,
   SOSNetworkPresenceService,
 } from '@/services/SOSNetworkPresenceService';
+import { SOSNetworkLocationStorage } from '@/storage/SOSNetworkLocationStorage';
 
 export type SOSNetworkAvailabilityStatus =
   | 'loading'
@@ -76,8 +77,17 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
   const [message, setMessage] = useState<string | null>(null);
   const generationRef = useRef(0);
   const activeUserIdRef = useRef(userId);
+  const previousUserIdRef = useRef(userId);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   activeUserIdRef.current = userId;
+
+  useEffect(() => {
+    const previousUserId = previousUserIdRef.current;
+    previousUserIdRef.current = userId;
+    if (previousUserId && previousUserId !== userId) {
+      void SOSNetworkLocationStorage.clear(previousUserId).catch(() => undefined);
+    }
+  }, [userId]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -348,6 +358,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           }
           await SOSNetworkPresenceRepository.updatePreference(false);
           await SOSNetworkPresenceRepository.deactivatePresence();
+          await SOSNetworkLocationStorage.clear(expectedUserId).catch(() => undefined);
           if (activeUserIdRef.current !== expectedUserId) {
             return;
           }

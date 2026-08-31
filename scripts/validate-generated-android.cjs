@@ -56,23 +56,21 @@ for (const permission of [
 
 assert.match(
   manifest,
+  /<uses-permission\b[^>]*android:name=["']android\.permission\.SEND_SMS["'][^>]*>/,
+  'Permesso Android SEND_SMS mancante per gli SMS automatici di emergenza.',
+);
+
+assert.match(
+  manifest,
   /<service\b[^>]*android:name=["']com\.asterinet\.react\.bgactions\.RNBackgroundActionsTask["'][^>]*android:foregroundServiceType=["']microphone["'][^>]*>/,
   'Il foreground service Protezione Vocale deve dichiarare il tipo microphone.',
 );
 
-for (const scheme of ['sms', 'smsto', 'whatsapp']) {
+for (const scheme of ['sms', 'smsto']) {
   assert.match(
     manifest,
     new RegExp(`<data\\b[^>]*android:scheme=["']${scheme}["'][^>]*>`),
     `Query Android per il canale SOS ${scheme} mancante.`,
-  );
-}
-
-for (const packageName of ['com.whatsapp', 'com.whatsapp.w4b']) {
-  assert.match(
-    manifest,
-    new RegExp(`<package\\b[^>]*android:name=["']${packageName.replaceAll('.', '\\.')}["'][^>]*>`),
-    `Package visibility Android mancante: ${packageName}.`,
   );
 }
 

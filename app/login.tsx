@@ -75,10 +75,12 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardAvoidingView}>
         <ScrollView
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           contentContainerStyle={styles.content}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
           keyboardShouldPersistTaps="handled">
           <AccountAccessPanel />
         </ScrollView>
@@ -94,6 +96,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
+    paddingBottom: 32,
   },
   keyboardAvoidingView: {
     flex: 1,

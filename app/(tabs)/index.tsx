@@ -11,6 +11,7 @@ import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SOSLocalDeliveryResult } from '@/services/SOSAlertService';
+import type { SOSAutomaticSmsResult } from '@/services/SOSAutomaticSmsService';
 import {
   INTERACTIVE_LOCATION_TIMEOUT_MS,
   LocationPermissionError,
@@ -67,19 +68,24 @@ const SOS_LOCAL_FINALIZE_TIMEOUT_MS = 8_000;
 const getSOSDeliveryNotice = (
   result: SOSDeliveryResult,
   localResult: SOSLocalDeliveryResult,
+  automaticSmsResult: SOSAutomaticSmsResult,
 ) => {
+  const automaticSmsNotice = automaticSmsResult.status === 'sent'
+    ? `SMS automatici inviati ai contatti fidati: ${automaticSmsResult.sentCount}.`
+    : null;
   if (result.notificationsSent > 0) {
-    return 'SOS attivo. La notifica SafeMeLink è stata accettata per l’invio.';
+    return [
+      'SOS attivo. La notifica SafeMeLink è stata accettata per l’invio.',
+      automaticSmsNotice,
+    ].filter(Boolean).join(' ');
   }
 
   const fallbackNotice =
-    localResult.status === 'whatsapp_opened'
-      ? 'WhatsApp aperto: verifica il destinatario prima di inviare.'
-      : localResult.status === 'sms_opened'
+    automaticSmsNotice ?? (localResult.status === 'sms_opened'
         ? 'Fallback SMS avviato.'
         : localResult.status === 'no_channel'
           ? 'Nessun canale locale utilizzabile. Verifica i contatti fidati e le app disponibili.'
-          : 'Il fallback locale non è disponibile per un problema tecnico.';
+          : 'Il fallback locale non è disponibile per un problema tecnico.');
 
   if (
     result.reason === 'no_eligible_recipients' ||
@@ -246,7 +252,6 @@ export default function HomeScreen() {
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
   const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
   const [pushDeliveryNotice, setPushDeliveryNotice] = useState<string | null>(null);
-  const [smsFollowUpAvailable, setSmsFollowUpAvailable] = useState(false);
   const [isEndingSOS, setIsEndingSOS] = useState(false);
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
@@ -284,6 +289,9 @@ export default function HomeScreen() {
   const activeUserIdRef = useRef<string | null>(userId);
   const statusRef = useRef<SOSStatus>('idle');
   const voiceCountdownPendingRef = useRef(false);
+  const sosTriggerSourceRef = useRef<'manual' | 'voice'>('manual');
+  const countdownExpiresAtRef = useRef<number | null>(null);
+  const countdownCompletionHandledRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const sosCompletionInFlightRef = useRef(false);
   const sosEndingInFlightRef = useRef(false);
@@ -408,7 +416,7 @@ export default function HomeScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   }, []);
 
-  const startSOSCountdown = useCallback(() => {
+  const startSOSCountdown = useCallback((source: 'manual' | 'voice' = 'manual') => {
     loadGenerationRef.current += 1;
     statusRef.current = 'countdown';
     checkpointOperationGenerationRef.current += 1;
@@ -435,10 +443,12 @@ export default function HomeScreen() {
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
     setGoHomeError('');
     setGoHomeErrorAction(null);
+    countdownExpiresAtRef.current = Date.now() + SAFETY_TIMER_SECONDS * 1_000;
+    countdownCompletionHandledRef.current = false;
+    sosTriggerSourceRef.current = source;
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
-    setSmsFollowUpAvailable(false);
     setStatus('countdown');
   }, [clearPersistedCheckpoint, clearPersistedGoHome]);
 
@@ -460,7 +470,7 @@ export default function HomeScreen() {
 
         console.info('[VoiceProtection Home] VOICE_LISTENER_RECEIVED');
         voiceCountdownPendingRef.current = true;
-        startSOSCountdown();
+        startSOSCountdown('voice');
         router.dismissTo('/(tabs)');
       }),
     [router, startSOSCountdown],
@@ -469,11 +479,13 @@ export default function HomeScreen() {
   const resetSensitiveState = useCallback(() => {
     statusRef.current = 'idle';
     voiceCountdownPendingRef.current = false;
+    sosTriggerSourceRef.current = 'manual';
+    countdownExpiresAtRef.current = null;
+    countdownCompletionHandledRef.current = false;
     setContacts([]);
     setLastEvents([]);
     setActiveEvent(null);
     setPushDeliveryNotice(null);
-    setSmsFollowUpAvailable(false);
     sosCompletionInFlightRef.current = false;
     sosEndingInFlightRef.current = false;
     setIsEndingSOS(false);
@@ -769,6 +781,9 @@ export default function HomeScreen() {
   );
 
   const cancelSOS = () => {
+    sosTriggerSourceRef.current = 'manual';
+    countdownExpiresAtRef.current = null;
+    countdownCompletionHandledRef.current = false;
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     setStatus('idle');
   };
@@ -1295,12 +1310,15 @@ export default function HomeScreen() {
     }
 
     const actionUserId = userId;
+    countdownCompletionHandledRef.current = true;
+    countdownExpiresAtRef.current = null;
     sosCompletionInFlightRef.current = true;
     setStatus('sending');
 
     try {
       const result = await SOSService.completeSOS(actionUserId, {
         allowRemoteDelivery: !isOffline,
+        allowRecentNetworkLocation: sosTriggerSourceRef.current === 'voice',
       });
 
       if (activeUserIdRef.current !== actionUserId) {
@@ -1312,6 +1330,7 @@ export default function HomeScreen() {
       const deliveryNotice = getSOSDeliveryNotice(
         result.pushResult,
         result.localDeliveryResult,
+        result.automaticSmsResult,
       );
       const persistenceNotice = result.localPersistenceFailed
         ? 'SOS attivo, ma la cronologia locale non è stata salvata. Mantieni aperta l’app fino alla conclusione.'
@@ -1319,7 +1338,6 @@ export default function HomeScreen() {
       setPushDeliveryNotice(
         [persistenceNotice, deliveryNotice].filter(Boolean).join(' ') || null,
       );
-      setSmsFollowUpAvailable(result.localDeliveryResult.smsFollowUpAvailable === true);
       setStatus('active');
     } catch (error) {
       if (activeUserIdRef.current === actionUserId) {
@@ -1436,21 +1454,55 @@ export default function HomeScreen() {
   }, [activeEvent, isHomeFocused, lastEvents, status, userId]);
 
   useEffect(() => {
-    if (status !== 'countdown') {
+    if (status !== 'countdown' || countdownExpiresAtRef.current === null) {
       return;
     }
 
-    if (remainingSeconds <= 0) {
-      completeSOS();
-      return;
-    }
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let appState = AppState.currentState;
 
-    const timeoutId = setTimeout(() => {
-      setRemainingSeconds((current) => current - 1);
-    }, 1000);
+    const clearCountdownTimer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
 
-    return () => clearTimeout(timeoutId);
-  }, [completeSOS, remainingSeconds, status]);
+    const synchronizeCountdown = () => {
+      clearCountdownTimer();
+      const expiresAt = countdownExpiresAtRef.current;
+      if (expiresAt === null || statusRef.current !== 'countdown') {
+        return;
+      }
+
+      const remainingMs = Math.max(0, expiresAt - Date.now());
+      setRemainingSeconds(Math.ceil(remainingMs / 1_000));
+
+      if (remainingMs <= 0) {
+        if (!countdownCompletionHandledRef.current) {
+          countdownCompletionHandledRef.current = true;
+          void completeSOS();
+        }
+        return;
+      }
+
+      timeoutId = setTimeout(
+        synchronizeCountdown,
+        appState === 'active' ? Math.min(1_000, remainingMs) : remainingMs,
+      );
+    };
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appState = nextState;
+      synchronizeCountdown();
+    });
+    synchronizeCountdown();
+
+    return () => {
+      clearCountdownTimer();
+      subscription.remove();
+    };
+  }, [completeSOS, status]);
 
   useEffect(() => {
     if (checkpointStatus !== 'running' || !checkpointExpiresAt) {
@@ -1688,7 +1740,6 @@ export default function HomeScreen() {
       setLastEvents(nextEvents);
       setActiveEvent(null);
       setPushDeliveryNotice(null);
-      setSmsFollowUpAvailable(false);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
       console.info('[SafeMeLink SOS] Chiusura completata.', {
@@ -1748,25 +1799,6 @@ export default function HomeScreen() {
       await SOSService.shareSOS(activeEvent, contacts);
     } catch {
       Alert.alert('Condivisione SOS', 'Non riesco ad aprire la condivisione del messaggio.');
-    }
-  };
-
-  const sendActiveSOSSmsFallback = async () => {
-    if (!activeEvent) {
-      return;
-    }
-
-    try {
-      const result = await SOSService.sendSmsFallback(activeEvent, contacts);
-      if (result.status === 'sms_opened') {
-        setSmsFollowUpAvailable(false);
-        setPushDeliveryNotice('Composer SMS aperto. Verifica i destinatari prima di inviare.');
-        return;
-      }
-
-      Alert.alert('Fallback SMS', 'Non riesco ad aprire il composer SMS su questo dispositivo.');
-    } catch {
-      Alert.alert('Fallback SMS', 'Non riesco ad aprire il composer SMS su questo dispositivo.');
     }
   };
 
@@ -1972,13 +2004,6 @@ export default function HomeScreen() {
           <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
             <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
           </Pressable>
-          {smsFollowUpAvailable ? (
-            <Pressable
-              style={styles.shareButton}
-              onPress={() => void sendActiveSOSSmsFallback()}>
-              <Text style={styles.shareButtonText}>Invia anche SMS</Text>
-            </Pressable>
-          ) : null}
           <Pressable
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
             onPress={deactivateSOS}>
@@ -1995,7 +2020,7 @@ export default function HomeScreen() {
             <Animated.View style={[styles.sosGlow, sosGlowAnimatedStyle]} />
             <View style={styles.sosOuterRing} />
             <View style={styles.sosInnerRing} />
-            <Pressable style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={startSOSCountdown}>
+            <Pressable style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={() => startSOSCountdown()}>
               <Text style={styles.sosButtonText}>SOS</Text>
             </Pressable>
           </View>
