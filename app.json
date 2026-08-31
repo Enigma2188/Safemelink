@@ -51,7 +51,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "SafeMeLink usa la posizione per il Radar, gli SOS e le richieste di aiuto nelle vicinanze.",
+          "locationWhenInUsePermission": "SafeMeLink usa la posizione per la Rete SafeMeLink, gli SOS e le richieste di aiuto nelle vicinanze.",
           "locationAlwaysAndWhenInUsePermission": "Se aderisci alla rete SOS, SafeMeLink aggiorna occasionalmente la posizione anche in background per inviarti emergenze realmente vicine.",
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true,

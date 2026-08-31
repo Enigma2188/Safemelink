@@ -169,7 +169,7 @@ export function EmergencyProfileScreen() {
       <View style={styles.sharingCard}>
         <Text style={styles.sectionTitle}>Condivisione durante SOS</Text>
         <Text style={styles.sharingExplanation}>
-          I dati restano privati finché non abiliti una delle opzioni seguenti. Non saranno mostrati nel Radar o nei profili pubblici.
+          I dati restano privati finché non abiliti una delle opzioni seguenti. Non saranno mostrati nella Rete SafeMeLink o nei profili pubblici.
         </Text>
 
         <View style={styles.switchRow}>

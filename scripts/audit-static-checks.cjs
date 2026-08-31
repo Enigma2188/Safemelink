@@ -133,15 +133,22 @@ check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_RESULT_LIMIT = 25/);
 });
 
-check('Visual Radar and SOS network presence are separate and explicitly opted in', () => {
+check('SafeMeLink network UI uses persistent SOS-network consent without visual Radar', () => {
   assert.match(sosNetworkMigration, /create table if not exists public\.sos_network_presence/);
   assert.match(sosNetworkMigration, /add column sos_network_enabled boolean not null default false/);
   assert.doesNotMatch(sosNetworkMigration, /set sos_network_enabled = true/);
   assert.match(sosNetworkMigration, /current_user_id uuid := auth\.uid\(\)/);
   assert.match(sosNetworkMigration, /for update/);
   assert.match(sosNetworkRepository, /get_my_sos_network_preference/);
-  assert.match(radarScreen, /Disponibilità rete SOS/);
-  assert.match(radarScreen, /La posizione non è[\s\S]*inserita nelle notifiche/);
+  assert.match(radarScreen, /Rete SafeMeLink attiva/);
+  assert.match(radarScreen, /network\.setEnabled\(true\)/);
+  assert.match(radarScreen, /network\.setEnabled\(false\)/);
+  assert.doesNotMatch(rootLayout, /<RadarProvider>/);
+  assert.doesNotMatch(radarScreen, /useRadar|useNearbyUsers|findNearbyUsers/);
+  assert.doesNotMatch(
+    radarScreen,
+    /NearbyUser|publicNickname|distanceMeters|\blatitude\b|\blongitude\b/,
+  );
 });
 
 check('SOS network background location is bounded, opportunistic and account-scoped', () => {
@@ -352,9 +359,9 @@ check('Fresh-user network defaults require explicit privacy opt-in', () => {
     /new\.id,[\s\S]*false,[\s\S]*false,[\s\S]*false,[\s\S]*null/,
   );
   assert.match(accountAccessPanel, /dati locali restano separati per ogni utente/);
-  assert.match(radarScreen, /Entra o esci dalla rete SafeMeLink/);
-  assert.match(radarScreen, /Mostrami agli utenti vicini/);
-  assert.match(radarScreen, /value=\{preferences\?\.visibleToNearby \?\? false\}/);
+  assert.match(radarScreen, /PARTECIPA ALLA RETE/);
+  assert.match(radarScreen, /Partecipando consenti/);
+  assert.doesNotMatch(radarScreen, /Radar ON|Mostrami agli utenti vicini/);
 });
 
 check('Database types cover server-side SOS delivery RPCs', () => {
@@ -889,8 +896,9 @@ check('Received SOS detail is bounded and does not display the complete UUID', (
 });
 
 check('Permission recovery and logout cleanup remain bounded', () => {
-  assert.match(radarScreen, /Apri impostazioni/);
-  assert.match(radarScreen, /Linking\.openSettings\(\)/);
+  assert.match(radarScreen, /foreground_permission_required/);
+  assert.match(radarScreen, /background_permission_required/);
+  assert.match(radarScreen, /notification_permission_required/);
   assert.match(
     pushNotificationService,
     /runPushStepWithTimeout\([\s\S]*PushTokenRepository\.removeForUserAndToken/,
@@ -987,13 +995,11 @@ check('Radar keeps a TTL presence after screen blur without keeping GPS active',
   assert.doesNotMatch(appStateHandler, /deactivate\(/);
 });
 
-check('Radar master switch represents complete reciprocal participation', () => {
-  assert.match(radarScreen, /const isParticipating = canParticipateInRadar\(preferences\)/);
-  assert.match(
-    radarScreen,
-    /saveChanges\(\{ radarEnabled, visibleToNearby: radarEnabled \}\)/,
-  );
-  assert.match(radarScreen, /value=\{isParticipating\}/);
+check('SafeMeLink network screen exposes no individual nearby discovery', () => {
+  assert.match(radarScreen, /non mostriamo persone, nickname, distanze o posizioni/);
+  assert.match(radarScreen, /solo i destinatari autorizzati possono aprire la posizione reale/);
+  assert.doesNotMatch(radarScreen, /RadarService|RadarProvider|radarEnabled|visibleToNearby/);
+  assert.doesNotMatch(radarScreen, /dati aggregati|copertura non.*disponibil/);
 });
 
 check('SOS network diagnostics expose only aggregate delivery counts', () => {
@@ -1243,7 +1249,7 @@ check('Trusted contacts distinguish and deduplicate local and linked recipients'
 });
 
 check('UI separates the general network from the personal trusted circle', () => {
-  assert.match(radarScreen, /La partecipazione alla rete non crea contatti fidati/);
+  assert.match(radarScreen, /Una rete anonima e protetta/);
   assert.match(contactsScreen, /cerchia personale, separata dalla rete generale SafeMeLink/);
   assert.match(contactsScreen, /contatto fidato personale e prioritario per gli SOS/);
 });

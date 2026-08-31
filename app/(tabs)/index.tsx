@@ -2368,8 +2368,8 @@ export default function HomeScreen() {
             <Pressable
               style={styles.drawerItem}
               onPress={() => navigateFromDrawer('/radar' as unknown as Href)}>
-              <Ionicons color="#45B7FF" name="radio-outline" size={20} />
-              <Text style={styles.drawerItemText}>Radar</Text>
+              <Ionicons color="#45B7FF" name="people-circle-outline" size={20} />
+              <Text style={styles.drawerItemText}>Rete SafeMeLink</Text>
             </Pressable>
             <View style={styles.drawerItemDisabled}>
               <View style={styles.drawerDisabledCopy}>

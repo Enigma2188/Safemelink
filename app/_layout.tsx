@@ -8,7 +8,6 @@ import '@/services/SOSNetworkBackgroundTask';
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { OfflineStatusBanner } from '@/components/OfflineStatusBanner';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
-import { RadarProvider } from '@/components/RadarProvider';
 import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
 import { SOSNetworkPresenceProvider } from '@/components/SOSNetworkPresenceProvider';
 import { VoiceProtectionLifecycle } from '@/components/VoiceProtectionLifecycle';
@@ -24,7 +23,6 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <SOSNetworkPresenceProvider>
-        <RadarProvider>
         <PushTokenRegistrar />
         <VoiceProtectionLifecycle />
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
@@ -50,7 +48,6 @@ export default function RootLayout() {
             <StatusBar style="auto" />
           </View>
         </ThemeProvider>
-        </RadarProvider>
       </SOSNetworkPresenceProvider>
     </AuthProvider>
   );
