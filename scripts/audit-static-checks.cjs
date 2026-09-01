@@ -66,6 +66,7 @@ const voiceProtectionRuntime = read('services/VoiceProtectionRuntime.ts');
 const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
+const androidCompileSdkPlugin = read('plugins/withAndroidCompileSdk.cjs');
 const pushTokenRegistrar = read('components/PushTokenRegistrar.tsx');
 const sosNotificationCenter = read('components/SOSNotificationCenter.tsx');
 const sosNotificationPayload = read('services/SOSNotificationPayload.ts');
@@ -794,6 +795,12 @@ check('Voice Protection foreground service requires microphone and location', ()
   assert.ok(manifestServiceTypes.includes('location'));
   assert.match(voiceProtectionPlugin, /android\.permission\.POST_NOTIFICATIONS/);
   assert.match(voiceProtectionScreen, /Location\.requestForegroundPermissionsAsync\(\)/);
+});
+
+check('Android compileSdk is available before native module evaluation', () => {
+  assert.match(androidCompileSdkPlugin, /withGradleProperties/);
+  assert.match(androidCompileSdkPlugin, /android\.compileSdkVersion/);
+  assert.match(androidCompileSdkPlugin, /COMPILE_SDK_VERSION = '36'/);
 });
 
 check('Voice Protection keeps one bounded background recognition owner', () => {

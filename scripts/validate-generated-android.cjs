@@ -13,12 +13,14 @@ const manifestPath = path.join(
   'AndroidManifest.xml',
 );
 const buildGradlePath = path.join(root, 'android', 'app', 'build.gradle');
+const gradlePropertiesPath = path.join(root, 'android', 'gradle.properties');
 const googleServicesPath = path.join(root, 'android', 'app', 'google-services.json');
 const gradleWrapperPath = path.join(root, 'android', 'gradlew');
 
 for (const requiredPath of [
   manifestPath,
   buildGradlePath,
+  gradlePropertiesPath,
   googleServicesPath,
   gradleWrapperPath,
 ]) {
@@ -27,6 +29,7 @@ for (const requiredPath of [
 
 const manifest = fs.readFileSync(manifestPath, 'utf8');
 const buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
+const gradleProperties = fs.readFileSync(gradlePropertiesPath, 'utf8');
 const googleServices = JSON.parse(fs.readFileSync(googleServicesPath, 'utf8'));
 
 assert.match(
@@ -38,6 +41,11 @@ assert.match(
   buildGradle,
   /\b(namespace|applicationId)\s+["']com\.tiziano\.safemelink["']/,
   'Package Android SafeMeLink non trovato nel build.gradle generato.',
+);
+assert.match(
+  gradleProperties,
+  /^android\.compileSdkVersion=36$/m,
+  'La configurazione Android generata deve esporre compileSdk 36 ai moduli nativi.',
 );
 
 for (const permission of [

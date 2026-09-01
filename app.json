@@ -46,6 +46,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidCompileSdk.cjs",
       "expo-router",
       "expo-notifications",
       [
