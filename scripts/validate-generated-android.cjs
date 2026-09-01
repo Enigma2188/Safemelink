@@ -43,6 +43,7 @@ assert.match(
 for (const permission of [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_LOCATION',
   'android.permission.RECORD_AUDIO',
 ]) {
   assert.match(
@@ -60,11 +61,25 @@ assert.match(
   'Permesso Android SEND_SMS mancante per gli SMS automatici di emergenza.',
 );
 
-assert.match(
-  manifest,
-  /<service\b[^>]*android:name=["']com\.asterinet\.react\.bgactions\.RNBackgroundActionsTask["'][^>]*android:foregroundServiceType=["']microphone["'][^>]*>/,
-  'Il foreground service Protezione Vocale deve dichiarare il tipo microphone.',
+const voiceProtectionServiceTag = manifest.match(
+  /<service\b(?=[^>]*android:name=["']com\.asterinet\.react\.bgactions\.RNBackgroundActionsTask["'])[^>]*>/,
+)?.[0];
+assert.ok(
+  voiceProtectionServiceTag,
+  'Foreground service Protezione Vocale non trovato nel manifest generato.',
 );
+const voiceProtectionServiceTypes = new Set(
+  voiceProtectionServiceTag
+    .match(/android:foregroundServiceType=["']([^"']+)["']/)?.[1]
+    ?.split('|')
+    .map((serviceType) => serviceType.trim()) ?? [],
+);
+for (const requiredServiceType of ['microphone', 'location']) {
+  assert.ok(
+    voiceProtectionServiceTypes.has(requiredServiceType),
+    `Il foreground service Protezione Vocale deve dichiarare il tipo ${requiredServiceType}.`,
+  );
+}
 
 for (const scheme of ['sms', 'smsto']) {
   assert.match(

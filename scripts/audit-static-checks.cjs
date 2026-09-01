@@ -773,11 +773,12 @@ check('Voice Protection recognition stays local and delegates SOS through runtim
   assert.match(voiceProtectionLifecycle, /VoiceProtectionRuntime\.requestSOS\(/);
 });
 
-check('Voice Protection foreground service is declared as microphone', () => {
-  assert.match(
-    voiceProtectionService,
-    /foregroundServiceType: \['microphone', 'location'\]/,
-  );
+check('Voice Protection foreground service requires microphone and location', () => {
+  const runtimeServiceTypes = voiceProtectionService.match(
+    /foregroundServiceType: \[([^\]]+)\]/,
+  )?.[1] ?? '';
+  assert.match(runtimeServiceTypes, /['"]microphone['"]/);
+  assert.match(runtimeServiceTypes, /['"]location['"]/);
   assert.match(
     voiceProtectionPlugin,
     /android\.permission\.FOREGROUND_SERVICE_MICROPHONE/,
@@ -786,10 +787,11 @@ check('Voice Protection foreground service is declared as microphone', () => {
     voiceProtectionPlugin,
     /android\.permission\.FOREGROUND_SERVICE_LOCATION/,
   );
-  assert.match(
-    voiceProtectionPlugin,
-    /android:foregroundServiceType'\] = 'microphone\|location'/,
-  );
+  const manifestServiceTypes = voiceProtectionPlugin.match(
+    /android:foregroundServiceType'\]\s*=\s*'([^']+)'/,
+  )?.[1]?.split('|') ?? [];
+  assert.ok(manifestServiceTypes.includes('microphone'));
+  assert.ok(manifestServiceTypes.includes('location'));
   assert.match(voiceProtectionPlugin, /android\.permission\.POST_NOTIFICATIONS/);
   assert.match(voiceProtectionScreen, /Location\.requestForegroundPermissionsAsync\(\)/);
 });
