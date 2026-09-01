@@ -66,7 +66,7 @@ const voiceProtectionRuntime = read('services/VoiceProtectionRuntime.ts');
 const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
-const androidCompileSdkPlugin = read('plugins/withAndroidCompileSdk.cjs');
+const smsNativeBuildGradle = read('modules/safemelink-sms/android/build.gradle');
 const pushTokenRegistrar = read('components/PushTokenRegistrar.tsx');
 const sosNotificationCenter = read('components/SOSNotificationCenter.tsx');
 const sosNotificationPayload = read('services/SOSNotificationPayload.ts');
@@ -797,10 +797,10 @@ check('Voice Protection foreground service requires microphone and location', ()
   assert.match(voiceProtectionScreen, /Location\.requestForegroundPermissionsAsync\(\)/);
 });
 
-check('Android compileSdk is available before native module evaluation', () => {
-  assert.match(androidCompileSdkPlugin, /withGradleProperties/);
-  assert.match(androidCompileSdkPlugin, /android\.compileSdkVersion/);
-  assert.match(androidCompileSdkPlugin, /COMPILE_SDK_VERSION = '36'/);
+check('SafeMeLink SMS uses the modern Expo Module Android configuration', () => {
+  assert.match(smsNativeBuildGradle, /plugins\s*\{/);
+  assert.match(smsNativeBuildGradle, /id 'expo-module-gradle-plugin'/);
+  assert.doesNotMatch(smsNativeBuildGradle, /project\.ext|get\('minSdkVersion'\)/);
 });
 
 check('Voice Protection keeps one bounded background recognition owner', () => {

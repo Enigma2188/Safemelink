@@ -1,13 +1,11 @@
-apply plugin: 'com.android.library'
-apply plugin: 'expo-module-gradle-plugin'
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
 
 group = 'com.tiziano.safemelink.sms'
 version = '1.0.0'
 
 android {
   namespace 'com.tiziano.safemelink.sms'
-  defaultConfig {
-    minSdkVersion project.ext.get('minSdkVersion')
-    targetSdkVersion project.ext.get('targetSdkVersion')
-  }
 }

@@ -14,7 +14,6 @@ const workflow = fs.readFileSync(workflowPath, 'utf8');
 const appConfig = JSON.parse(read('app.json'));
 const packageJson = JSON.parse(read('package.json'));
 const gitignore = read('.gitignore');
-const androidCompileSdkPlugin = read('plugins/withAndroidCompileSdk.cjs');
 const candidateValidatorPath = path.join(
   root,
   'scripts',
@@ -113,13 +112,6 @@ for (const permission of [
   assert.ok(appConfig.expo.android.blockedPermissions.includes(permission));
 }
 assert.ok(appConfig.expo.plugins.includes('expo-notifications'));
-assert.ok(
-  appConfig.expo.plugins.includes('./plugins/withAndroidCompileSdk.cjs'),
-  'Il config plugin compileSdk Android deve essere attivo.',
-);
-assert.match(androidCompileSdkPlugin, /withGradleProperties/);
-assert.match(androidCompileSdkPlugin, /android\.compileSdkVersion/);
-assert.match(androidCompileSdkPlugin, /COMPILE_SDK_VERSION = '36'/);
 assert.ok(
   appConfig.expo.plugins.includes('./plugins/withSOSChannelQueries.cjs'),
   'Plugin Android per i canali fallback SOS mancante.',

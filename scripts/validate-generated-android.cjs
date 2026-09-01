@@ -13,14 +13,16 @@ const manifestPath = path.join(
   'AndroidManifest.xml',
 );
 const buildGradlePath = path.join(root, 'android', 'app', 'build.gradle');
-const gradlePropertiesPath = path.join(root, 'android', 'gradle.properties');
+const rootBuildGradlePath = path.join(root, 'android', 'build.gradle');
+const settingsGradlePath = path.join(root, 'android', 'settings.gradle');
 const googleServicesPath = path.join(root, 'android', 'app', 'google-services.json');
 const gradleWrapperPath = path.join(root, 'android', 'gradlew');
 
 for (const requiredPath of [
   manifestPath,
   buildGradlePath,
-  gradlePropertiesPath,
+  rootBuildGradlePath,
+  settingsGradlePath,
   googleServicesPath,
   gradleWrapperPath,
 ]) {
@@ -29,7 +31,8 @@ for (const requiredPath of [
 
 const manifest = fs.readFileSync(manifestPath, 'utf8');
 const buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
-const gradleProperties = fs.readFileSync(gradlePropertiesPath, 'utf8');
+const rootBuildGradle = fs.readFileSync(rootBuildGradlePath, 'utf8');
+const settingsGradle = fs.readFileSync(settingsGradlePath, 'utf8');
 const googleServices = JSON.parse(fs.readFileSync(googleServicesPath, 'utf8'));
 
 assert.match(
@@ -42,11 +45,10 @@ assert.match(
   /\b(namespace|applicationId)\s+["']com\.tiziano\.safemelink["']/,
   'Package Android SafeMeLink non trovato nel build.gradle generato.',
 );
-assert.match(
-  gradleProperties,
-  /^android\.compileSdkVersion=36$/m,
-  'La configurazione Android generata deve esporre compileSdk 36 ai moduli nativi.',
-);
+assert.match(settingsGradle, /id\(["']expo-autolinking-settings["']\)/);
+assert.match(settingsGradle, /expoAutolinking\.useExpoModules\(\)/);
+assert.match(settingsGradle, /expoAutolinking\.useExpoVersionCatalog\(\)/);
+assert.match(rootBuildGradle, /apply plugin: ["']expo-root-project["']/);
 
 for (const permission of [
   'android.permission.FOREGROUND_SERVICE',
