@@ -800,6 +800,9 @@ check('Voice Protection foreground service requires microphone and location', ()
 check('SafeMeLink SMS uses the modern Expo Module Android configuration', () => {
   assert.match(smsNativeBuildGradle, /plugins\s*\{/);
   assert.match(smsNativeBuildGradle, /id 'expo-module-gradle-plugin'/);
+  assert.match(smsNativeBuildGradle, /defaultConfig\s*\{/);
+  assert.match(smsNativeBuildGradle, /versionCode\s+1/);
+  assert.match(smsNativeBuildGradle, /versionName\s+'1\.0\.0'/);
   assert.doesNotMatch(smsNativeBuildGradle, /project\.ext|get\('minSdkVersion'\)/);
 });
 
