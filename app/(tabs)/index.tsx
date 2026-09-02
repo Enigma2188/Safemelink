@@ -24,6 +24,7 @@ import {
   SOSLifecycleDiagnosticError,
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
+import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
 import {
   VoiceProtectionRuntime,
   VOICE_SOS_COUNTDOWN_MS,
@@ -300,6 +301,7 @@ export default function HomeScreen() {
   const goHomeStorageQueueRef = useRef<Promise<void>>(Promise.resolve());
   const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
+  const liveLocationOwnerUserIdRef = useRef<string | null>(userId);
   const statusRef = useRef<SOSStatus>('idle');
   const voiceCountdownPendingRef = useRef(false);
   const sosTriggerSourceRef = useRef<'manual' | 'voice'>('manual');
@@ -747,6 +749,24 @@ export default function HomeScreen() {
     loadGenerationRef.current += 1;
     resetSensitiveState();
   }, [clearPersistedCheckpoint, clearPersistedGoHome, resetSensitiveState, userId]);
+
+  useEffect(() => {
+    const previousUserId = liveLocationOwnerUserIdRef.current;
+    liveLocationOwnerUserIdRef.current = userId;
+    if (previousUserId && previousUserId !== userId) {
+      void SOSLiveLocationService.stop(previousUserId).catch(() => undefined);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    const remoteSosId = activeEvent?.remoteSosId;
+    if (!userId || !remoteSosId || status !== 'active') return;
+    void SOSLiveLocationService.start(userId, remoteSosId).catch((error: unknown) => {
+      console.warn('[SafeMeLink SOS] LIVE_LOCATION_START_FAILED', {
+        category: error instanceof Error ? error.name : 'unknown',
+      });
+    });
+  }, [activeEvent?.remoteSosId, status, userId]);
 
   useEffect(() => {
     if (status === 'countdown' && voiceCountdownPendingRef.current) {
@@ -1512,6 +1532,7 @@ export default function HomeScreen() {
         }
 
         if (isCurrent && activeUserIdRef.current === trackedUserId) {
+          await SOSLiveLocationService.stop(trackedUserId).catch(() => undefined);
           setLastEvents(nextEvents);
           setActiveEvent(null);
           setRemainingSeconds(SAFETY_TIMER_SECONDS);
@@ -1826,6 +1847,7 @@ export default function HomeScreen() {
         return;
       }
 
+      await SOSLiveLocationService.stop(actionUserId).catch(() => undefined);
       setLastEvents(nextEvents);
       setActiveEvent(null);
       setPushDeliveryNotice(null);

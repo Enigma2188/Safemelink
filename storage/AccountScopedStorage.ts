@@ -10,6 +10,7 @@ export type AccountStorageNamespace =
   | 'passphrase'
   | 'sos-events'
   | 'sos-network-location'
+  | 'sos-live-location'
   | 'sos-sms-consent'
   | 'sos-sms-dispatch'
   | 'trusted-contacts'

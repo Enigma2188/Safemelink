@@ -167,6 +167,9 @@ Deno.serve(async (request) => {
       recipientTokens,
       trustedRecipientCount,
       nearbyRecipientCount,
+      nearbyWithin1KmCount,
+      nearbyWithin3KmCount,
+      nearbyWithin5KmCount,
     } = await getActiveRecipientTokens(adminClient, sos.id);
     const tokens = recipientTokens.map((recipient) => recipient.token);
     const { data: senderProfile, error: senderProfileError } = await adminClient
@@ -216,6 +219,11 @@ Deno.serve(async (request) => {
     });
     console.info('[send-sos-push] SOS_DELIVERY_NEARBY_COUNT', {
       count: nearbyRecipientCount,
+    });
+    console.info('[send-sos-push] SOS_NEARBY_RADIUS_COUNTS', {
+      within1Km: nearbyWithin1KmCount,
+      between1And3Km: nearbyWithin3KmCount,
+      between3And5Km: nearbyWithin5KmCount,
     });
     console.info('[send-sos-push] PUSH_TOKEN_COUNT', {
       count: tokens.length,
@@ -310,7 +318,7 @@ Deno.serve(async (request) => {
       const tokenBatch = tokens.slice(start, start + 100);
       const expoController = new AbortController();
       const expoTimeoutId = setTimeout(() => expoController.abort(), EXPO_REQUEST_TIMEOUT_MS);
-      let expoResponse: Response;
+      let expoResponse: Response | null = null;
       try {
         expoResponse = await fetch(EXPO_PUSH_URL, {
           method: 'POST',
@@ -322,8 +330,23 @@ Deno.serve(async (request) => {
           body: JSON.stringify(messageBatch),
           signal: expoController.signal,
         });
+      } catch (error: unknown) {
+        console.error('[send-sos-push] Batch Expo non completato.', {
+          batch: start / 100 + 1,
+          category: error instanceof DOMException && error.name === 'AbortError'
+            ? 'timeout'
+            : 'network',
+        });
+        expoErrors.push({
+          code: 'BATCH_UNAVAILABLE',
+          message: 'Un batch Expo non è stato elaborato.',
+        });
       } finally {
         clearTimeout(expoTimeoutId);
+      }
+
+      if (!expoResponse) {
+        continue;
       }
 
       if (!expoResponse.ok) {

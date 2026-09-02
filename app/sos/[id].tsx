@@ -21,6 +21,15 @@ const statusLabels: Record<ReceivedSOS['sos_status'], string> = {
 
 const formatSOSReference = (sosId: string) => sosId.slice(0, 8).toUpperCase();
 
+const formatLocationFreshness = (updatedAt: string) => {
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(updatedAt)) / 1000));
+  if (ageSeconds < 90) return 'Aggiornata da meno di un minuto';
+  const ageMinutes = Math.floor(ageSeconds / 60);
+  return ageMinutes < 10
+    ? `Aggiornata ${ageMinutes} minuti fa`
+    : `Posizione non recente (${ageMinutes} minuti fa)`;
+};
+
 export default function ReceivedSOSScreen() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const router = useRouter();
@@ -250,6 +259,9 @@ export default function ReceivedSOSScreen() {
           <Text style={styles.value}>
             {sos.latitude}, {sos.longitude}
           </Text>
+          <Text style={styles.locationFreshness}>
+            {formatLocationFreshness(sos.location_updated_at)}
+          </Text>
 
           <Text style={styles.label}>Riferimento evento</Text>
           <Text style={styles.eventId}>{formatSOSReference(sos.sos_id)}</Text>
@@ -337,6 +349,11 @@ const styles = StyleSheet.create({
     color: '#11181c',
     fontSize: 16,
     marginTop: 2,
+  },
+  locationFreshness: {
+    color: '#687076',
+    fontSize: 13,
+    marginTop: 4,
   },
   eventId: {
     color: '#52616b',

@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 import '@/services/SOSNetworkBackgroundTask';
+import '@/services/SOSLiveLocationBackgroundTask';
 
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { OfflineStatusBanner } from '@/components/OfflineStatusBanner';

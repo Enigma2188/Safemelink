@@ -17,6 +17,7 @@ import {
   type SOSAutomaticSmsResult,
 } from '@/services/SOSAutomaticSmsService';
 import { SOSStorage } from '@/storage/SOSStorage';
+import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
 
 export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
 
@@ -210,6 +211,15 @@ export const SOSService = {
           }
         : {}),
     };
+    if (pushResult.sosId) {
+      void SOSLiveLocationService.start(expectedUserId, pushResult.sosId).catch(
+        (trackingError: unknown) => {
+          console.warn('[SafeMeLink SOS] LIVE_LOCATION_START_FAILED', {
+            category: trackingError instanceof Error ? trackingError.name : 'unknown',
+          });
+        },
+      );
+    }
     let localPersistenceFailed = false;
     let events: SOSEvent[];
     try {

@@ -13,6 +13,9 @@ type SOSRecipientRow = {
   distance_meters: number | null;
 };
 
+const TOKEN_LOOKUP_BATCH_SIZE = 200;
+const TOKEN_LOOKUP_PAGE_SIZE = 1000;
+
 export async function getActiveRecipientTokens(
   adminClient: SupabaseClient,
   sosId: string,
@@ -21,6 +24,9 @@ export async function getActiveRecipientTokens(
   recipientTokens: SOSRecipientToken[];
   trustedRecipientCount: number;
   nearbyRecipientCount: number;
+  nearbyWithin1KmCount: number;
+  nearbyWithin3KmCount: number;
+  nearbyWithin5KmCount: number;
 }> {
   const { data: resolvedRecipients, error: recipientsError } = await adminClient.rpc(
     'prepare_sos_delivery',
@@ -38,6 +44,21 @@ export async function getActiveRecipientTokens(
   );
   const trustedRecipientCount = recipientRows.filter((recipient) => recipient.is_trusted).length;
   const nearbyRecipientCount = recipientRows.filter((recipient) => recipient.is_nearby).length;
+  const nearbyWithin1KmCount = recipientRows.filter(
+    (recipient) => recipient.is_nearby && (recipient.distance_meters ?? Infinity) <= 1000,
+  ).length;
+  const nearbyWithin3KmCount = recipientRows.filter(
+    (recipient) =>
+      recipient.is_nearby &&
+      (recipient.distance_meters ?? 0) > 1000 &&
+      (recipient.distance_meters ?? Infinity) <= 3000,
+  ).length;
+  const nearbyWithin5KmCount = recipientRows.filter(
+    (recipient) =>
+      recipient.is_nearby &&
+      (recipient.distance_meters ?? 0) > 3000 &&
+      (recipient.distance_meters ?? Infinity) <= 5000,
+  ).length;
 
   if (recipientIds.length === 0) {
     return {
@@ -45,23 +66,34 @@ export async function getActiveRecipientTokens(
       recipientTokens: [],
       trustedRecipientCount,
       nearbyRecipientCount,
+      nearbyWithin1KmCount,
+      nearbyWithin3KmCount,
+      nearbyWithin5KmCount,
     };
   }
 
-  const { data: tokenRows, error: tokensError } = await adminClient
-    .from('device_push_tokens')
-    .select('user_id,expo_push_token')
-    .in('user_id', recipientIds)
-    .eq('active', true);
+  const pushTokenRows: { user_id: string; expo_push_token: string }[] = [];
+  for (let start = 0; start < recipientIds.length; start += TOKEN_LOOKUP_BATCH_SIZE) {
+    const recipientBatch = recipientIds.slice(start, start + TOKEN_LOOKUP_BATCH_SIZE);
+    let pageStart = 0;
+    while (true) {
+      const { data: tokenRows, error: tokensError } = await adminClient
+        .from('device_push_tokens')
+        .select('user_id,expo_push_token')
+        .in('user_id', recipientBatch)
+        .eq('active', true)
+        .order('id')
+        .range(pageStart, pageStart + TOKEN_LOOKUP_PAGE_SIZE - 1);
 
-  if (tokensError) {
-    throw tokensError;
+      if (tokensError) {
+        throw tokensError;
+      }
+      const page = (tokenRows ?? []) as { user_id: string; expo_push_token: string }[];
+      pushTokenRows.push(...page);
+      if (page.length < TOKEN_LOOKUP_PAGE_SIZE) break;
+      pageStart += TOKEN_LOOKUP_PAGE_SIZE;
+    }
   }
-
-  const pushTokenRows = (tokenRows ?? []) as {
-    user_id: string;
-    expo_push_token: string;
-  }[];
   const recipientTokensByToken = new Map<string, SOSRecipientToken>();
 
   for (const row of pushTokenRows) {
@@ -87,6 +119,9 @@ export async function getActiveRecipientTokens(
     recipientCount: recipientIds.length,
     trustedRecipientCount,
     nearbyRecipientCount,
+    nearbyWithin1KmCount,
+    nearbyWithin3KmCount,
+    nearbyWithin5KmCount,
     activeTokenRowCount: pushTokenRows.length,
     validUniqueTokenCount: recipientTokens.length,
     discardedTokenCount: pushTokenRows.length - recipientTokens.length,
@@ -97,5 +132,8 @@ export async function getActiveRecipientTokens(
     recipientTokens,
     trustedRecipientCount,
     nearbyRecipientCount,
+    nearbyWithin1KmCount,
+    nearbyWithin3KmCount,
+    nearbyWithin5KmCount,
   };
 }

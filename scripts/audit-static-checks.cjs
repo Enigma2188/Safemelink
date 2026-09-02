@@ -115,9 +115,6 @@ const receivedSOSScreen = read('app/sos/[id].tsx');
 const sosNetworkMigration = read(
   'supabase/migrations/20260825120000_sos_network_presence.sql',
 );
-const sosDeliveryAmbiguityFixMigration = read(
-  'supabase/migrations/20260828120000_fix_prepare_sos_delivery_ambiguity.sql',
-);
 const sosNetworkRepository = read(
   'backend/repositories/SOSNetworkPresenceRepository.ts',
 );
@@ -127,6 +124,11 @@ const sosNetworkTask = read('services/SOSNetworkBackgroundTask.ts');
 const sosDispatchLeaseMigration = read(
   'supabase/migrations/20260826120000_sos_push_dispatch_lease.sql',
 );
+const sosDeliveryLiveMigration = read(
+  'supabase/migrations/20260902120000_sos_delivery_all_nearby_and_live_location.sql',
+);
+const sosLiveLocationService = read('services/SOSLiveLocationService.ts');
+const sosLiveLocationTask = read('services/SOSLiveLocationBackgroundTask.ts');
 const appConfig = read('app.json');
 
 check('Radar client uses 1 km and 25 results', () => {
@@ -191,43 +193,29 @@ check('SOS network background location is bounded, opportunistic and account-sco
   assert.match(appConfig, /"isIosBackgroundLocationEnabled": true/);
 });
 
-check('SOS nearby selection uses backend freshness, adaptive radius and deterministic ranking', () => {
-  assert.doesNotMatch(sosDeliveryAmbiguityFixMigration, /sender_network_enabled/);
+check('SOS nearby selection processes every eligible responder through 1/3/5 km bands', () => {
+  assert.doesNotMatch(sosDeliveryLiveMigration, /sender_network_enabled|radar_enabled/);
   assert.doesNotMatch(
-    sosDeliveryAmbiguityFixMigration,
+    sosDeliveryLiveMigration,
     /sender_preferences[\s\S]*sos_network_enabled = true/,
   );
   assert.match(
-    sosDeliveryAmbiguityFixMigration,
+    sosDeliveryLiveMigration,
     /preferences\.user_id = presence\.user_id[\s\S]*preferences\.sos_network_enabled = true/,
   );
-  assert.match(sosDeliveryAmbiguityFixMigration, /presence\.observed_at >= now\(\) - interval '30 minutes'/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /interval '5 minutes' then 0/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /interval '15 minutes' then 1000/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /presence\.accuracy <= 100/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /eligible\.distance_meters <= 1000/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /eligible\.distance_meters <= 3000/);
-  assert.doesNotMatch(
-    sosDeliveryAmbiguityFixMigration,
-    /filter \(where distance_meters <=/,
-  );
-  assert.match(sosDeliveryAmbiguityFixMigration, /selected_radius_meters integer := 5000/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /reliability_score/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /limit maximum_nearby_recipients/);
-  assert.match(sosDeliveryAmbiguityFixMigration, /group by combined\.user_id/);
-  assert.doesNotMatch(sosDeliveryAmbiguityFixMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
+  assert.match(sosDeliveryLiveMigration, /presence\.observed_at >= now\(\) - interval '30 minutes'/);
+  assert.match(sosDeliveryLiveMigration, /presence\.accuracy <= 100/);
+  assert.match(sosDeliveryLiveMigration, /eligible\.distance_meters <= 5000/);
+  assert.match(sosDeliveryLiveMigration, /when eligible\.distance_meters <= 1000 then 1/);
+  assert.match(sosDeliveryLiveMigration, /when eligible\.distance_meters <= 3000 then 2/);
+  assert.doesNotMatch(sosDeliveryLiveMigration, /\blimit\s+\d+|maximum_nearby_recipients/i);
+  assert.match(sosDeliveryLiveMigration, /on conflict \(sos_id, nearby_user_id\) do nothing/);
+  assert.match(sosDeliveryLiveMigration, /group by combined\.user_id/);
+  assert.doesNotMatch(sosDeliveryLiveMigration, /grant execute[\s\S]*prepare_sos_delivery\(uuid\) to authenticated/);
 });
 
 check('SOS nearby boundary scenarios retain valid responders', () => {
-  const chooseRadius = (distances) => {
-    if (distances.filter((distance) => distance <= 1_000).length >= 5) return 1_000;
-    if (distances.filter((distance) => distance <= 3_000).length >= 5) return 3_000;
-    return 5_000;
-  };
-  const selected = (distances) => {
-    const radius = chooseRadius(distances);
-    return distances.filter((distance) => distance <= radius).slice(0, 25);
-  };
+  const selected = (distances) => distances.filter((distance) => distance <= 5_000);
 
   assert.deepEqual(selected([150]), [150]);
   for (const distance of [20, 100, 500, 1_000, 3_000, 5_000]) {
@@ -235,12 +223,10 @@ check('SOS nearby boundary scenarios retain valid responders', () => {
   }
   assert.deepEqual(selected([150, 250]), [150, 250]);
   assert.deepEqual(selected([150, 250, 350, 450]), [150, 250, 350, 450]);
-  assert.equal(chooseRadius([100, 200, 300, 400, 500]), 1_000);
-  assert.equal(chooseRadius([2_000]), 5_000);
   assert.deepEqual(selected([2_000]), [2_000]);
   assert.deepEqual(selected([4_000]), [4_000]);
   assert.deepEqual(selected([5_001]), []);
-  assert.equal(selected(Array.from({ length: 30 }, (_, index) => index + 100)).length, 25);
+  assert.equal(selected(Array.from({ length: 30 }, (_, index) => index + 100)).length, 30);
 
   const isFresh = (ageSeconds) => ageSeconds <= 30 * 60;
   const freshnessPenalty = (ageSeconds) =>
@@ -905,6 +891,35 @@ check('Received SOS detail is bounded and does not display the complete UUID', (
   assert.match(receivedSOSRepository, /clearTimeout\(timeoutId\)/);
   assert.match(receivedSOSScreen, /formatSOSReference/);
   assert.doesNotMatch(receivedSOSScreen, /selectable style=\{styles\.eventId\}/);
+});
+
+check('Active SOS live location is owner-scoped, bounded and hidden after termination', () => {
+  assert.match(sosDeliveryLiveMigration, /add column if not exists location_updated_at timestamptz/);
+  assert.match(sosDeliveryLiveMigration, /update_my_active_sos_location/);
+  assert.match(sosDeliveryLiveMigration, /target\.user_id = current_user_id/);
+  assert.match(sosDeliveryLiveMigration, /target\.status in \('open', 'accepted'\)/);
+  assert.match(sosDeliveryLiveMigration, /and \(access\.trusted or access\.nearby\)/);
+  assert.match(sosDeliveryLiveMigration, /target\.status in \('open', 'accepted'\)/);
+  assert.match(sosLiveLocationService, /SOS_LIVE_MIN_INTERVAL_MS = 60_000/);
+  assert.match(sosLiveLocationService, /SOS_LIVE_MIN_DISTANCE_METERS = 25/);
+  assert.match(sosLiveLocationService, /Location\.watchPositionAsync/);
+  assert.match(sosLiveLocationService, /Location\.startLocationUpdatesAsync/);
+  assert.match(sosLiveLocationService, /foregroundSubscription\?\.remove\(\)/);
+  assert.match(sosLiveLocationService, /Location\.stopLocationUpdatesAsync/);
+  assert.match(sosLiveLocationTask, /SOSLiveLocationStorage\.get\(session\.user\.id\)/);
+  assert.match(rootLayout, /SOSLiveLocationBackgroundTask/);
+  assert.match(receivedSOSScreen, /formatLocationFreshness/);
+  assert.doesNotMatch(sosLiveLocationService, /console\.[^(]+\([^)]*(latitude|longitude|sosId|userId)/);
+});
+
+check('Push token lookup and Expo delivery process bounded batches independently', () => {
+  assert.match(pushRecipients, /TOKEN_LOOKUP_BATCH_SIZE = 200/);
+  assert.match(pushRecipients, /TOKEN_LOOKUP_PAGE_SIZE = 1000/);
+  assert.match(pushRecipients, /start \+= TOKEN_LOOKUP_BATCH_SIZE/);
+  assert.match(pushRecipients, /\.range\(pageStart, pageStart \+ TOKEN_LOOKUP_PAGE_SIZE - 1\)/);
+  assert.match(pushFunction, /start \+= 100/);
+  assert.match(pushFunction, /if \(!expoResponse\) \{\s*continue;/);
+  assert.match(pushFunction, /SOS_NEARBY_RADIUS_COUNTS/);
 });
 
 check('Permission recovery and logout cleanup remain bounded', () => {

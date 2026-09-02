@@ -58,6 +58,7 @@ export type Database = {
           push_dispatch_claim_id: string | null;
           push_dispatch_claimed_at: string | null;
           push_dispatch_attempted_at: string | null;
+          location_updated_at: string | null;
         };
         Insert: {
           id?: string;
@@ -75,6 +76,7 @@ export type Database = {
           push_dispatch_claim_id?: string | null;
           push_dispatch_claimed_at?: string | null;
           push_dispatch_attempted_at?: string | null;
+          location_updated_at?: string | null;
         };
         Update: Partial<Database['public']['Tables']['sos']['Insert']>;
         Relationships: [];
@@ -408,6 +410,7 @@ export type Database = {
           longitude: number;
           accuracy: number | null;
           event_time: string;
+          location_updated_at: string;
         }[];
       };
       get_sos_status: {
@@ -451,6 +454,16 @@ export type Database = {
           sos_id: string;
           event_time: string;
         }[];
+      };
+      update_my_active_sos_location: {
+        Args: {
+          target_sos_id: string;
+          position_latitude: number;
+          position_longitude: number;
+          position_accuracy: number;
+          position_observed_at: string;
+        };
+        Returns: boolean;
       };
       get_my_sos_network_preference: {
         Args: Record<string, never>;
