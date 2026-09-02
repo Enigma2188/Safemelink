@@ -141,6 +141,7 @@ export const SOSService = {
     const automaticSmsPromise: Promise<SOSAutomaticSmsResult> =
       SOSAutomaticSmsService.sendForSOS(expectedUserId, event, contacts).catch(() => ({
         status: 'failed' as const,
+        reason: 'native_send_failed' as const,
         sentCount: 0,
         failedCount: 0,
       }));

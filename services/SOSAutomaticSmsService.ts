@@ -2,12 +2,19 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { SafeMeLinkSms } from 'safemelink-sms';
 
 import type { TrustedContact } from '@/services/ContactsService';
-import { isValidE164Phone } from '@/services/PhoneIdentity';
+import { getPhoneIdentityKey } from '@/services/PhoneIdentity';
 import type { ActiveSOSEvent } from '@/services/SOSService';
 import { SOSAutomaticSmsStorage } from '@/storage/SOSAutomaticSmsStorage';
 
 export type SOSAutomaticSmsResult = {
   status: 'sent' | 'consent_required' | 'permission_required' | 'unavailable' | 'failed';
+  reason:
+    | 'sent'
+    | 'consent_missing'
+    | 'permission_missing'
+    | 'native_module_unavailable'
+    | 'no_eligible_contacts'
+    | 'native_send_failed';
   sentCount: number;
   failedCount: number;
 };
@@ -18,8 +25,8 @@ const createEmergencySms = (event: ActiveSOSEvent) =>
 const getUniquePhones = (contacts: TrustedContact[]) => [
   ...new Set(
     contacts
-      .map((contact) => contact.phoneE164)
-      .filter((phone): phone is string => isValidE164Phone(phone)),
+      .map((contact) => getPhoneIdentityKey(contact.phone, contact.phoneE164))
+      .filter((phone): phone is string => Boolean(phone)),
   ),
 ];
 
@@ -65,16 +72,51 @@ export const SOSAutomaticSmsService = {
     contacts: TrustedContact[],
   ): Promise<SOSAutomaticSmsResult> {
     if (!this.isSupported()) {
-      return { status: 'unavailable', sentCount: 0, failedCount: 0 };
+      console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
+        category: 'native_module_unavailable',
+      });
+      return {
+        status: 'unavailable',
+        reason: 'native_module_unavailable',
+        sentCount: 0,
+        failedCount: 0,
+      };
     }
     if (!(await SOSAutomaticSmsStorage.hasConsent(userId))) {
-      return { status: 'consent_required', sentCount: 0, failedCount: 0 };
+      console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
+        category: 'consent_missing',
+      });
+      return {
+        status: 'consent_required',
+        reason: 'consent_missing',
+        sentCount: 0,
+        failedCount: 0,
+      };
     }
     if (!(await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS))) {
-      return { status: 'permission_required', sentCount: 0, failedCount: 0 };
+      console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
+        category: 'permission_missing',
+      });
+      return {
+        status: 'permission_required',
+        reason: 'permission_missing',
+        sentCount: 0,
+        failedCount: 0,
+      };
     }
 
     const phones = getUniquePhones(contacts);
+    if (phones.length === 0) {
+      console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
+        category: 'no_eligible_contacts',
+      });
+      return {
+        status: 'unavailable',
+        reason: 'no_eligible_contacts',
+        sentCount: 0,
+        failedCount: 0,
+      };
+    }
     const attempted = await SOSAutomaticSmsStorage.getAttemptedRecipients(userId, event.id);
     const message = createEmergencySms(event);
     let sentCount = 0;
@@ -93,12 +135,19 @@ export const SOSAutomaticSmsService = {
     }
 
     console.info('[SafeMeLink SOS] SMS automatici elaborati.', {
+      outcome: sentCount > 0 ? 'success' : 'failure',
       sentCount,
       failedCount,
       skippedCount: phones.length - sentCount - failedCount,
     });
     return {
       status: sentCount > 0 ? 'sent' : failedCount > 0 ? 'failed' : 'unavailable',
+      reason:
+        sentCount > 0
+          ? 'sent'
+          : failedCount > 0
+            ? 'native_send_failed'
+            : 'no_eligible_contacts',
       sentCount,
       failedCount,
     };

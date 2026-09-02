@@ -1129,6 +1129,13 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   );
   assert.match(contactsScreen, /value=\{smsConsent\}/);
   assert.match(sosAutomaticSmsService, /getUniquePhones/);
+  assert.match(
+    sosAutomaticSmsService,
+    /getPhoneIdentityKey\(contact\.phone, contact\.phoneE164\)/,
+  );
+  assert.match(sosAutomaticSmsService, /native_module_unavailable/);
+  assert.match(sosAutomaticSmsService, /no_eligible_contacts/);
+  assert.match(sosAutomaticSmsService, /native_send_failed/);
   assert.match(sosAutomaticSmsService, /SOSAutomaticSmsStorage\.markAttempted/);
   assert.match(sosAutomaticSmsStorage, /'sos-sms-consent'/);
   assert.match(sosAutomaticSmsStorage, /'sos-sms-dispatch'/);
