@@ -1086,16 +1086,30 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(voiceProtectionLifecycle, /VOICE_MATCH_OK/);
   assert.match(voiceProtectionRuntime, /VOICE_SOS_REQUESTED/);
   assert.match(voiceProtectionRuntime, /VOICE_REQUEST_QUEUED/);
-  assert.match(homeScreen, /countdownExpiresAtRef\.current = Date\.now\(\)/);
+  assert.match(homeScreen, /Date\.now\(\) \+ SAFETY_TIMER_SECONDS \* 1_000/);
   assert.match(homeScreen, /expiresAt - Date\.now\(\)/);
   assert.match(homeScreen, /countdownCompletionHandledRef/);
+  assert.match(voiceProtectionRuntime, /VOICE_SOS_COUNTDOWN_MS = 10_000/);
+  assert.match(voiceProtectionRuntime, /scheduledSOS = \{ userId, expiresAt: now \+ VOICE_SOS_COUNTDOWN_MS \}/);
+  assert.match(voiceProtectionRuntime, /claimDueSOS/);
+  assert.match(voiceProtectionRuntime, /waitForBackgroundWake/);
+  assert.match(voiceProtectionService, /VoiceProtectionRuntime\.claimDueSOS\(taskUserId\)/);
+  assert.match(
+    voiceProtectionService,
+    /SOSService\.completeSOS\(taskUserId,[\s\S]*allowRecentNetworkLocation: true,[\s\S]*allowInteractiveFallback: false/,
+  );
+  assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSCompleted/);
+  assert.match(homeScreen, /VoiceProtectionRuntime\.expediteScheduledSOS/);
 });
 
 check('SOS push and trusted automatic SMS run independently with bounded fallback', () => {
   assert.match(sosService, /const automaticSmsPromise/);
   assert.match(sosService, /SOSAutomaticSmsService\.sendForSOS\(expectedUserId, event, contacts\)/);
   assert.doesNotMatch(sosService, /notificationsSent === 0[\s\S]{0,200}sendForSOS/);
-  assert.match(sosService, /if \(automaticSmsResult\.status !== 'sent'\)/);
+  assert.match(
+    sosService,
+    /if \(allowInteractiveFallback && automaticSmsResult\.status !== 'sent'\)/,
+  );
   assert.match(sosService, /localDeliveryResult = await sendSosAlert/);
   assert.match(sosAlertService, /LOCAL_FALLBACK_DEADLINE_MS = 12_000/);
   assert.match(sosAlertService, /Linking\.canOpenURL/);
@@ -1109,6 +1123,11 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   assert.match(sosAutomaticSmsService, /SOSAutomaticSmsStorage\.hasConsent\(userId\)/);
   assert.match(sosAutomaticSmsService, /PermissionsAndroid\.PERMISSIONS\.SEND_SMS/);
   assert.match(sosAutomaticSmsService, /PermissionsAndroid\.request/);
+  assert.match(
+    sosAutomaticSmsService,
+    /SOSAutomaticSmsStorage\.setConsent\(userId, true\)[\s\S]*PermissionsAndroid\.request/,
+  );
+  assert.match(contactsScreen, /value=\{smsConsent\}/);
   assert.match(sosAutomaticSmsService, /getUniquePhones/);
   assert.match(sosAutomaticSmsService, /SOSAutomaticSmsStorage\.markAttempted/);
   assert.match(sosAutomaticSmsStorage, /'sos-sms-consent'/);
@@ -1123,7 +1142,7 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
 });
 
 check('Voice SOS can use only a fresh accurate account-scoped network location fallback', () => {
-  assert.match(homeScreen, /startSOSCountdown\('voice'\)/);
+  assert.match(homeScreen, /startSOSCountdown\('voice', scheduledSOS\?\.expiresAt\)/);
   assert.match(homeScreen, /allowRecentNetworkLocation: sosTriggerSourceRef\.current === 'voice'/);
   assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS = 10 \* 60 \* 1_000/);
   assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS = 100/);
@@ -1227,9 +1246,27 @@ check('SOS local dispatch is SMS-only and never invents a country code', () => {
   assert.match(sosAlertService, /`sms:\$\{contact\.phone\}/);
   assert.doesNotMatch(sosAlertService, /\+39|defaultCountry|countryCode/);
   assert.doesNotMatch(sosAlertService, /whatsapp|wa\.me/i);
+  assert.doesNotMatch(sosAlertService, /Share\.share|shareSosAlert/);
+  assert.doesNotMatch(sosService, /shareSosAlert|shareSOS/);
+  assert.match(homeScreen, /SOSService\.sendSmsFallback\(activeEvent, contacts\)/);
   assert.doesNotMatch(contactsScreen, /Canale locale preferito|Fallback WhatsApp/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LINKED/);
   assert.match(sosAlertService, /CONTACT_SOURCE_LOCAL/);
+});
+
+check('Home exposes the existing SOS network preference without duplicating it', () => {
+  assert.match(homeScreen, /useSOSNetworkPresence\(\)/);
+  assert.match(homeScreen, /sosNetwork\.setEnabled\(!sosNetwork\.enabled\)/);
+  assert.match(homeScreen, /Rete SafeMeLink/);
+  assert.match(homeScreen, /sosNetwork\.enabled[\s\S]*'ATTIVA'/);
+  assert.doesNotMatch(homeScreen, /useState[^\n]*sos_network_enabled/);
+});
+
+check('Home keeps the SOS control single-tap and visually compact', () => {
+  assert.match(homeScreen, /onPress=\{\(\) => startSOSCountdown\(\)\}/);
+  assert.doesNotMatch(homeScreen, /onLongPress|delayLongPress/);
+  assert.match(homeScreen, /sosStage:[\s\S]*height: 188[\s\S]*width: 188/);
+  assert.match(homeScreen, /sosButton:[\s\S]*height: 128[\s\S]*width: 128/);
 });
 
 check('Emergency profile and trusted contact requests have bounded cancellable operations', () => {

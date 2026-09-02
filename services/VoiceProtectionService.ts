@@ -4,6 +4,7 @@ import { Linking, Platform } from 'react-native';
 import BackgroundService from 'react-native-background-actions';
 
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
+import { SOSService } from '@/services/SOSService';
 import {
   type VoiceProtectionDurationMinutes,
   VoiceProtectionStorage,
@@ -11,6 +12,7 @@ import {
 
 const TASK_MAX_SLEEP_MS = 60_000;
 const RECOGNITION_READINESS_TIMEOUT_MS = 5_000;
+let activeTaskUserId: string | null = null;
 
 type VoiceProtectionTaskData = {
   expiresAt: string | null;
@@ -30,11 +32,6 @@ export type VoiceRecognitionReadiness =
   | 'model_status_unknown';
 
 const normalizeLocale = (locale: string) => locale.replace('_', '-').toLowerCase();
-
-const sleep = (durationMs: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, durationMs);
-  });
 
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
   while (BackgroundService.isRunning()) {
@@ -63,8 +60,35 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       break;
     }
 
-    const remainingMs = expiresAtMs === null ? TASK_MAX_SLEEP_MS : expiresAtMs - Date.now();
-    await sleep(Math.min(TASK_MAX_SLEEP_MS, Math.max(1_000, remainingMs)));
+    if (taskUserId && VoiceProtectionRuntime.claimDueSOS(taskUserId)) {
+      VoiceProtectionRuntime.notifySOSExecutionStarted(taskUserId);
+      try {
+        const result = await SOSService.completeSOS(taskUserId, {
+          allowRemoteDelivery: true,
+          allowRecentNetworkLocation: true,
+          allowInteractiveFallback: false,
+        });
+        VoiceProtectionRuntime.notifySOSCompleted(taskUserId, result);
+      } catch (error: unknown) {
+        console.warn('[VoiceProtection] completamento SOS non riuscito', {
+          category: error instanceof Error ? error.name : 'unknown',
+        });
+        VoiceProtectionRuntime.notifySOSFailed(taskUserId, error);
+      } finally {
+        VoiceProtectionRuntime.finishSOSExecution();
+      }
+      continue;
+    }
+
+    const protectionWaitMs =
+      expiresAtMs === null ? TASK_MAX_SLEEP_MS : Math.max(0, expiresAtMs - Date.now());
+    const waitMs = taskUserId
+      ? VoiceProtectionRuntime.getBackgroundWaitMs(
+          taskUserId,
+          Math.min(TASK_MAX_SLEEP_MS, protectionWaitMs),
+        )
+      : Math.min(TASK_MAX_SLEEP_MS, protectionWaitMs);
+    await VoiceProtectionRuntime.waitForBackgroundWake(waitMs);
   }
 };
 
@@ -165,6 +189,9 @@ export const VoiceProtectionService = {
     if (BackgroundService.isRunning()) {
       await BackgroundService.stop();
     }
+    if (activeTaskUserId && activeTaskUserId !== userId) {
+      VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
+    }
 
     const expiresAt = calculateExpiresAt(durationMinutes);
     await BackgroundService.start<VoiceProtectionTaskData>(runVoiceProtectionTask, {
@@ -183,6 +210,7 @@ export const VoiceProtectionService = {
         userId,
       },
     });
+    activeTaskUserId = userId;
 
     return {
       enabledAt: new Date().toISOString(),
@@ -191,9 +219,14 @@ export const VoiceProtectionService = {
   },
 
   async stop() {
+    if (activeTaskUserId) {
+      VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
+    }
+    VoiceProtectionRuntime.wakeBackgroundTask();
     if (BackgroundService.isRunning()) {
       await BackgroundService.stop();
     }
+    activeTaskUserId = null;
   },
 
   async openBatterySettings() {

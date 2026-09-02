@@ -40,6 +40,7 @@ export const SOSAutomaticSmsService = {
     if (!this.isSupported()) {
       return { consent: false, permission: false, supported: false };
     }
+    await SOSAutomaticSmsStorage.setConsent(userId, true);
     const permission = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.SEND_SMS,
       {
@@ -51,8 +52,7 @@ export const SOSAutomaticSmsService = {
       },
     );
     const granted = permission === PermissionsAndroid.RESULTS.GRANTED;
-    await SOSAutomaticSmsStorage.setConsent(userId, granted);
-    return { consent: granted, permission: granted, supported: true };
+    return { consent: true, permission: granted, supported: true };
   },
 
   async revokeAuthorization(userId: string) {

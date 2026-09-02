@@ -754,7 +754,7 @@ export function TrustedContactsScreen() {
           <Switch
             disabled={!userId || smsAuthorizationPending || !smsSupported}
             onValueChange={(value) => void setAutomaticSmsEnabled(value)}
-            value={smsConsent && smsPermission}
+            value={smsConsent}
           />
         </View>
       </View>

@@ -64,27 +64,29 @@ export const LocationService = {
     accuracy?: 'balanced' | 'high';
     allowRecentNetworkLocationForUserId?: string;
   }): Promise<SOSLocation> {
-    const permission = await Location.requestForegroundPermissionsAsync();
-
-    if (permission.status !== 'granted') {
-      throw new LocationPermissionError();
-    }
-
-    const servicesEnabled = await Location.hasServicesEnabledAsync();
-
-    if (!servicesEnabled) {
-      throw new LocationUnavailableError();
-    }
-
-    let position: Location.LocationObject;
-
     try {
-      position = await getCurrentPositionWithTimeout(
+      const permission = options?.allowRecentNetworkLocationForUserId
+        ? await Location.getForegroundPermissionsAsync()
+        : await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        throw new LocationPermissionError();
+      }
+      if (!(await Location.hasServicesEnabledAsync())) {
+        throw new LocationUnavailableError();
+      }
+
+      const position = await getCurrentPositionWithTimeout(
         options?.timeoutMs ?? CURRENT_LOCATION_TIMEOUT_MS,
         options?.accuracy === 'balanced'
           ? Location.Accuracy.Balanced
           : Location.Accuracy.High,
       );
+
+      return {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
     } catch (error) {
       console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', {
         category: error instanceof Error ? error.name : 'unknown',
@@ -112,16 +114,14 @@ export const LocationService = {
           };
         }
       }
-      if (error instanceof LocationTimeoutError) {
+      if (
+        error instanceof LocationTimeoutError ||
+        error instanceof LocationPermissionError ||
+        error instanceof LocationUnavailableError
+      ) {
         throw error;
       }
       throw new LocationUnavailableError();
     }
-
-    return {
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-      accuracy: position.coords.accuracy,
-    };
   },
 };

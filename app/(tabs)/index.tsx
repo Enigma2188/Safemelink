@@ -9,6 +9,7 @@ import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
+import { useSOSNetworkPresence } from '@/components/SOSNetworkPresenceProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SOSLocalDeliveryResult } from '@/services/SOSAlertService';
 import type { SOSAutomaticSmsResult } from '@/services/SOSAutomaticSmsService';
@@ -23,10 +24,14 @@ import {
   SOSLifecycleDiagnosticError,
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
-import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
+import {
+  VoiceProtectionRuntime,
+  VOICE_SOS_COUNTDOWN_MS,
+} from '@/services/VoiceProtectionRuntime';
 import {
   SOSService,
   type ActiveSOSEvent,
+  type SOSCompletionResult,
   type SOSEvent,
   type SOSTerminalStatus,
 } from '@/services/SOSService';
@@ -40,7 +45,7 @@ import {
 } from '@/storage/GoHomeStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
 
-const SAFETY_TIMER_SECONDS = 10;
+const SAFETY_TIMER_SECONDS = VOICE_SOS_COUNTDOWN_MS / 1_000;
 const CHECKPOINT_CONFIRM_SECONDS = 30;
 const CHECKPOINT_MAX_HOURS = 12;
 const CHECKPOINT_MAX_DURATION_MINUTES = CHECKPOINT_MAX_HOURS * 60 + 59;
@@ -80,12 +85,19 @@ const getSOSDeliveryNotice = (
     ].filter(Boolean).join(' ');
   }
 
-  const fallbackNotice =
-    automaticSmsNotice ?? (localResult.status === 'sms_opened'
-        ? 'Fallback SMS avviato.'
-        : localResult.status === 'no_channel'
-          ? 'Nessun canale locale utilizzabile. Verifica i contatti fidati e le app disponibili.'
-          : 'Il fallback locale non è disponibile per un problema tecnico.');
+  const fallbackNotice = automaticSmsNotice ?? (
+    localResult.status === 'sms_opened'
+      ? 'Fallback SMS avviato.'
+      : automaticSmsResult.status === 'consent_required'
+        ? 'Gli SMS automatici non sono autorizzati; puoi inviarli manualmente dalla schermata SOS.'
+        : automaticSmsResult.status === 'permission_required'
+          ? 'Il permesso SMS non è disponibile; puoi inviarli manualmente dalla schermata SOS.'
+          : automaticSmsResult.status === 'unavailable'
+            ? 'Nessun numero fidato valido è disponibile per l’invio automatico.'
+            : localResult.status === 'no_channel'
+              ? 'Nessun canale SMS utilizzabile. Verifica i contatti fidati e le app disponibili.'
+              : 'L’invio SMS non è disponibile per un problema tecnico.'
+  );
 
   if (
     result.reason === 'no_eligible_recipients' ||
@@ -245,6 +257,7 @@ const runSOSLocalStepWithTimeout = async <T,>(operation: Promise<T>) => {
 
 export default function HomeScreen() {
   const { session, isInitializing, isOffline, isSubmitting, logout } = useAuth();
+  const sosNetwork = useSOSNetworkPresence();
   const router = useRouter();
   const isHomeFocused = useIsFocused();
   const userId = session?.user.id ?? null;
@@ -416,7 +429,10 @@ export default function HomeScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   }, []);
 
-  const startSOSCountdown = useCallback((source: 'manual' | 'voice' = 'manual') => {
+  const startSOSCountdown = useCallback((
+    source: 'manual' | 'voice' = 'manual',
+    requestedExpiresAt?: number,
+  ) => {
     loadGenerationRef.current += 1;
     statusRef.current = 'countdown';
     checkpointOperationGenerationRef.current += 1;
@@ -443,7 +459,10 @@ export default function HomeScreen() {
     setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
     setGoHomeError('');
     setGoHomeErrorAction(null);
-    countdownExpiresAtRef.current = Date.now() + SAFETY_TIMER_SECONDS * 1_000;
+    countdownExpiresAtRef.current =
+      source === 'voice' && requestedExpiresAt
+        ? requestedExpiresAt
+        : Date.now() + SAFETY_TIMER_SECONDS * 1_000;
     countdownCompletionHandledRef.current = false;
     sosTriggerSourceRef.current = source;
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
@@ -456,12 +475,14 @@ export default function HomeScreen() {
     () =>
       VoiceProtectionRuntime.onSOSRequested((requestUserId) => {
         if (requestUserId !== activeUserIdRef.current) {
+          VoiceProtectionRuntime.cancelScheduledSOS(requestUserId);
           console.info('[VoiceProtection Home] VOICE_TRIGGER_BLOCKED', {
             category: 'account_mismatch',
           });
           return;
         }
         if (statusRef.current !== 'idle') {
+          VoiceProtectionRuntime.cancelScheduledSOS(requestUserId);
           console.info('[VoiceProtection Home] VOICE_TRIGGER_BLOCKED', {
             category: 'sos_already_active',
           });
@@ -470,13 +491,19 @@ export default function HomeScreen() {
 
         console.info('[VoiceProtection Home] VOICE_LISTENER_RECEIVED');
         voiceCountdownPendingRef.current = true;
-        startSOSCountdown('voice');
-        router.dismissTo('/(tabs)');
+        const scheduledSOS = VoiceProtectionRuntime.getScheduledSOS(requestUserId);
+        startSOSCountdown('voice', scheduledSOS?.expiresAt);
+        if (AppState.currentState === 'active') {
+          router.dismissTo('/(tabs)');
+        }
       }),
     [router, startSOSCountdown],
   );
 
   const resetSensitiveState = useCallback(() => {
+    if (activeUserIdRef.current) {
+      VoiceProtectionRuntime.cancelScheduledSOS(activeUserIdRef.current);
+    }
     statusRef.current = 'idle';
     voiceCountdownPendingRef.current = false;
     sosTriggerSourceRef.current = 'manual';
@@ -781,6 +808,9 @@ export default function HomeScreen() {
   );
 
   const cancelSOS = () => {
+    if (userId) {
+      VoiceProtectionRuntime.cancelScheduledSOS(userId);
+    }
     sosTriggerSourceRef.current = 'manual';
     countdownExpiresAtRef.current = null;
     countdownCompletionHandledRef.current = false;
@@ -1298,6 +1328,30 @@ export default function HomeScreen() {
     cancelGoHome();
   };
 
+  const applySOSCompletion = useCallback((
+    result: SOSCompletionResult,
+    actionUserId: string,
+  ) => {
+    if (activeUserIdRef.current !== actionUserId) {
+      return;
+    }
+
+    setActiveEvent(result.event);
+    setLastEvents(result.events);
+    const deliveryNotice = getSOSDeliveryNotice(
+      result.pushResult,
+      result.localDeliveryResult,
+      result.automaticSmsResult,
+    );
+    const persistenceNotice = result.localPersistenceFailed
+      ? 'SOS attivo, ma la cronologia locale non è stata salvata. Mantieni aperta l’app fino alla conclusione.'
+      : null;
+    setPushDeliveryNotice(
+      [persistenceNotice, deliveryNotice].filter(Boolean).join(' ') || null,
+    );
+    setStatus('active');
+  }, []);
+
   const completeSOS = useCallback(async () => {
     if (sosCompletionInFlightRef.current) {
       return;
@@ -1310,6 +1364,12 @@ export default function HomeScreen() {
     }
 
     const actionUserId = userId;
+    if (
+      sosTriggerSourceRef.current === 'voice' &&
+      !VoiceProtectionRuntime.cancelScheduledSOS(actionUserId)
+    ) {
+      return;
+    }
     countdownCompletionHandledRef.current = true;
     countdownExpiresAtRef.current = null;
     sosCompletionInFlightRef.current = true;
@@ -1321,24 +1381,7 @@ export default function HomeScreen() {
         allowRecentNetworkLocation: sosTriggerSourceRef.current === 'voice',
       });
 
-      if (activeUserIdRef.current !== actionUserId) {
-        return;
-      }
-
-      setActiveEvent(result.event);
-      setLastEvents(result.events);
-      const deliveryNotice = getSOSDeliveryNotice(
-        result.pushResult,
-        result.localDeliveryResult,
-        result.automaticSmsResult,
-      );
-      const persistenceNotice = result.localPersistenceFailed
-        ? 'SOS attivo, ma la cronologia locale non è stata salvata. Mantieni aperta l’app fino alla conclusione.'
-        : null;
-      setPushDeliveryNotice(
-        [persistenceNotice, deliveryNotice].filter(Boolean).join(' ') || null,
-      );
-      setStatus('active');
+      applySOSCompletion(result, actionUserId);
     } catch (error) {
       if (activeUserIdRef.current === actionUserId) {
         setStatus('idle');
@@ -1361,7 +1404,46 @@ export default function HomeScreen() {
     } finally {
       sosCompletionInFlightRef.current = false;
     }
-  }, [isOffline, userId]);
+  }, [applySOSCompletion, isOffline, userId]);
+
+  useEffect(() => {
+    const removeStartedListener = VoiceProtectionRuntime.onSOSExecutionStarted(
+      (executionUserId) => {
+        if (executionUserId === activeUserIdRef.current) {
+          countdownCompletionHandledRef.current = true;
+          countdownExpiresAtRef.current = null;
+          setStatus('sending');
+        }
+      },
+    );
+    const removeCompletedListener = VoiceProtectionRuntime.onSOSCompleted(
+      (executionUserId, result) => {
+        if (executionUserId === activeUserIdRef.current) {
+          applySOSCompletion(result, executionUserId);
+        }
+      },
+    );
+    const removeFailedListener = VoiceProtectionRuntime.onSOSFailed(
+      (executionUserId) => {
+        if (executionUserId !== activeUserIdRef.current) {
+          return;
+        }
+        setStatus('idle');
+        const message = 'Non è stato possibile completare l’SOS. Controlla posizione e connessione.';
+        if (AppState.currentState === 'active') {
+          Alert.alert('SOS non inviato', message);
+        } else {
+          setPushDeliveryNotice('SOS non completato. Riapri SafeMeLink e riprova.');
+        }
+      },
+    );
+
+    return () => {
+      removeStartedListener();
+      removeCompletedListener();
+      removeFailedListener();
+    };
+  }, [applySOSCompletion]);
 
   useEffect(() => {
     const trackedEvent = activeEvent;
@@ -1481,6 +1563,13 @@ export default function HomeScreen() {
       if (remainingMs <= 0) {
         if (!countdownCompletionHandledRef.current) {
           countdownCompletionHandledRef.current = true;
+          if (
+            sosTriggerSourceRef.current === 'voice' &&
+            activeUserIdRef.current &&
+            VoiceProtectionRuntime.expediteScheduledSOS(activeUserIdRef.current)
+          ) {
+            return;
+          }
           void completeSOS();
         }
         return;
@@ -1796,9 +1885,20 @@ export default function HomeScreen() {
     }
 
     try {
-      await SOSService.shareSOS(activeEvent, contacts);
+      await SOSService.sendSmsFallback(activeEvent, contacts);
     } catch {
-      Alert.alert('Condivisione SOS', 'Non riesco ad aprire la condivisione del messaggio.');
+      Alert.alert('Condivisione SOS', 'Non riesco ad aprire il messaggio SMS.');
+    }
+  };
+
+  const toggleSOSNetwork = async () => {
+    try {
+      await sosNetwork.setEnabled(!sosNetwork.enabled);
+    } catch {
+      Alert.alert(
+        'Rete SafeMeLink',
+        'Non è possibile aggiornare ora la partecipazione. Controlla connessione e permessi.',
+      );
     }
   };
 
@@ -1957,6 +2057,44 @@ export default function HomeScreen() {
               </Pressable>
             </Link>
           </View>
+          <View style={styles.networkSummary}>
+            <View style={styles.networkSummaryCopy}>
+              <Text style={styles.summaryLabel}>Rete SafeMeLink</Text>
+              <Text style={styles.networkSummaryValue}>
+                {sosNetwork.isLoading
+                  ? 'VERIFICA…'
+                  : sosNetwork.enabled
+                    ? 'ATTIVA'
+                    : 'DISATTIVA'}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel={
+                sosNetwork.enabled
+                  ? 'Disattiva Rete SafeMeLink'
+                  : 'Attiva Rete SafeMeLink'
+              }
+              accessibilityRole="button"
+              disabled={sosNetwork.isLoading || sosNetwork.isSaving || !userId}
+              onPress={() => void toggleSOSNetwork()}
+              style={[
+                styles.networkToggle,
+                sosNetwork.enabled && styles.networkToggleActive,
+                (sosNetwork.isLoading || sosNetwork.isSaving || !userId) && styles.disabledButton,
+              ]}>
+              <Text
+                style={[
+                  styles.networkToggleText,
+                  sosNetwork.enabled && styles.networkToggleTextActive,
+                ]}>
+                {sosNetwork.isSaving
+                  ? 'ATTENDI…'
+                  : sosNetwork.enabled
+                    ? 'LASCIA'
+                    : 'ATTIVA'}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -2002,7 +2140,7 @@ export default function HomeScreen() {
             </View>
           ) : null}
           <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
-            <Text style={styles.shareButtonText}>Condividi di nuovo SOS</Text>
+            <Text style={styles.shareButtonText}>Invia di nuovo via SMS</Text>
           </Pressable>
           <Pressable
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
@@ -2546,6 +2684,49 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     width: '100%',
   },
+  networkSummary: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(12, 20, 48, 0.68)',
+    borderColor: 'rgba(120, 104, 255, 0.24)',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    width: '100%',
+  },
+  networkSummaryCopy: {
+    gap: 3,
+  },
+  networkSummaryValue: {
+    color: '#F7FAFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  networkToggle: {
+    alignItems: 'center',
+    borderColor: 'rgba(69, 183, 255, 0.45)',
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 84,
+    paddingHorizontal: 12,
+  },
+  networkToggleActive: {
+    backgroundColor: 'rgba(53, 228, 135, 0.12)',
+    borderColor: 'rgba(53, 228, 135, 0.5)',
+  },
+  networkToggleText: {
+    color: '#45B7FF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  networkToggleTextActive: {
+    color: '#35E487',
+  },
   summaryLabel: {
     color: '#A8B5D1',
     fontSize: 13,
@@ -2574,61 +2755,61 @@ const styles = StyleSheet.create({
   },
   sosStage: {
     alignItems: 'center',
-    height: 304,
+    height: 188,
     justifyContent: 'center',
-    width: 304,
+    width: 188,
   },
   sosGlow: {
     backgroundColor: '#FF3B5C',
     borderColor: 'rgba(255, 143, 179, 0.7)',
-    borderRadius: 152,
+    borderRadius: 94,
     borderWidth: 2,
     elevation: 12,
-    height: 304,
+    height: 188,
     position: 'absolute',
     shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.82,
     shadowRadius: 42,
-    width: 304,
+    width: 188,
   },
   sosOuterRing: {
     borderColor: 'rgba(255, 113, 145, 0.78)',
-    borderRadius: 140,
+    borderRadius: 86,
     borderWidth: 2,
-    height: 280,
+    height: 172,
     position: 'absolute',
-    width: 280,
+    width: 172,
   },
   sosInnerRing: {
     borderColor: 'rgba(255, 255, 255, 0.62)',
-    borderRadius: 120,
+    borderRadius: 74,
     borderWidth: 2,
-    height: 240,
+    height: 148,
     position: 'absolute',
-    width: 240,
+    width: 148,
   },
   sosButton: {
     alignItems: 'center',
     backgroundColor: '#FF244D',
     borderColor: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: 108,
+    borderRadius: 64,
     borderWidth: 3,
     elevation: 18,
-    height: 216,
+    height: 128,
     justifyContent: 'center',
     shadowColor: '#FF3B5C',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.9,
     shadowRadius: 36,
-    width: 216,
+    width: 128,
   },
   sosButtonPressed: {
     transform: [{ scale: 0.98 }],
   },
   sosButtonText: {
     color: '#F7FAFF',
-    fontSize: 42,
+    fontSize: 30,
     fontWeight: '900',
     letterSpacing: 2,
   },

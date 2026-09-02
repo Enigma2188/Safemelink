@@ -1,4 +1,4 @@
-import { Linking, Share } from 'react-native';
+import { Linking } from 'react-native';
 
 import type { SafeMeLinkContact } from '@/services/SafeMeLinkContact';
 import type { ActiveSOSEvent } from '@/services/SOSService';
@@ -153,14 +153,6 @@ const tryOpenUrls = async (urls: string[], deadlineAt: number) => {
   }
 
   return { channel: null, technicalFailure } as const;
-};
-
-export const shareSosAlert = async (event: ActiveSOSEvent, contacts: SafeMeLinkContact[]) => {
-  const recipients = contacts.map((contact) => `${contact.name} (${contact.phone})`).join(', ');
-
-  await Share.share({
-    message: `${event.message}\n\nContatti fidati: ${recipients}`,
-  });
 };
 
 export const sendSosAlert = async (

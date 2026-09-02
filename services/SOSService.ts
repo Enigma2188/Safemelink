@@ -9,7 +9,6 @@ import { LocationService, type SOSLocation } from '@/services/LocationService';
 import {
   sendSosAlert,
   sendSosSmsFallback,
-  shareSosAlert,
   type SOSLocalDeliveryResult,
 } from '@/services/SOSAlertService';
 import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
@@ -61,6 +60,15 @@ const runLocalOperationWithTimeout = async <T,>(operation: Promise<T>) => {
   }
 };
 
+export type SOSCompletionResult = {
+  event: ActiveSOSEvent;
+  events: SOSEvent[];
+  pushResult: SOSDeliveryResult;
+  automaticSmsResult: SOSAutomaticSmsResult;
+  localDeliveryResult: SOSLocalDeliveryResult;
+  localPersistenceFailed: boolean;
+};
+
 export const SOSService = {
   createMessage(location: SOSLocation, createdAt: string) {
     return [
@@ -77,9 +85,11 @@ export const SOSService = {
     options: {
       allowRemoteDelivery?: boolean;
       allowRecentNetworkLocation?: boolean;
+      allowInteractiveFallback?: boolean;
     } = {},
-  ) {
+  ): Promise<SOSCompletionResult> {
     const allowRemoteDelivery = options.allowRemoteDelivery ?? true;
+    const allowInteractiveFallback = options.allowInteractiveFallback ?? true;
     const initialSession = await getSOSSessionWithTimeout();
 
     if (initialSession?.user.id !== expectedUserId) {
@@ -216,7 +226,7 @@ export const SOSService = {
       status: 'not_needed',
       channel: null,
     };
-    if (automaticSmsResult.status !== 'sent') {
+    if (allowInteractiveFallback && automaticSmsResult.status !== 'sent') {
       localDeliveryResult = await sendSosAlert(completedEvent, contacts).catch(() => {
         console.warn('[SafeMeLink SOS] Fallback locale non completato.', {
           category: 'local_fallback_unavailable',
@@ -243,7 +253,4 @@ export const SOSService = {
     return sendSosSmsFallback(event, contacts);
   },
 
-  async shareSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {
-    await shareSosAlert(event, contacts);
-  },
 };
