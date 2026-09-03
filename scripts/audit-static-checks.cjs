@@ -63,6 +63,9 @@ const voiceProtectionScreen = read('app/voice-protection.tsx');
 const voiceProtectionService = read('services/VoiceProtectionService.ts');
 const voiceProtectionLifecycle = read('components/VoiceProtectionLifecycle.tsx');
 const voiceProtectionRuntime = read('services/VoiceProtectionRuntime.ts');
+const safetyExpirationService = read('services/SafetyExpirationService.ts');
+const safetyExpirationRuntime = read('services/SafetyExpirationRuntime.ts');
+const safetyExpirationStorage = read('storage/SafetyExpirationStorage.ts');
 const voiceProtectionPlugin = read(
   'plugins/withVoiceProtectionForegroundService.cjs',
 );
@@ -1254,6 +1257,46 @@ check('Checkpoint expiry is absolute, persisted, account-scoped and single-fire'
   assert.equal(remainingSeconds(60_000, 60_001), 0);
 });
 
+check('Checkpoint and Go Home expirations run outside the React UI lifecycle', () => {
+  assert.match(safetyExpirationStorage, /SafetyExpirationKind = 'checkpoint' \| 'go_home'/);
+  assert.match(safetyExpirationStorage, /confirmationExpiresAt: string/);
+  assert.match(safetyExpirationStorage, /phase: SafetyExpirationPhase/);
+  assert.match(safetyExpirationStorage, /'safety-expiration'/);
+  assert.match(safetyExpirationService, /VoiceProtectionService\.ensureSafetyMonitoring\(userId\)/);
+  assert.match(safetyExpirationRuntime, /SafetyExpirationRuntime =/);
+  assert.match(safetyExpirationRuntime, /phase: 'executing'/);
+  assert.match(safetyExpirationRuntime, /SOSService\.completeSOS\(userId/);
+  assert.match(safetyExpirationRuntime, /allowRemoteDelivery: true/);
+  assert.match(safetyExpirationRuntime, /allowInteractiveFallback: false/);
+  assert.match(safetyExpirationRuntime, /CheckpointStorage\.clearActive\(userId\)/);
+  assert.match(safetyExpirationRuntime, /GoHomeStorage\.clearActive\(userId\)/);
+  assert.match(voiceProtectionService, /SafetyExpirationRuntime\.processDue\(taskUserId\)/);
+  assert.match(voiceProtectionService, /voiceStillEnabled \|\| voiceHasPendingSOS/);
+  assert.match(voiceProtectionService, /\['microphone', 'location', 'specialUse'\]/);
+  assert.match(voiceProtectionService, /: \['specialUse'\]/);
+  assert.match(homeScreen, /SafetyExpirationService\.schedule\([\s\S]*?'checkpoint'/);
+  assert.match(homeScreen, /SafetyExpirationService\.schedule\([\s\S]*?'go_home'/);
+  assert.match(homeScreen, /SafetyExpirationService\.processDue\(expiringUserId\)/);
+  assert.match(homeScreen, /SafetyExpirationService\.cancel\(userId, 'checkpoint', startedAt\)/);
+  assert.match(
+    homeScreen,
+    /SafetyExpirationService\.cancel\([\s\S]{0,100}actionUserId,[\s\S]{0,100}'go_home',[\s\S]{0,100}session\.id/,
+  );
+  assert.doesNotMatch(safetyExpirationRuntime, /setInterval\(/);
+  assert.doesNotMatch(safetyExpirationService, /setInterval\(/);
+  assert.doesNotMatch(
+    homeScreen,
+    /checkpointConfirmSeconds <= 0[\s\S]{0,500}startSOSCountdown\(\)/,
+  );
+  assert.doesNotMatch(
+    homeScreen,
+    /goHomeConfirmSeconds <= 0[\s\S]{0,500}startSOSCountdown\(\)/,
+  );
+  assert.match(voiceProtectionPlugin, /FOREGROUND_SERVICE_SPECIAL_USE/);
+  assert.match(voiceProtectionPlugin, /microphone\|location\|specialUse/);
+  assert.match(voiceProtectionPlugin, /PROPERTY_SPECIAL_USE_FGS_SUBTYPE/);
+});
+
 check('Trusted contact mutations are guarded against duplicate taps', () => {
   assert.match(contactsScreen, /contactActionInFlightRef/);
   assert.match(contactsScreen, /if \(contactActionInFlightRef\.current\)/);
@@ -1368,7 +1411,7 @@ check('Go Home expiry is absolute, persisted, account-scoped and single-fire', (
   assert.match(homeScreen, /goHomeExpirationHandledRef\.current === expiresAt/);
   assert.match(homeScreen, /goHomeOperationGenerationRef\.current/);
   assert.match(homeScreen, /previousGoHomeUserId/);
-  assert.match(homeScreen, /clearPersistedGoHome\(goHomeOwnerUserIdRef\.current\)/);
+  assert.match(homeScreen, /const ownerUserId = goHomeOwnerUserIdRef\.current;[\s\S]*clearPersistedGoHome\(ownerUserId\)/);
   assert.doesNotMatch(
     homeScreen,
     /setGoHomeRemainingSeconds\(\(current\) => Math\.max\(0, current - 1\)\)/,

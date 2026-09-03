@@ -54,6 +54,7 @@ for (const permission of [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.RECORD_AUDIO',
 ]) {
   assert.match(
@@ -84,12 +85,17 @@ const voiceProtectionServiceTypes = new Set(
     ?.split('|')
     .map((serviceType) => serviceType.trim()) ?? [],
 );
-for (const requiredServiceType of ['microphone', 'location']) {
+for (const requiredServiceType of ['microphone', 'location', 'specialUse']) {
   assert.ok(
     voiceProtectionServiceTypes.has(requiredServiceType),
     `Il foreground service Protezione Vocale deve dichiarare il tipo ${requiredServiceType}.`,
   );
 }
+assert.match(
+  manifest,
+  /<property\b(?=[^>]*android:name=["']android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE["'])[^>]*android:value=["'][^"']*safety deadlines[^"']*["'][^>]*>/i,
+  'Il foreground service deve dichiarare il sottotipo specialUse per le scadenze di sicurezza.',
+);
 
 for (const scheme of ['sms', 'smsto']) {
   assert.match(

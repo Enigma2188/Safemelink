@@ -11,6 +11,7 @@ import { RadarService } from '@/services/RadarService';
 import { SOSNetworkPresenceRepository } from '@/backend/repositories/SOSNetworkPresenceRepository';
 import { SOSNetworkPresenceService } from '@/services/SOSNetworkPresenceService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { SafetyExpirationService } from '@/services/SafetyExpirationService';
 
 type AuthContextValue = {
   session: Session | null;
@@ -342,6 +343,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
               SOSNetworkPresenceService.stopBackgroundUpdates(),
               SOSNetworkPresenceRepository.deactivatePresence(),
               SOSLiveLocationService.stop(session.user.id),
+              SafetyExpirationService.cancel(session.user.id),
               PushNotificationService.unregisterDeviceForUser(session.user.id),
             ]);
 

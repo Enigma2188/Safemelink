@@ -25,6 +25,7 @@ import {
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { SafetyExpirationService } from '@/services/SafetyExpirationService';
 import {
   VoiceProtectionRuntime,
   VOICE_SOS_COUNTDOWN_MS,
@@ -397,7 +398,12 @@ export default function HomeScreen() {
     checkpointExpirationHandledRef.current = expiresAt;
     checkpointStatusRef.current = 'confirming';
     setCheckpointRemainingSeconds(0);
-    setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    setCheckpointConfirmSeconds(Math.max(
+      0,
+      Math.ceil(
+        (Date.parse(expiresAt) + CHECKPOINT_CONFIRM_SECONDS * 1_000 - Date.now()) / 1_000,
+      ),
+    ));
     setCheckpointStatus('confirming');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   }, []);
@@ -426,7 +432,12 @@ export default function HomeScreen() {
     goHomeExpirationHandledRef.current = expiresAt;
     goHomeStatusRef.current = 'confirming';
     setGoHomeRemainingSeconds(0);
-    setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+    setGoHomeConfirmSeconds(Math.max(
+      0,
+      Math.ceil(
+        (Date.parse(expiresAt) + GO_HOME_CONFIRM_SECONDS * 1_000 - Date.now()) / 1_000,
+      ),
+    ));
     setGoHomeStatus('confirming');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
   }, []);
@@ -439,7 +450,13 @@ export default function HomeScreen() {
     statusRef.current = 'countdown';
     checkpointOperationGenerationRef.current += 1;
     checkpointStartInFlightRef.current = false;
-    void clearPersistedCheckpoint(checkpointOwnerUserIdRef.current);
+    const checkpointOwnerUserId = checkpointOwnerUserIdRef.current;
+    void clearPersistedCheckpoint(checkpointOwnerUserId);
+    if (checkpointOwnerUserId) {
+      void SafetyExpirationService.cancel(checkpointOwnerUserId, 'checkpoint').catch(
+        () => undefined,
+      );
+    }
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
     checkpointStatusRef.current = 'idle';
@@ -450,7 +467,13 @@ export default function HomeScreen() {
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
     goHomeOperationGenerationRef.current += 1;
-    void clearPersistedGoHome(goHomeOwnerUserIdRef.current);
+    const goHomeOwnerUserId = goHomeOwnerUserIdRef.current;
+    void clearPersistedGoHome(goHomeOwnerUserId);
+    if (goHomeOwnerUserId) {
+      void SafetyExpirationService.cancel(goHomeOwnerUserId, 'go_home').catch(
+        () => undefined,
+      );
+    }
     goHomeOwnerUserIdRef.current = null;
     goHomeExpirationHandledRef.current = null;
     goHomeStatusRef.current = 'idle';
@@ -671,6 +694,7 @@ export default function HomeScreen() {
         });
       }
       if (restoredActiveEvent) {
+        void SafetyExpirationService.cancel(loadUserId).catch(() => undefined);
         if (storedCheckpoint) {
           void clearPersistedCheckpoint(loadUserId);
         }
@@ -684,6 +708,13 @@ export default function HomeScreen() {
         const expiresAtMs = Date.parse(storedCheckpoint.expiresAt);
         const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
         checkpointOwnerUserIdRef.current = loadUserId;
+        await SafetyExpirationService.ensure(
+          loadUserId,
+          'checkpoint',
+          storedCheckpoint.startedAt,
+          storedCheckpoint.expiresAt,
+          CHECKPOINT_CONFIRM_SECONDS,
+        );
         checkpointExpirationHandledRef.current = null;
         setCheckpointMinutes(storedCheckpoint.durationMinutes);
         setCheckpointExpiresAt(storedCheckpoint.expiresAt);
@@ -700,6 +731,13 @@ export default function HomeScreen() {
           Math.ceil((Date.parse(storedGoHome.expiresAt) - Date.now()) / 1000),
         );
         goHomeOwnerUserIdRef.current = loadUserId;
+        await SafetyExpirationService.ensure(
+          loadUserId,
+          'go_home',
+          storedGoHome.id,
+          storedGoHome.expiresAt,
+          GO_HOME_CONFIRM_SECONDS,
+        );
         goHomeExpirationHandledRef.current = null;
         setGoHomeSession(storedGoHome);
         setGoHomeTransportMode(storedGoHome.transportMode);
@@ -740,10 +778,16 @@ export default function HomeScreen() {
     const previousGoHomeUserId = goHomeOwnerUserIdRef.current;
     if (previousCheckpointUserId && previousCheckpointUserId !== userId) {
       void clearPersistedCheckpoint(previousCheckpointUserId);
+      void SafetyExpirationService.cancel(previousCheckpointUserId, 'checkpoint').catch(
+        () => undefined,
+      );
     }
     checkpointOwnerUserIdRef.current = null;
     if (previousGoHomeUserId && previousGoHomeUserId !== userId) {
       void clearPersistedGoHome(previousGoHomeUserId);
+      void SafetyExpirationService.cancel(previousGoHomeUserId, 'go_home').catch(
+        () => undefined,
+      );
     }
     goHomeOwnerUserIdRef.current = null;
     loadGenerationRef.current += 1;
@@ -880,7 +924,15 @@ export default function HomeScreen() {
         expiresAt,
         startedAt,
       });
+      await SafetyExpirationService.schedule(
+        userId,
+        'checkpoint',
+        startedAt,
+        expiresAt,
+        CHECKPOINT_CONFIRM_SECONDS,
+      );
     } catch {
+      await CheckpointStorage.clearActive(userId).catch(() => undefined);
       Alert.alert('Checkpoint', 'Non riesco a salvare il Checkpoint sul dispositivo. Riprova.');
       return false;
     }
@@ -892,6 +944,9 @@ export default function HomeScreen() {
       goHomeStatus !== 'idle'
     ) {
       void clearPersistedCheckpoint(userId);
+      void SafetyExpirationService.cancel(userId, 'checkpoint', startedAt).catch(
+        () => undefined,
+      );
       return false;
     }
 
@@ -937,7 +992,11 @@ export default function HomeScreen() {
   const cancelCheckpoint = useCallback(() => {
     checkpointOperationGenerationRef.current += 1;
     checkpointStartInFlightRef.current = false;
-    void clearPersistedCheckpoint(checkpointOwnerUserIdRef.current);
+    const ownerUserId = checkpointOwnerUserIdRef.current;
+    void clearPersistedCheckpoint(ownerUserId);
+    if (ownerUserId) {
+      void SafetyExpirationService.cancel(ownerUserId, 'checkpoint').catch(() => undefined);
+    }
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
     checkpointStatusRef.current = 'idle';
@@ -1037,7 +1096,11 @@ export default function HomeScreen() {
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
     goHomeOperationGenerationRef.current += 1;
-    void clearPersistedGoHome(goHomeOwnerUserIdRef.current);
+    const ownerUserId = goHomeOwnerUserIdRef.current;
+    void clearPersistedGoHome(ownerUserId);
+    if (ownerUserId) {
+      void SafetyExpirationService.cancel(ownerUserId, 'go_home').catch(() => undefined);
+    }
     goHomeOwnerUserIdRef.current = null;
     goHomeExpirationHandledRef.current = null;
     goHomeStatusRef.current = 'idle';
@@ -1222,7 +1285,15 @@ export default function HomeScreen() {
                   .then(() => undefined)
                   .catch(() => {});
                 await saveOperation;
+                await SafetyExpirationService.schedule(
+                  actionUserId,
+                  'go_home',
+                  session.id,
+                  expiresAt,
+                  GO_HOME_CONFIRM_SECONDS,
+                );
               } catch {
+                await GoHomeStorage.clearActive(actionUserId).catch(() => undefined);
                 if (
                   activeUserIdRef.current === actionUserId &&
                   goHomeOperationGenerationRef.current === operationGeneration
@@ -1244,6 +1315,11 @@ export default function HomeScreen() {
                 checkpointStatusRef.current !== 'idle'
               ) {
                 void clearPersistedGoHome(actionUserId);
+                void SafetyExpirationService.cancel(
+                  actionUserId,
+                  'go_home',
+                  session.id,
+                ).catch(() => undefined);
                 return;
               }
 
@@ -1430,6 +1506,26 @@ export default function HomeScreen() {
     const removeStartedListener = VoiceProtectionRuntime.onSOSExecutionStarted(
       (executionUserId) => {
         if (executionUserId === activeUserIdRef.current) {
+          checkpointOperationGenerationRef.current += 1;
+          checkpointStartInFlightRef.current = false;
+          checkpointOwnerUserIdRef.current = null;
+          checkpointExpirationHandledRef.current = null;
+          checkpointStatusRef.current = 'idle';
+          setCheckpointExpiresAt(null);
+          setCheckpointStatus('idle');
+          setCheckpointRemainingSeconds(0);
+          setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+          goHomeEstimateGenerationRef.current += 1;
+          goHomeEstimateInFlightRef.current = false;
+          goHomeOperationGenerationRef.current += 1;
+          goHomeOwnerUserIdRef.current = null;
+          goHomeExpirationHandledRef.current = null;
+          goHomeStatusRef.current = 'idle';
+          setGoHomeExpiresAt(null);
+          setGoHomeStatus('idle');
+          setGoHomeSession(null);
+          setGoHomeRemainingSeconds(0);
+          setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
           countdownCompletionHandledRef.current = true;
           countdownExpiresAtRef.current = null;
           setStatus('sending');
@@ -1623,6 +1719,7 @@ export default function HomeScreen() {
     const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
     if (remainingSeconds <= 0) {
       enterCheckpointConfirmation(checkpointExpiresAt);
+      if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
       return;
     }
     if (remainingSeconds !== checkpointRemainingSeconds) {
@@ -1643,6 +1740,7 @@ export default function HomeScreen() {
     checkpointRemainingSeconds,
     checkpointStatus,
     enterCheckpointConfirmation,
+    userId,
   ]);
 
   useEffect(() => {
@@ -1661,37 +1759,43 @@ export default function HomeScreen() {
       setCheckpointRemainingSeconds(remainingSeconds);
       if (remainingSeconds === 0) {
         enterCheckpointConfirmation(checkpointExpiresAt);
+        if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
       }
     });
     return () => subscription.remove();
-  }, [checkpointExpiresAt, enterCheckpointConfirmation]);
+  }, [checkpointExpiresAt, enterCheckpointConfirmation, userId]);
 
   useEffect(() => {
     if (checkpointStatus !== 'confirming') {
       return;
     }
 
+    const confirmationExpiresAtMs =
+      Date.parse(checkpointExpiresAt ?? '') + CHECKPOINT_CONFIRM_SECONDS * 1_000;
+    const nextConfirmSeconds = Math.max(
+      0,
+      Math.ceil((confirmationExpiresAtMs - Date.now()) / 1_000),
+    );
+    if (nextConfirmSeconds !== checkpointConfirmSeconds) {
+      setCheckpointConfirmSeconds(nextConfirmSeconds);
+    }
     if (checkpointConfirmSeconds <= 0) {
       const expiringUserId = checkpointOwnerUserIdRef.current;
-      cancelCheckpoint();
-      void checkpointStorageQueueRef.current.finally(() => {
-        if (
-          expiringUserId &&
-          activeUserIdRef.current === expiringUserId &&
-          statusRef.current === 'idle'
-        ) {
-          startSOSCountdown();
-        }
-      });
+      if (expiringUserId) {
+        void SafetyExpirationService.processDue(expiringUserId).catch(() => undefined);
+      }
       return;
     }
 
     const timeoutId = setTimeout(() => {
-      setCheckpointConfirmSeconds((current) => Math.max(0, current - 1));
+      setCheckpointConfirmSeconds(Math.max(
+        0,
+        Math.ceil((confirmationExpiresAtMs - Date.now()) / 1_000),
+      ));
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [cancelCheckpoint, checkpointConfirmSeconds, checkpointStatus, startSOSCountdown]);
+  }, [checkpointConfirmSeconds, checkpointExpiresAt, checkpointStatus]);
 
   useEffect(() => {
     if (goHomeStatus !== 'running' || !goHomeExpiresAt) {
@@ -1702,6 +1806,7 @@ export default function HomeScreen() {
     const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
     if (remainingSeconds <= 0) {
       enterGoHomeConfirmation(goHomeExpiresAt);
+      if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
       return;
     }
     if (remainingSeconds !== goHomeRemainingSeconds) {
@@ -1720,6 +1825,7 @@ export default function HomeScreen() {
     goHomeExpiresAt,
     goHomeRemainingSeconds,
     goHomeStatus,
+    userId,
   ]);
 
   useEffect(() => {
@@ -1738,38 +1844,43 @@ export default function HomeScreen() {
       setGoHomeRemainingSeconds(remainingSeconds);
       if (remainingSeconds === 0) {
         enterGoHomeConfirmation(goHomeExpiresAt);
+        if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
       }
     });
     return () => subscription.remove();
-  }, [enterGoHomeConfirmation, goHomeExpiresAt]);
+  }, [enterGoHomeConfirmation, goHomeExpiresAt, userId]);
 
   useEffect(() => {
     if (goHomeStatus !== 'confirming') {
       return;
     }
 
+    const confirmationExpiresAtMs =
+      Date.parse(goHomeExpiresAt ?? '') + GO_HOME_CONFIRM_SECONDS * 1_000;
+    const nextConfirmSeconds = Math.max(
+      0,
+      Math.ceil((confirmationExpiresAtMs - Date.now()) / 1_000),
+    );
+    if (nextConfirmSeconds !== goHomeConfirmSeconds) {
+      setGoHomeConfirmSeconds(nextConfirmSeconds);
+    }
     if (goHomeConfirmSeconds <= 0) {
       const expiringUserId = goHomeOwnerUserIdRef.current;
-      cancelGoHome();
-      void goHomeStorageQueueRef.current.finally(() => {
-        if (
-          expiringUserId &&
-          activeUserIdRef.current === expiringUserId &&
-          statusRef.current === 'idle' &&
-          checkpointStatusRef.current === 'idle'
-        ) {
-          startSOSCountdown();
-        }
-      });
+      if (expiringUserId) {
+        void SafetyExpirationService.processDue(expiringUserId).catch(() => undefined);
+      }
       return;
     }
 
     const timeoutId = setTimeout(() => {
-      setGoHomeConfirmSeconds((current) => Math.max(0, current - 1));
+      setGoHomeConfirmSeconds(Math.max(
+        0,
+        Math.ceil((confirmationExpiresAtMs - Date.now()) / 1_000),
+      ));
     }, 1000);
 
     return () => clearTimeout(timeoutId);
-  }, [cancelGoHome, goHomeConfirmSeconds, goHomeStatus, startSOSCountdown]);
+  }, [goHomeConfirmSeconds, goHomeExpiresAt, goHomeStatus]);
 
   const finishSOS = async (terminalStatus: SOSTerminalStatus) => {
     if (sosEndingInFlightRef.current || !activeEvent) {

@@ -3,6 +3,7 @@ import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Linking, Platform } from 'react-native';
 import BackgroundService from 'react-native-background-actions';
 
+import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import { SOSService } from '@/services/SOSService';
 import {
@@ -34,12 +35,12 @@ export type VoiceRecognitionReadiness =
 const normalizeLocale = (locale: string) => locale.replace('_', '-').toLowerCase();
 
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
+  let taskExpiresAtMs = taskData?.expiresAt
+    ? new Date(taskData.expiresAt).getTime()
+    : null;
   while (BackgroundService.isRunning()) {
-    const expiresAtMs = taskData?.expiresAt
-      ? new Date(taskData.expiresAt).getTime()
-      : null;
     const taskUserId = taskData?.userId ?? null;
-    if (expiresAtMs !== null && taskUserId && Date.now() >= expiresAtMs) {
+    if (taskExpiresAtMs !== null && taskUserId && Date.now() >= taskExpiresAtMs) {
       try {
         try {
           ExpoSpeechRecognitionModule.abort();
@@ -55,9 +56,8 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
         console.warn('[VoiceProtection] scadenza non salvata nello storage locale');
       } finally {
         VoiceProtectionRuntime.notifySettingsChanged(taskUserId);
-        await BackgroundService.stop().catch(() => {});
+        taskExpiresAtMs = null;
       }
-      break;
     }
 
     if (taskUserId && VoiceProtectionRuntime.claimDueSOS(taskUserId)) {
@@ -80,14 +80,35 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       continue;
     }
 
+    const safetyExpiration = taskUserId
+      ? await SafetyExpirationRuntime.processDue(taskUserId)
+      : { schedule: null, waitMs: TASK_MAX_SLEEP_MS };
+    const storedVoiceSettings = taskUserId
+      ? await VoiceProtectionStorage.get(taskUserId).catch(() => null)
+      : null;
+    const voiceStillEnabled =
+      storedVoiceSettings?.enabled === true &&
+      (storedVoiceSettings.expiresAt === null ||
+        Date.parse(storedVoiceSettings.expiresAt) > Date.now());
+    if (!voiceStillEnabled && !safetyExpiration.schedule) {
+      await BackgroundService.stop().catch(() => {});
+      break;
+    }
+
     const protectionWaitMs =
-      expiresAtMs === null ? TASK_MAX_SLEEP_MS : Math.max(0, expiresAtMs - Date.now());
-    const waitMs = taskUserId
+      taskExpiresAtMs === null
+        ? TASK_MAX_SLEEP_MS
+        : Math.max(0, taskExpiresAtMs - Date.now());
+    const voiceHasPendingSOS = taskUserId
+      ? VoiceProtectionRuntime.getScheduledSOS(taskUserId) !== null
+      : false;
+    const voiceWaitMs = taskUserId && (voiceStillEnabled || voiceHasPendingSOS)
       ? VoiceProtectionRuntime.getBackgroundWaitMs(
           taskUserId,
           Math.min(TASK_MAX_SLEEP_MS, protectionWaitMs),
         )
-      : Math.min(TASK_MAX_SLEEP_MS, protectionWaitMs);
+      : Number.POSITIVE_INFINITY;
+    const waitMs = Math.min(voiceWaitMs, safetyExpiration.waitMs);
     await VoiceProtectionRuntime.waitForBackgroundWake(waitMs);
   }
 };
@@ -203,7 +224,7 @@ export const VoiceProtectionService = {
         type: 'mipmap',
       },
       color: '#7868FF',
-      foregroundServiceType: ['microphone', 'location'],
+      foregroundServiceType: ['microphone', 'location', 'specialUse'],
       linkingURI: 'safemelink://voice-protection',
       parameters: {
         expiresAt,
@@ -218,15 +239,65 @@ export const VoiceProtectionService = {
     };
   },
 
+  async ensureSafetyMonitoring(userId: string) {
+    if (BackgroundService.isRunning() && activeTaskUserId === userId) {
+      VoiceProtectionRuntime.wakeBackgroundTask();
+      return;
+    }
+    if (BackgroundService.isRunning()) {
+      await BackgroundService.stop();
+    }
+    const voiceSettings = await VoiceProtectionStorage.get(userId).catch(() => null);
+    const voiceEnabled = voiceSettings?.enabled === true;
+    await BackgroundService.start<VoiceProtectionTaskData>(runVoiceProtectionTask, {
+      taskName: 'SafeMeLinkSafetyExpiration',
+      taskTitle: 'Controllo sicurezza attivo',
+      taskDesc: 'SafeMeLink controlla una scadenza di sicurezza.',
+      taskIcon: {
+        name: 'ic_launcher',
+        type: 'mipmap',
+      },
+      color: '#7868FF',
+      foregroundServiceType: voiceEnabled
+        ? ['microphone', 'location', 'specialUse']
+        : ['specialUse'],
+      linkingURI: 'safemelink://',
+      parameters: {
+        expiresAt: voiceEnabled ? voiceSettings.expiresAt : null,
+        userId,
+      },
+    });
+    activeTaskUserId = userId;
+  },
+
+  async releaseSafetyMonitoring(userId: string) {
+    if (activeTaskUserId !== userId) return;
+    const [safetySchedule, voiceSettings] = await Promise.all([
+      SafetyExpirationRuntime.get(userId),
+      VoiceProtectionStorage.get(userId).catch(() => null),
+    ]);
+    if (safetySchedule || voiceSettings?.enabled) {
+      VoiceProtectionRuntime.wakeBackgroundTask();
+      return;
+    }
+    if (BackgroundService.isRunning()) {
+      await BackgroundService.stop();
+    }
+    activeTaskUserId = null;
+  },
+
   async stop() {
     if (activeTaskUserId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }
     VoiceProtectionRuntime.wakeBackgroundTask();
-    if (BackgroundService.isRunning()) {
+    const safetySchedule = activeTaskUserId
+      ? await SafetyExpirationRuntime.get(activeTaskUserId).catch(() => null)
+      : null;
+    if (BackgroundService.isRunning() && !safetySchedule) {
       await BackgroundService.stop();
     }
-    activeTaskUserId = null;
+    if (!safetySchedule) activeTaskUserId = null;
   },
 
   async openBatterySettings() {

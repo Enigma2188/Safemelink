@@ -11,6 +11,7 @@ export type AccountStorageNamespace =
   | 'sos-events'
   | 'sos-network-location'
   | 'sos-live-location'
+  | 'safety-expiration'
   | 'sos-sms-consent'
   | 'sos-sms-dispatch'
   | 'trusted-contacts'

@@ -5,6 +5,7 @@ const REQUIRED_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MICROPHONE',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.RECORD_AUDIO',
   'android.permission.POST_NOTIFICATIONS',
 ];
@@ -50,7 +51,18 @@ module.exports = function withVoiceProtectionForegroundService(config) {
 
     service.$ ??= {};
     service.$['android:exported'] = 'false';
-    service.$['android:foregroundServiceType'] = 'microphone|location';
+    service.$['android:foregroundServiceType'] = 'microphone|location|specialUse';
+    service.property ??= [];
+    const specialUsePropertyName = 'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE';
+    let specialUseProperty = service.property.find(
+      (entry) => entry.$?.['android:name'] === specialUsePropertyName,
+    );
+    if (!specialUseProperty) {
+      specialUseProperty = { $: { 'android:name': specialUsePropertyName } };
+      service.property.push(specialUseProperty);
+    }
+    specialUseProperty.$['android:value'] =
+      'User-initiated safety deadlines for Checkpoint and Go Home';
 
     return androidConfig;
   });
