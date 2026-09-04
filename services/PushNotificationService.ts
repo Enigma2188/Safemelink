@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 import { AuthService } from '@/backend/auth/AuthService';
 import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository';
@@ -211,6 +211,29 @@ async function unregisterDeviceForUser(userId: string) {
 }
 
 export const PushNotificationService = {
+  async isSOSChannelSilenced() {
+    if (Platform.OS !== 'android') return false;
+    const channel = await runPushStepWithTimeout(
+      Notifications.getNotificationChannelAsync(SOS_NOTIFICATION_CHANNEL_ID),
+      PUSH_NATIVE_STEP_TIMEOUT_MS, 'verifica canale SOS',
+    );
+    return channel !== null && (channel.importance < Notifications.AndroidImportance.DEFAULT || !channel.sound);
+  },
+
+  async openSOSChannelSettings() {
+    const packageName = Constants.expoConfig?.android?.package;
+    if (Platform.OS === 'android' && packageName) {
+      try {
+        await Linking.sendIntent('android.settings.CHANNEL_NOTIFICATION_SETTINGS', [
+          { key: 'android.provider.extra.APP_PACKAGE', value: packageName },
+          { key: 'android.provider.extra.CHANNEL_ID', value: SOS_NOTIFICATION_CHANNEL_ID },
+        ]);
+        return;
+      } catch { console.warn('[SafeMeLink Push] Impostazioni canale non disponibili.'); }
+    }
+    await Linking.openSettings();
+  },
+
   registerDeviceForUser(userId: string) {
     const existingRequest = registrationsByUser.get(userId);
 

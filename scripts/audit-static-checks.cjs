@@ -1168,7 +1168,9 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
 
 check('Voice SOS can use only a fresh accurate account-scoped network location fallback', () => {
   assert.match(homeScreen, /startSOSCountdown\('voice', scheduledSOS\?\.expiresAt\)/);
-  assert.match(homeScreen, /allowRecentNetworkLocation: sosTriggerSourceRef\.current === 'voice'/);
+  assert.match(homeScreen, /SafetyExpirationService\.startManual\(actionUserId, deadline\)/);
+  assert.match(safetyExpirationRuntime, /allowRecentNetworkLocation: true/);
+  assert.doesNotMatch(homeScreen, /SOSService\.completeSOS\(/);
   assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS = 10 \* 60 \* 1_000/);
   assert.match(locationService, /SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS = 100/);
   assert.match(locationService, /cachedAgeMs >= 0/);

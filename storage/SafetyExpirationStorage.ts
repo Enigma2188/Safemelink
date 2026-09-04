@@ -1,10 +1,16 @@
-import {
-  getAccountStorageItem,
-  removeAccountStorageItem,
-  setAccountStorageItem,
-} from '@/storage/AccountScopedStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAccountStorageKey } from '@/storage/AccountScopedStorage';
 
-export type SafetyExpirationKind = 'checkpoint' | 'go_home';
+// Keep native operations ordered even when a caller times out. A late write
+// cannot overtake a later rollback/cancellation and resurrect an old schedule.
+let nativeQueue: Promise<unknown> = Promise.resolve();
+const ordered = <T>(operation: () => Promise<T>) => {
+  const result = nativeQueue.then(operation, operation);
+  nativeQueue = result.then(() => undefined, () => undefined);
+  return result;
+};
+
+export type SafetyExpirationKind = 'checkpoint' | 'go_home' | 'manual_sos';
 export type SafetyExpirationPhase = 'waiting' | 'confirming' | 'executing' | 'failed';
 
 export type SafetyExpirationSchedule = {
@@ -21,19 +27,19 @@ const isSchedule = (value: unknown): value is SafetyExpirationSchedule => {
   const expiresAt = Date.parse(candidate.expiresAt ?? '');
   const confirmationExpiresAt = Date.parse(candidate.confirmationExpiresAt ?? '');
   return (
-    (candidate.kind === 'checkpoint' || candidate.kind === 'go_home') &&
+    (candidate.kind === 'checkpoint' || candidate.kind === 'go_home' || candidate.kind === 'manual_sos') &&
     typeof candidate.sessionId === 'string' &&
     candidate.sessionId.length > 0 &&
     ['waiting', 'confirming', 'executing', 'failed'].includes(candidate.phase ?? '') &&
     Number.isFinite(expiresAt) &&
     Number.isFinite(confirmationExpiresAt) &&
-    confirmationExpiresAt > expiresAt
+    confirmationExpiresAt >= expiresAt
   );
 };
 
 export const SafetyExpirationStorage = {
   async get(userId: string): Promise<SafetyExpirationSchedule | null> {
-    const raw = await getAccountStorageItem(userId, 'safety-expiration', []);
+    const raw = await ordered(() => AsyncStorage.getItem(getAccountStorageKey(userId, 'safety-expiration')));
     if (!raw) return null;
     try {
       const parsed: unknown = JSON.parse(raw);
@@ -44,10 +50,10 @@ export const SafetyExpirationStorage = {
   },
 
   save(userId: string, schedule: SafetyExpirationSchedule) {
-    return setAccountStorageItem(userId, 'safety-expiration', JSON.stringify(schedule), []);
+    return ordered(() => AsyncStorage.setItem(getAccountStorageKey(userId, 'safety-expiration'), JSON.stringify(schedule)));
   },
 
   clear(userId: string) {
-    return removeAccountStorageItem(userId, 'safety-expiration');
+    return ordered(() => AsyncStorage.removeItem(getAccountStorageKey(userId, 'safety-expiration')));
   },
 };

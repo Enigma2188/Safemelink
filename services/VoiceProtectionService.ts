@@ -4,6 +4,7 @@ import { Linking, Platform } from 'react-native';
 import BackgroundService from 'react-native-background-actions';
 
 import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
+import { reportSafetyError, withSafetyTimeout } from '@/services/SafetyOperation';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import { SOSService } from '@/services/SOSService';
 import {
@@ -14,10 +15,29 @@ import {
 const TASK_MAX_SLEEP_MS = 60_000;
 const RECOGNITION_READINESS_TIMEOUT_MS = 5_000;
 let activeTaskUserId: string | null = null;
+let serviceQueue: Promise<unknown> = Promise.resolve();
+let taskStartGate: Promise<void> = Promise.resolve();
+let signalTaskReady = () => {};
+let signalTaskExited = () => {};
+let taskExited: Promise<void> = Promise.resolve();
+let nativeStartUnsettled = false;
+const serializeService = <T>(operation: () => Promise<T>) => {
+  const result = serviceQueue.then(operation, operation);
+  serviceQueue = result.then(() => undefined, () => undefined);
+  return result;
+};
+const stopNativeTask = async () => {
+  await withSafetyTimeout(BackgroundService.stop(), 'service_stop');
+  VoiceProtectionRuntime.wakeBackgroundTask();
+  await withSafetyTimeout(taskExited, 'task_stop');
+  // Allow the library's automatic stop continuation to finish before replacement.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+};
 
 type VoiceProtectionTaskData = {
   expiresAt: string | null;
   userId: string;
+  voiceRequested?: boolean;
 };
 
 export type VoiceProtectionPermissionState = {
@@ -35,6 +55,13 @@ export type VoiceRecognitionReadiness =
 const normalizeLocale = (locale: string) => locale.replace('_', '-').toLowerCase();
 
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
+  const exitTask = signalTaskExited;
+  const ready = signalTaskReady;
+  await taskStartGate;
+  ready();
+  const voiceStartupUntil = Date.now() + 15_000;
+  let transitionFailures = 0;
+  try {
   let taskExpiresAtMs = taskData?.expiresAt
     ? new Date(taskData.expiresAt).getTime()
     : null;
@@ -45,13 +72,13 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
         try {
           ExpoSpeechRecognitionModule.abort();
         } catch {}
-        const storedSettings = await VoiceProtectionStorage.get(taskUserId);
-        await VoiceProtectionStorage.save(taskUserId, {
+        const storedSettings = await withSafetyTimeout(VoiceProtectionStorage.get(taskUserId), 'voice_settings');
+        await withSafetyTimeout(VoiceProtectionStorage.save(taskUserId, {
           ...storedSettings,
           enabled: false,
           enabledAt: null,
           expiresAt: null,
-        });
+        }), 'voice_expiry');
       } catch {
         console.warn('[VoiceProtection] scadenza non salvata nello storage locale');
       } finally {
@@ -80,18 +107,29 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       continue;
     }
 
-    const safetyExpiration = taskUserId
-      ? await SafetyExpirationRuntime.processDue(taskUserId)
-      : { schedule: null, waitMs: TASK_MAX_SLEEP_MS };
+    let safetyExpiration;
+    try {
+      safetyExpiration = taskUserId
+        ? await SafetyExpirationRuntime.processDue(taskUserId)
+        : { schedule: null, waitMs: TASK_MAX_SLEEP_MS };
+      transitionFailures = 0;
+    } catch {
+      reportSafetyError('background_transition');
+      transitionFailures += 1;
+      await VoiceProtectionRuntime.waitForBackgroundWake(
+        transitionFailures <= 3 ? 30_000 * transitionFailures : 24 * 60 * 60 * 1_000,
+      );
+      continue;
+    }
     const storedVoiceSettings = taskUserId
-      ? await VoiceProtectionStorage.get(taskUserId).catch(() => null)
+      ? await withSafetyTimeout(VoiceProtectionStorage.get(taskUserId), 'voice_settings').catch(() => null)
       : null;
-    const voiceStillEnabled =
+    const voiceStillEnabled = (taskData?.voiceRequested === true && Date.now() < voiceStartupUntil) || (
       storedVoiceSettings?.enabled === true &&
       (storedVoiceSettings.expiresAt === null ||
-        Date.parse(storedVoiceSettings.expiresAt) > Date.now());
-    if (!voiceStillEnabled && !safetyExpiration.schedule) {
-      await BackgroundService.stop().catch(() => {});
+        Date.parse(storedVoiceSettings.expiresAt) > Date.now()));
+    if (!voiceStillEnabled && !safetyExpiration.schedule && !VoiceProtectionRuntime.getScheduledSOS(taskUserId ?? '')) {
+      await withSafetyTimeout(BackgroundService.stop(), 'idle_service_stop').catch(() => reportSafetyError('idle_service_stop'));
       break;
     }
 
@@ -110,6 +148,39 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
       : Number.POSITIVE_INFINITY;
     const waitMs = Math.min(voiceWaitMs, safetyExpiration.waitMs);
     await VoiceProtectionRuntime.waitForBackgroundWake(waitMs);
+  }
+  } finally {
+    exitTask();
+  }
+};
+
+const startNativeTask = async (
+  options: Parameters<typeof BackgroundService.start<VoiceProtectionTaskData>>[1],
+) => {
+  if (nativeStartUnsettled) throw new Error('Avvio precedente ancora in verifica. Riprova.');
+  let releaseStart = () => {};
+  taskStartGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  const ready = new Promise<void>((resolve) => { signalTaskReady = resolve; });
+  taskExited = new Promise<void>((resolve) => { signalTaskExited = resolve; });
+  let abandoned = false;
+  nativeStartUnsettled = true;
+  const nativeStart = BackgroundService.start<VoiceProtectionTaskData>(runVoiceProtectionTask, options);
+  void nativeStart.then(async () => {
+    if (abandoned) {
+      await withSafetyTimeout(BackgroundService.stop(), 'late_start_cleanup').catch(() => reportSafetyError('late_start_cleanup'));
+      VoiceProtectionRuntime.wakeBackgroundTask();
+    }
+  }, () => undefined).finally(() => { nativeStartUnsettled = false; });
+  try {
+    await withSafetyTimeout(nativeStart, 'service_start', 15_000);
+    releaseStart();
+    await withSafetyTimeout(ready, 'task_ready', 8_000);
+  } catch (error) {
+    abandoned = true;
+    releaseStart();
+    await withSafetyTimeout(BackgroundService.stop(), 'start_cleanup').catch(() => reportSafetyError('start_cleanup'));
+    VoiceProtectionRuntime.wakeBackgroundTask();
+    throw error;
   }
 };
 
@@ -203,19 +274,20 @@ export const VoiceProtectionService = {
   },
 
   async start(userId: string, durationMinutes: VoiceProtectionDurationMinutes) {
+    return serializeService(async () => {
     if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
       throw new Error('Protezione Vocale è disponibile soltanto su Android e iOS.');
     }
 
     if (BackgroundService.isRunning()) {
-      await BackgroundService.stop();
+      await stopNativeTask();
     }
     if (activeTaskUserId && activeTaskUserId !== userId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }
 
     const expiresAt = calculateExpiresAt(durationMinutes);
-    await BackgroundService.start<VoiceProtectionTaskData>(runVoiceProtectionTask, {
+    await startNativeTask({
       taskName: 'SafeMeLinkVoiceProtection',
       taskTitle: 'Protezione Vocale attiva',
       taskDesc: 'SafeMeLink mantiene pronta la protezione locale.',
@@ -229,6 +301,7 @@ export const VoiceProtectionService = {
       parameters: {
         expiresAt,
         userId,
+        voiceRequested: true,
       },
     });
     activeTaskUserId = userId;
@@ -237,19 +310,21 @@ export const VoiceProtectionService = {
       enabledAt: new Date().toISOString(),
       expiresAt,
     };
+    });
   },
 
   async ensureSafetyMonitoring(userId: string) {
+    return serializeService(async () => {
     if (BackgroundService.isRunning() && activeTaskUserId === userId) {
       VoiceProtectionRuntime.wakeBackgroundTask();
       return;
     }
     if (BackgroundService.isRunning()) {
-      await BackgroundService.stop();
+      await stopNativeTask();
     }
-    const voiceSettings = await VoiceProtectionStorage.get(userId).catch(() => null);
+    const voiceSettings = await withSafetyTimeout(VoiceProtectionStorage.get(userId), 'voice_settings');
     const voiceEnabled = voiceSettings?.enabled === true;
-    await BackgroundService.start<VoiceProtectionTaskData>(runVoiceProtectionTask, {
+    await startNativeTask({
       taskName: 'SafeMeLinkSafetyExpiration',
       taskTitle: 'Controllo sicurezza attivo',
       taskDesc: 'SafeMeLink controlla una scadenza di sicurezza.',
@@ -268,25 +343,29 @@ export const VoiceProtectionService = {
       },
     });
     activeTaskUserId = userId;
+    });
   },
 
   async releaseSafetyMonitoring(userId: string) {
+    return serializeService(async () => {
     if (activeTaskUserId !== userId) return;
     const [safetySchedule, voiceSettings] = await Promise.all([
       SafetyExpirationRuntime.get(userId),
-      VoiceProtectionStorage.get(userId).catch(() => null),
+      withSafetyTimeout(VoiceProtectionStorage.get(userId), 'voice_settings'),
     ]);
     if (safetySchedule || voiceSettings?.enabled) {
       VoiceProtectionRuntime.wakeBackgroundTask();
       return;
     }
     if (BackgroundService.isRunning()) {
-      await BackgroundService.stop();
+      await stopNativeTask();
     }
     activeTaskUserId = null;
+    });
   },
 
   async stop() {
+    return serializeService(async () => {
     if (activeTaskUserId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }
@@ -295,9 +374,10 @@ export const VoiceProtectionService = {
       ? await SafetyExpirationRuntime.get(activeTaskUserId).catch(() => null)
       : null;
     if (BackgroundService.isRunning() && !safetySchedule) {
-      await BackgroundService.stop();
+      await stopNativeTask();
     }
     if (!safetySchedule) activeTaskUserId = null;
+    });
   },
 
   async openBatterySettings() {

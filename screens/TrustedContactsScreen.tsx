@@ -743,6 +743,9 @@ export function TrustedContactsScreen() {
           <View style={styles.smsConsentCopy}>
             <Text style={styles.sectionTitle}>SMS automatici di emergenza</Text>
             <Text style={styles.sectionHelp}>
+              {smsAuthorizationPending ? 'Verifica in corso…' : smsConsent && smsPermission ? 'Stato: attivi' : 'Stato: non attivi'}
+            </Text>
+            <Text style={styles.sectionHelp}>
               Con il tuo consenso, SafeMeLink invia direttamente un SMS ai numeri fidati quando parte un SOS.
             </Text>
             {!smsSupported ? (

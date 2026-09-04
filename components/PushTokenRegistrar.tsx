@@ -13,6 +13,7 @@ const MAX_AUTOMATIC_RETRY_ATTEMPTS = 5;
 export function PushTokenRegistrar() {
   const { isOffline, session } = useAuth();
   const permissionAlertShownForUser = useRef(new Set<string>());
+  const channelAlertShown = useRef(false);
 
   useEffect(() => {
     const userId = session?.user.id;
@@ -74,6 +75,17 @@ export function PushTokenRegistrar() {
 
         if (token) {
           retryAttempt = 0;
+          void PushNotificationService.isSOSChannelSilenced().then((silenced) => {
+            if (!isCurrent || !silenced || channelAlertShown.current) return;
+            channelAlertShown.current = true;
+            Alert.alert('Avvisi SOS silenziati',
+              'Il canale SOS non ha un avviso sonoro attivo. Puoi verificarlo nelle impostazioni Android. Non disturbare e modalità silenziosa restano rispettati.', [
+                { text: 'Non ora', style: 'cancel' },
+                { text: 'Apri impostazioni', onPress: () => {
+                  void PushNotificationService.openSOSChannelSettings().catch(() => console.warn('[SafeMeLink Push] Apertura impostazioni non riuscita.'));
+                } },
+              ]);
+          }).catch(() => console.warn('[SafeMeLink Push] Stato canale non verificabile.'));
           console.log('[SafeMeLink Push] Registrazione dispositivo verificata.', {
             reason,
           });

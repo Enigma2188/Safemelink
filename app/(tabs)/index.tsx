@@ -26,6 +26,8 @@ import {
 } from '@/services/SOSLifecycleService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
 import { SafetyExpirationService } from '@/services/SafetyExpirationService';
+import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
+import { getSafetyErrorMessage, reportSafetyError, withSafetyTimeout } from '@/services/SafetyOperation';
 import {
   VoiceProtectionRuntime,
   VOICE_SOS_COUNTDOWN_MS,
@@ -113,7 +115,7 @@ const getSOSDeliveryNotice = (
   }
 
   if (result.reason === 'rate_limited') {
-    return `SOS attivo. L’invio SafeMeLink è temporaneamente limitato per sicurezza. ${fallbackNotice}`;
+    return `SOS attivo. Le notifiche SafeMeLink sono temporaneamente limitate: massimo 3 invii in 5 minuti. Gli SMS restano indipendenti. ${fallbackNotice}`;
   }
 
   if (result.reason === 'already_dispatched') {
@@ -264,6 +266,9 @@ export default function HomeScreen() {
   const isHomeFocused = useIsFocused();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
+  const [safetyError, setSafetyError] = useState('');
+  const safetyOwnerRef = useRef<string | null>(null);
+  const manualArmRef = useRef<Promise<unknown> | null>(null);
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
   const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
   const [pushDeliveryNotice, setPushDeliveryNotice] = useState<string | null>(null);
@@ -454,7 +459,7 @@ export default function HomeScreen() {
     void clearPersistedCheckpoint(checkpointOwnerUserId);
     if (checkpointOwnerUserId) {
       void SafetyExpirationService.cancel(checkpointOwnerUserId, 'checkpoint').catch(
-        () => undefined,
+        () => reportSafetyError('checkpoint_superseded'),
       );
     }
     checkpointOwnerUserIdRef.current = null;
@@ -471,7 +476,7 @@ export default function HomeScreen() {
     void clearPersistedGoHome(goHomeOwnerUserId);
     if (goHomeOwnerUserId) {
       void SafetyExpirationService.cancel(goHomeOwnerUserId, 'go_home').catch(
-        () => undefined,
+        () => reportSafetyError('go_home_superseded'),
       );
     }
     goHomeOwnerUserIdRef.current = null;
@@ -494,6 +499,22 @@ export default function HomeScreen() {
     setActiveEvent(null);
     setPushDeliveryNotice(null);
     setStatus('countdown');
+    setSafetyError('');
+    if (source === 'manual' && activeUserIdRef.current) {
+      const actionUserId = activeUserIdRef.current;
+      const deadline = new Date(countdownExpiresAtRef.current).toISOString();
+      const arm = SafetyExpirationService.startManual(actionUserId, deadline);
+      manualArmRef.current = arm;
+      void arm.catch(() => {
+        reportSafetyError('manual_arm');
+        if (activeUserIdRef.current === actionUserId && statusRef.current === 'countdown') {
+          setSafetyError('Impossibile avviare il controllo in background. Riprova.');
+          statusRef.current = 'idle';
+          setStatus('idle');
+          Alert.alert('SOS non avviato', 'Il controllo in background non è partito. Riprova mantenendo l’app aperta.');
+        }
+      });
+    }
   }, [clearPersistedCheckpoint, clearPersistedGoHome]);
 
   useEffect(
@@ -694,7 +715,7 @@ export default function HomeScreen() {
         });
       }
       if (restoredActiveEvent) {
-        void SafetyExpirationService.cancel(loadUserId).catch(() => undefined);
+        void SafetyExpirationService.cancel(loadUserId).catch(() => reportSafetyError('active_sos_cleanup'));
         if (storedCheckpoint) {
           void clearPersistedCheckpoint(loadUserId);
         }
@@ -708,13 +729,15 @@ export default function HomeScreen() {
         const expiresAtMs = Date.parse(storedCheckpoint.expiresAt);
         const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
         checkpointOwnerUserIdRef.current = loadUserId;
-        await SafetyExpirationService.ensure(
+        const restoredSchedule = await SafetyExpirationService.ensure(
           loadUserId,
           'checkpoint',
           storedCheckpoint.startedAt,
           storedCheckpoint.expiresAt,
           CHECKPOINT_CONFIRM_SECONDS,
         );
+        if (activeUserIdRef.current !== loadUserId || loadGenerationRef.current !== loadGeneration ||
+          restoredSchedule.phase === 'executing' || restoredSchedule.phase === 'failed') return;
         checkpointExpirationHandledRef.current = null;
         setCheckpointMinutes(storedCheckpoint.durationMinutes);
         setCheckpointExpiresAt(storedCheckpoint.expiresAt);
@@ -731,13 +754,15 @@ export default function HomeScreen() {
           Math.ceil((Date.parse(storedGoHome.expiresAt) - Date.now()) / 1000),
         );
         goHomeOwnerUserIdRef.current = loadUserId;
-        await SafetyExpirationService.ensure(
+        const restoredSchedule = await SafetyExpirationService.ensure(
           loadUserId,
           'go_home',
           storedGoHome.id,
           storedGoHome.expiresAt,
           GO_HOME_CONFIRM_SECONDS,
         );
+        if (activeUserIdRef.current !== loadUserId || loadGenerationRef.current !== loadGeneration ||
+          restoredSchedule.phase === 'executing' || restoredSchedule.phase === 'failed') return;
         goHomeExpirationHandledRef.current = null;
         setGoHomeSession(storedGoHome);
         setGoHomeTransportMode(storedGoHome.transportMode);
@@ -774,19 +799,24 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
+    const previousSafetyOwner = safetyOwnerRef.current;
+    safetyOwnerRef.current = userId;
+    if (previousSafetyOwner && previousSafetyOwner !== userId) {
+      void SafetyExpirationService.cancel(previousSafetyOwner).catch(() => reportSafetyError('account_cleanup'));
+    }
     const previousCheckpointUserId = checkpointOwnerUserIdRef.current;
     const previousGoHomeUserId = goHomeOwnerUserIdRef.current;
     if (previousCheckpointUserId && previousCheckpointUserId !== userId) {
       void clearPersistedCheckpoint(previousCheckpointUserId);
       void SafetyExpirationService.cancel(previousCheckpointUserId, 'checkpoint').catch(
-        () => undefined,
+        () => reportSafetyError('checkpoint_account_cleanup'),
       );
     }
     checkpointOwnerUserIdRef.current = null;
     if (previousGoHomeUserId && previousGoHomeUserId !== userId) {
       void clearPersistedGoHome(previousGoHomeUserId);
       void SafetyExpirationService.cancel(previousGoHomeUserId, 'go_home').catch(
-        () => undefined,
+        () => reportSafetyError('go_home_account_cleanup'),
       );
     }
     goHomeOwnerUserIdRef.current = null;
@@ -859,6 +889,12 @@ export default function HomeScreen() {
         }
 
         if (status === 'countdown') {
+          if (userId) {
+            VoiceProtectionRuntime.cancelScheduledSOS(userId);
+            void SafetyExpirationService.cancel(userId, 'manual_sos').catch(() => reportSafetyError('manual_cancel'));
+          }
+          countdownExpiresAtRef.current = null;
+          statusRef.current = 'idle';
           setRemainingSeconds(SAFETY_TIMER_SECONDS);
           setStatus('idle');
           return true;
@@ -868,13 +904,24 @@ export default function HomeScreen() {
       });
 
       return () => backSubscription.remove();
-    }, [activePanel, drawerVisible, goHomeStatus, status]),
+    }, [activePanel, drawerVisible, goHomeStatus, status, userId]),
   );
 
   const cancelSOS = () => {
     if (userId) {
       VoiceProtectionRuntime.cancelScheduledSOS(userId);
+      void SafetyExpirationService.cancel(userId, 'manual_sos').then((cancelled) => {
+        if (!cancelled && activeUserIdRef.current === userId) {
+          statusRef.current = 'sending';
+          setStatus('sending');
+          setSafetyError('L’invio SOS è già iniziato. Attendi l’esito prima di disattivarlo.');
+        }
+      }).catch(() => {
+        reportSafetyError('manual_cancel');
+        setSafetyError('Annullamento non confermato. Verifica lo stato dell’SOS.');
+      });
     }
+    statusRef.current = 'idle';
     sosTriggerSourceRef.current = 'manual';
     countdownExpiresAtRef.current = null;
     countdownCompletionHandledRef.current = false;
@@ -911,19 +958,24 @@ export default function HomeScreen() {
     const expiresAt = new Date(startedAtMs + minutes * 60_000).toISOString();
 
     try {
-      await checkpointStorageQueueRef.current.catch(() => {});
+      await withSafetyTimeout(checkpointStorageQueueRef.current, 'checkpoint_storage_queue');
       if (
         checkpointOperationGenerationRef.current !== operationGeneration ||
         activeUserIdRef.current !== userId
       ) {
         return false;
       }
-      await CheckpointStorage.saveActive(userId, {
+      const notificationsReady = await SafetyExpirationService.configureNotifications();
+      if (checkpointOperationGenerationRef.current !== operationGeneration || activeUserIdRef.current !== userId) return false;
+      if (!notificationsReady) setSafetyError('Avvisi sonori non disponibili. Controlla le notifiche nelle impostazioni Android.');
+      const saveOperation = checkpointStorageQueueRef.current.then(() => CheckpointStorage.saveActive(userId, {
         active: true,
         durationMinutes: minutes,
         expiresAt,
         startedAt,
-      });
+      }));
+      checkpointStorageQueueRef.current = saveOperation.catch(() => reportSafetyError('checkpoint_storage'));
+      await withSafetyTimeout(saveOperation, 'checkpoint_storage');
       await SafetyExpirationService.schedule(
         userId,
         'checkpoint',
@@ -931,9 +983,10 @@ export default function HomeScreen() {
         expiresAt,
         CHECKPOINT_CONFIRM_SECONDS,
       );
-    } catch {
-      await CheckpointStorage.clearActive(userId).catch(() => undefined);
-      Alert.alert('Checkpoint', 'Non riesco a salvare il Checkpoint sul dispositivo. Riprova.');
+    } catch (error) {
+      await SafetyExpirationService.cancel(userId, 'checkpoint', startedAt).catch(() => reportSafetyError('checkpoint_rollback'));
+      await withSafetyTimeout(clearPersistedCheckpoint(userId), 'checkpoint_cleanup').catch(() => reportSafetyError('checkpoint_cleanup'));
+      Alert.alert('Checkpoint', getSafetyErrorMessage(error));
       return false;
     }
 
@@ -945,7 +998,7 @@ export default function HomeScreen() {
     ) {
       void clearPersistedCheckpoint(userId);
       void SafetyExpirationService.cancel(userId, 'checkpoint', startedAt).catch(
-        () => undefined,
+        () => reportSafetyError('checkpoint_stale_cleanup'),
       );
       return false;
     }
@@ -995,7 +1048,7 @@ export default function HomeScreen() {
     const ownerUserId = checkpointOwnerUserIdRef.current;
     void clearPersistedCheckpoint(ownerUserId);
     if (ownerUserId) {
-      void SafetyExpirationService.cancel(ownerUserId, 'checkpoint').catch(() => undefined);
+      void SafetyExpirationService.cancel(ownerUserId, 'checkpoint').catch(() => { reportSafetyError('checkpoint_cancel'); setSafetyError('Annullamento non confermato. Riprova.'); });
     }
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
@@ -1013,13 +1066,13 @@ export default function HomeScreen() {
       return;
     }
 
+    cancelCheckpoint();
     try {
-      await CheckpointStorage.saveCompleted(userId, checkpointMinutes);
+      await withSafetyTimeout(CheckpointStorage.saveCompleted(userId, checkpointMinutes), 'checkpoint_history');
     } catch {
       Alert.alert('Checkpoint', 'Checkpoint completato, ma non riesco a salvarlo sul dispositivo.');
     }
 
-    cancelCheckpoint();
   };
 
   const captureCurrentLocationAsHome = async () => {
@@ -1099,7 +1152,7 @@ export default function HomeScreen() {
     const ownerUserId = goHomeOwnerUserIdRef.current;
     void clearPersistedGoHome(ownerUserId);
     if (ownerUserId) {
-      void SafetyExpirationService.cancel(ownerUserId, 'go_home').catch(() => undefined);
+      void SafetyExpirationService.cancel(ownerUserId, 'go_home').catch(() => { reportSafetyError('go_home_cancel'); setSafetyError('Annullamento non confermato. Riprova.'); });
     }
     goHomeOwnerUserIdRef.current = null;
     goHomeExpirationHandledRef.current = null;
@@ -1284,7 +1337,9 @@ export default function HomeScreen() {
                 goHomeStorageQueueRef.current = saveOperation
                   .then(() => undefined)
                   .catch(() => {});
-                await saveOperation;
+                const notificationsReady = await SafetyExpirationService.configureNotifications();
+                if (!notificationsReady) setSafetyError('Avvisi sonori non disponibili. Controlla le notifiche nelle impostazioni Android.');
+                await withSafetyTimeout(saveOperation, 'go_home_storage');
                 await SafetyExpirationService.schedule(
                   actionUserId,
                   'go_home',
@@ -1292,15 +1347,16 @@ export default function HomeScreen() {
                   expiresAt,
                   GO_HOME_CONFIRM_SECONDS,
                 );
-              } catch {
-                await GoHomeStorage.clearActive(actionUserId).catch(() => undefined);
+              } catch (error) {
+                await SafetyExpirationService.cancel(actionUserId, 'go_home', session.id).catch(() => reportSafetyError('go_home_rollback'));
+                await withSafetyTimeout(clearPersistedGoHome(actionUserId), 'go_home_cleanup').catch(() => reportSafetyError('go_home_cleanup'));
                 if (
                   activeUserIdRef.current === actionUserId &&
                   goHomeOperationGenerationRef.current === operationGeneration
                 ) {
                   Alert.alert(
                     'Torno a casa',
-                    'Non riesco a salvare la sessione sul dispositivo. Riprova.',
+                    getSafetyErrorMessage(error),
                   );
                   setGoHomeStatus('idle');
                 }
@@ -1319,7 +1375,7 @@ export default function HomeScreen() {
                   actionUserId,
                   'go_home',
                   session.id,
-                ).catch(() => undefined);
+                ).catch(() => reportSafetyError('go_home_stale_cleanup'));
                 return;
               }
 
@@ -1415,13 +1471,13 @@ export default function HomeScreen() {
       return;
     }
 
+    cancelGoHome();
     try {
-      await GoHomeStorage.saveCompleted(userId, goHomeSession);
+      await withSafetyTimeout(GoHomeStorage.saveCompleted(userId, goHomeSession), 'go_home_history');
     } catch {
       Alert.alert('Torno a casa', 'Arrivo confermato, ma non riesco a salvarlo sul dispositivo.');
     }
 
-    cancelGoHome();
   };
 
   const applySOSCompletion = useCallback((
@@ -1459,53 +1515,91 @@ export default function HomeScreen() {
       return;
     }
 
-    const actionUserId = userId;
-    if (
-      sosTriggerSourceRef.current === 'voice' &&
-      !VoiceProtectionRuntime.cancelScheduledSOS(actionUserId)
-    ) {
+    if (sosTriggerSourceRef.current === 'voice') {
+      VoiceProtectionRuntime.expediteScheduledSOS(userId);
       return;
     }
-    countdownCompletionHandledRef.current = true;
-    countdownExpiresAtRef.current = null;
     sosCompletionInFlightRef.current = true;
-    setStatus('sending');
-
     try {
-      const result = await SOSService.completeSOS(actionUserId, {
-        allowRemoteDelivery: !isOffline,
-        allowRecentNetworkLocation: sosTriggerSourceRef.current === 'voice',
-      });
-
-      applySOSCompletion(result, actionUserId);
-    } catch (error) {
-      if (activeUserIdRef.current === actionUserId) {
-        setStatus('idle');
-        Alert.alert(
-          'SOS non inviato',
-          error instanceof Error ? error.message : 'Errore inatteso.',
-          [
-            { text: 'Annulla', style: 'cancel' },
-            {
-              text: 'Riprova',
-              onPress: () => {
-                if (activeUserIdRef.current === actionUserId) {
-                  void completeSOS();
-                }
-              },
-            },
-          ],
-        );
+      await manualArmRef.current;
+      if (activeUserIdRef.current === userId && statusRef.current === 'countdown') {
+        await SafetyExpirationService.expedite(userId);
       }
+    } catch {
+      reportSafetyError('manual_expedite');
+      if (activeUserIdRef.current === userId) setSafetyError('Avvio SOS non confermato. Riprova o annulla.');
     } finally {
       sosCompletionInFlightRef.current = false;
     }
-  }, [applySOSCompletion, isOffline, userId]);
+  }, [userId]);
+
+  useEffect(() => {
+    const removeError = SafetyExpirationRuntime.onError((owner) => {
+      if (owner === activeUserIdRef.current) {
+        setSafetyError('Controllo non completato. Riprova oppure conferma che stai bene.');
+      }
+    });
+    const removePhase = SafetyExpirationRuntime.onPhaseChanged((owner, schedule) => {
+      if (owner !== activeUserIdRef.current) return;
+      if (schedule?.phase === 'failed') {
+        setSafetyError('SOS non completato. Verifica lo stato e riprova dalla Home.');
+        checkpointStatusRef.current = 'idle';
+        goHomeStatusRef.current = 'idle';
+        setCheckpointStatus('idle');
+        setGoHomeStatus('idle');
+        return;
+      }
+      if (!schedule) {
+        if (checkpointStatusRef.current === 'confirming') {
+          checkpointStatusRef.current = 'idle';
+          setCheckpointStatus('idle');
+        }
+        if (goHomeStatusRef.current === 'confirming') {
+          goHomeStatusRef.current = 'idle';
+          setGoHomeStatus('idle');
+        }
+        return;
+      }
+      if (schedule.phase === 'executing') {
+        statusRef.current = 'sending';
+        setStatus('sending');
+        checkpointStatusRef.current = 'idle';
+        goHomeStatusRef.current = 'idle';
+        setCheckpointStatus('idle');
+        setGoHomeStatus('idle');
+      } else if (schedule.kind === 'manual_sos') {
+        sosTriggerSourceRef.current = 'manual';
+        countdownExpiresAtRef.current = Date.parse(schedule.expiresAt);
+        statusRef.current = 'countdown';
+        setStatus('countdown');
+      } else if (schedule.phase === 'confirming') {
+        if (schedule.kind === 'checkpoint') {
+          checkpointOwnerUserIdRef.current = owner;
+          setCheckpointExpiresAt(schedule.expiresAt);
+          enterCheckpointConfirmation(schedule.expiresAt);
+        } else {
+          goHomeOwnerUserIdRef.current = owner;
+          setGoHomeExpiresAt(schedule.expiresAt);
+          enterGoHomeConfirmation(schedule.expiresAt);
+        }
+      }
+    });
+    const reconcile = () => {
+      if (AppState.currentState === 'active' && activeUserIdRef.current) {
+        void SafetyExpirationService.reconcile(activeUserIdRef.current).catch(() => reportSafetyError('foreground_reconcile'));
+      }
+    };
+    const subscription = AppState.addEventListener('change', reconcile);
+    reconcile();
+    return () => { removeError(); removePhase(); subscription.remove(); };
+  }, [enterCheckpointConfirmation, enterGoHomeConfirmation, userId]);
 
   useEffect(() => {
     const removeStartedListener = VoiceProtectionRuntime.onSOSExecutionStarted(
       (executionUserId) => {
         if (executionUserId === activeUserIdRef.current) {
+          loadGenerationRef.current += 1;
+          statusRef.current = 'sending';
           checkpointOperationGenerationRef.current += 1;
           checkpointStartInFlightRef.current = false;
           checkpointOwnerUserIdRef.current = null;
@@ -1719,7 +1813,7 @@ export default function HomeScreen() {
     const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
     if (remainingSeconds <= 0) {
       enterCheckpointConfirmation(checkpointExpiresAt);
-      if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
+      if (userId) void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('home_deadline'));
       return;
     }
     if (remainingSeconds !== checkpointRemainingSeconds) {
@@ -1759,7 +1853,7 @@ export default function HomeScreen() {
       setCheckpointRemainingSeconds(remainingSeconds);
       if (remainingSeconds === 0) {
         enterCheckpointConfirmation(checkpointExpiresAt);
-        if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
+        if (userId) void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('home_deadline'));
       }
     });
     return () => subscription.remove();
@@ -1782,7 +1876,7 @@ export default function HomeScreen() {
     if (checkpointConfirmSeconds <= 0) {
       const expiringUserId = checkpointOwnerUserIdRef.current;
       if (expiringUserId) {
-        void SafetyExpirationService.processDue(expiringUserId).catch(() => undefined);
+        void SafetyExpirationService.processDue(expiringUserId).catch(() => reportSafetyError('home_deadline'));
       }
       return;
     }
@@ -1806,7 +1900,7 @@ export default function HomeScreen() {
     const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
     if (remainingSeconds <= 0) {
       enterGoHomeConfirmation(goHomeExpiresAt);
-      if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
+      if (userId) void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('home_deadline'));
       return;
     }
     if (remainingSeconds !== goHomeRemainingSeconds) {
@@ -1844,7 +1938,7 @@ export default function HomeScreen() {
       setGoHomeRemainingSeconds(remainingSeconds);
       if (remainingSeconds === 0) {
         enterGoHomeConfirmation(goHomeExpiresAt);
-        if (userId) void SafetyExpirationService.processDue(userId).catch(() => undefined);
+        if (userId) void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('home_deadline'));
       }
     });
     return () => subscription.remove();
@@ -1867,7 +1961,7 @@ export default function HomeScreen() {
     if (goHomeConfirmSeconds <= 0) {
       const expiringUserId = goHomeOwnerUserIdRef.current;
       if (expiringUserId) {
-        void SafetyExpirationService.processDue(expiringUserId).catch(() => undefined);
+        void SafetyExpirationService.processDue(expiringUserId).catch(() => reportSafetyError('home_deadline'));
       }
       return;
     }
@@ -2172,6 +2266,14 @@ export default function HomeScreen() {
         <View style={styles.iconButtonGhost} />
       </View>
 
+      {safetyError ? (
+        <View accessibilityLiveRegion="polite">
+          <Text style={styles.subtitle}>{safetyError}</Text>
+          <Pressable onPress={() => {
+            if (userId) void SafetyExpirationService.reconcile(userId).then(() => setSafetyError('')).catch(() => reportSafetyError('manual_reconcile'));
+          }}><Text style={styles.secondaryActionText}>Riprova controllo</Text></Pressable>
+        </View>
+      ) : null}
       {activePanel === 'home' && (
         <View style={styles.homePanel}>
           <View style={styles.logoStage}>
