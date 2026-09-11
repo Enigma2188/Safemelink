@@ -44,6 +44,11 @@ export default function RootLayout() {
                   title: 'Protezione Vocale',
                 }}
               />
+              <Stack.Screen
+                name="neighborhood-network"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen name="network" options={{ headerShown: false }} />
             </Stack>
             <SOSNotificationCenter />
             <StatusBar style="auto" />

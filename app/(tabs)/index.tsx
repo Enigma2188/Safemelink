@@ -2740,9 +2740,21 @@ export default function HomeScreen() {
             <Text style={styles.drawerSectionLabel}>COMMUNITY</Text>
             <Pressable
               style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/network' as unknown as Href)}>
+              <Ionicons color="#72C8FF" name="shield-checkmark-outline" size={20} />
+              <Text style={styles.drawerItemText}>NETWORK</Text>
+            </Pressable>
+            <Pressable
+              style={styles.drawerItem}
               onPress={() => navigateFromDrawer('/radar' as unknown as Href)}>
               <Ionicons color="#45B7FF" name="people-circle-outline" size={20} />
               <Text style={styles.drawerItemText}>Rete SafeMeLink</Text>
+            </Pressable>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/neighborhood-network' as unknown as Href)}>
+              <Ionicons color="#58D7B2" name="home-outline" size={20} />
+              <Text style={styles.drawerItemText}>Rete di quartiere</Text>
             </Pressable>
             <View style={styles.drawerItemDisabled}>
               <View style={styles.drawerDisabledCopy}>

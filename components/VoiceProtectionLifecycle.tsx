@@ -3,7 +3,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { useCallback, useEffect, useRef } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
@@ -81,6 +81,7 @@ export function VoiceProtectionLifecycle() {
   }, [stopRecognition]);
 
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
+    if (Platform.OS !== 'android') return;
     const recognitionGeneration = recognitionGenerationRef.current + 1;
     recognitionGenerationRef.current = recognitionGeneration;
     if (activeUserIdRef.current !== targetUserId) {

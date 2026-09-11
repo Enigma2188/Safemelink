@@ -12,6 +12,7 @@ function fixture(initial = null) {
   let stored = initial;
   let deliveries = 0;
   let notices = 0;
+  let cancelledNotices = 0;
   let failWrite = false;
   let holdClaim = null;
   const storage = {
@@ -29,7 +30,10 @@ function fixture(initial = null) {
     '@/storage/CheckpointStorage': { CheckpointStorage: { getActive: async () => ({ startedAt: 'session' }), clearActive: async () => {} } },
     '@/storage/GoHomeStorage': { GoHomeStorage: { getActive: async () => ({ id: 'session' }), clearActive: async () => {} } },
     '@/services/SafetyOperation': { withSafetyTimeout: async (p) => p, reportSafetyError: () => {} },
-    '@/services/SafetyNotifications': { SafetyNotifications: { show: () => { notices += 1; return new Promise(() => {}); } } },
+    '@/services/SafetyNotifications': { SafetyNotifications: {
+      show: () => { notices += 1; return new Promise(() => {}); },
+      cancelConfirmation: async () => { cancelledNotices += 1; },
+    } },
     '@/services/SOSService': { SOSService: { completeSOS: async () => { deliveries += 1; return {}; } } },
     '@/services/VoiceProtectionRuntime': { VoiceProtectionRuntime: {
       notifySOSExecutionStarted() {}, notifySOSCompleted() {}, notifySOSFailed() {}, wakeBackgroundTask() {},
@@ -42,6 +46,7 @@ function fixture(initial = null) {
     advance(ms) { now += ms; }, deadline: () => new Date(now + 1000).toISOString(),
     fail() { failWrite = true; }, hold(p) { holdClaim = p; },
     get deliveries() { return deliveries; }, get notices() { return notices; }, get stored() { return stored; },
+    get cancelledNotices() { return cancelledNotices; }, get now() { return now; },
   };
 }
 
@@ -66,8 +71,11 @@ async function main() {
   for (const kind of ['checkpoint', 'go_home']) {
     const f = fixture();
     await f.runtime.schedule('account', kind, 'session', f.deadline(), 30);
-    f.advance(1000);
+    const target = Date.parse(f.stored.expiresAt);
+    f.advance(1002);
     await f.runtime.processDue('account');
+    assert.ok(f.now - target <= 3000, `${kind}: transition timing exceeded tolerance`);
+    assert.ok(f.stored && Date.parse(f.stored.expiresAt) >= 0);
     assert.equal(f.stored.phase, 'confirming');
     assert.equal(f.notices, 1);
     await f.runtime.processDue('account');
@@ -76,6 +84,15 @@ async function main() {
     await Promise.all([f.runtime.processDue('account'), f.runtime.processDue('account')]);
     await flush();
     assert.equal(f.deliveries, 1, `${kind}: pending notification must not block SOS`);
+  }
+  {
+    const f = fixture();
+    await f.runtime.schedule('account', 'checkpoint', 'session', f.deadline(), 30);
+    await f.runtime.markConfirmationScheduled('account', 'checkpoint', 'session');
+    f.advance(1000);
+    await f.runtime.processDue('account');
+    assert.equal(f.stored.phase, 'confirming');
+    assert.equal(f.notices, 0, 'pre-scheduled native notification is not duplicated by JS');
   }
   {
     const f = fixture({ kind: 'manual_sos', sessionId: 'session', phase: 'waiting',
@@ -99,16 +116,18 @@ async function main() {
   }
   {
     const f = fixture();
-    await f.runtime.schedule('account', 'manual_sos', 'session', f.deadline(), 0);
-    f.advance(1000);
+    await f.runtime.schedule('account', 'checkpoint', 'session', f.deadline(), 30);
+    await f.runtime.markConfirmationScheduled('account', 'checkpoint', 'session');
+    f.advance(31000);
     let release;
     f.hold(new Promise((resolve) => { release = resolve; }));
     const due = f.runtime.processDue('account');
     await flush();
-    const cancel = f.runtime.cancel('account');
+    const cancel = f.runtime.cancel('account', 'checkpoint', 'session');
     release();
     await Promise.all([due, cancel]);
     assert.equal(f.deliveries, 0, 'cancel while claim is pending');
+    assert.equal(f.cancelledNotices, 1, 'cancel removes the scheduled notification');
   }
   {
     const f = fixture();

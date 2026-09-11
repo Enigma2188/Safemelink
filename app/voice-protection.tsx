@@ -439,6 +439,12 @@ export default function VoiceProtectionScreen() {
       setMessage(feedback);
       return;
     }
+    if (Platform.OS !== 'android') {
+      const feedback = 'La Protezione Vocale continua è disponibile su Android. Su iPhone non può restare in ascolto quando iOS sospende l’app.';
+      setActivationFeedback(feedback);
+      setMessage(feedback);
+      return;
+    }
     if (!normalizePassphrase(settings.passphrase)) {
       const feedback = 'Configura e salva prima una parola d’ordine.';
       setActivationFeedback(feedback);
@@ -735,6 +741,8 @@ export default function VoiceProtectionScreen() {
 
   const toggleUnavailableFeedback = isSaving
     ? 'Operazione in corso…'
+    : Platform.OS !== 'android'
+      ? 'Su iPhone la Protezione Vocale continua non è disponibile.'
     : !userId
       ? 'Accedi per attivare Protezione Vocale.'
       : !settings.enabled && !settings.passphrase
@@ -788,7 +796,7 @@ export default function VoiceProtectionScreen() {
               </Text>
             </View>
             <Switch
-              disabled={isSaving || !userId || (!settings.enabled && !settings.passphrase)}
+              disabled={Platform.OS !== 'android' || isSaving || !userId || (!settings.enabled && !settings.passphrase)}
               onValueChange={(enabled) =>
                 void (enabled ? activateProtection() : deactivateProtection())
               }
@@ -804,8 +812,9 @@ export default function VoiceProtectionScreen() {
             </Text>
           ) : null}
           <Text style={styles.cardDescription}>
-            Quando è attiva, Android mostra una notifica persistente e mantiene
-            l’ascolto locale anche in background o con lo schermo bloccato.
+            {Platform.OS === 'android'
+              ? 'Quando è attiva, Android mostra una notifica persistente e mantiene l’ascolto locale anche in background o con lo schermo bloccato.'
+              : 'iOS non consente a questa modalità di mantenere un ascolto vocale continuo quando sospende l’app.'}
           </Text>
           {showPermissionSettings ? (
             <Pressable
@@ -961,9 +970,9 @@ export default function VoiceProtectionScreen() {
           <View style={styles.privacyCopy}>
             <Text style={styles.privacyTitle}>Privacy locale</Text>
             <Text style={styles.privacyText}>
-              Nessuna registrazione permanente e nessun servizio cloud. Android mostra
-              una notifica persistente quando la protezione è attiva. Il consumo dipende
-              dal dispositivo e dalle impostazioni di risparmio energetico.
+              {Platform.OS === 'android'
+                ? 'Nessuna registrazione permanente e nessun servizio cloud. Android mostra una notifica persistente quando la protezione è attiva. Il consumo dipende dal dispositivo e dalle impostazioni di risparmio energetico.'
+                : 'Nessuna registrazione permanente e nessun servizio cloud. Su iPhone la modalità continua resta disattivata perché iOS può sospendere microfono e riconoscimento vocale.'}
             </Text>
             <Pressable
               onPress={() => void VoiceProtectionService.openBatterySettings()}

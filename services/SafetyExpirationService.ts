@@ -14,13 +14,28 @@ export const SafetyExpirationService = {
     confirmationSeconds: number,
   ) {
     try {
-    const schedule = await SafetyExpirationRuntime.schedule(
-      userId,
-      kind,
-      sessionId,
-      expiresAt,
-      confirmationSeconds,
-    );
+      const schedule = await SafetyExpirationRuntime.schedule(
+        userId,
+        kind,
+        sessionId,
+        expiresAt,
+        confirmationSeconds,
+      );
+      if (kind !== 'manual_sos') {
+        const notificationScheduled = await SafetyNotifications.scheduleConfirmation(
+          sessionId,
+          kind,
+          expiresAt,
+        );
+        if (notificationScheduled) {
+          const retained = await SafetyExpirationRuntime.markConfirmationScheduled(
+            userId,
+            kind,
+            sessionId,
+          );
+          if (!retained) void SafetyNotifications.cancelConfirmation(sessionId);
+        }
+      }
       await VoiceProtectionService.ensureSafetyMonitoring(userId);
       VoiceProtectionRuntime.wakeBackgroundTask();
       return schedule;
@@ -45,6 +60,21 @@ export const SafetyExpirationService = {
       expiresAt,
       confirmationSeconds,
     );
+    if (
+      kind !== 'manual_sos' &&
+      schedule.phase === 'waiting' &&
+      !schedule.confirmationNotificationScheduled &&
+      Date.parse(expiresAt) > Date.now()
+    ) {
+      const notificationScheduled = await SafetyNotifications.scheduleConfirmation(
+        sessionId,
+        kind,
+        expiresAt,
+      );
+      if (notificationScheduled) {
+        await SafetyExpirationRuntime.markConfirmationScheduled(userId, kind, sessionId);
+      }
+    }
     if (schedule.phase === 'failed' || schedule.phase === 'executing') return schedule;
     await VoiceProtectionService.ensureSafetyMonitoring(userId);
     VoiceProtectionRuntime.wakeBackgroundTask();

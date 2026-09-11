@@ -1,11 +1,12 @@
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { Linking, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
 import { AuthService } from '@/backend/auth/AuthService';
 import { PushTokenRepository } from '@/backend/repositories/PushTokenRepository';
-import { parseSOSNotificationPayload } from '@/services/SOSNotificationPayload';
+import { requiresNotificationAttention } from '@/services/NotificationSoundPolicy';
+import { channelIsSilent, ensureOperationalChannel, openOperationalChannelSettings } from '@/services/OperationalNotificationChannels';
 
 export const SOS_NOTIFICATION_CHANNEL_ID = 'sos-alerts';
 
@@ -80,15 +81,14 @@ async function getCurrentExpoPushToken() {
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    const isForegroundSOS = Boolean(
-      parseSOSNotificationPayload(notification.request.content.data),
-    );
+    const requiresAttention = requiresNotificationAttention(notification.request.content.data);
 
     return {
-      shouldPlaySound: true,
+      shouldPlaySound: requiresAttention,
       shouldSetBadge: false,
-      shouldShowBanner: !isForegroundSOS,
-      shouldShowList: !isForegroundSOS,
+      // Keep Android's normal channel/DND handling, not Expo's hidden-alert Ringtone path.
+      shouldShowBanner: requiresAttention,
+      shouldShowList: true,
     };
   },
 });
@@ -100,14 +100,7 @@ async function registerDevice(userId: string) {
   }
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(SOS_NOTIFICATION_CHANNEL_ID, {
-      name: 'SafeMeLink SOS',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#DC2626',
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
-      sound: 'default',
-    });
+    await ensureOperationalChannel(SOS_NOTIFICATION_CHANNEL_ID, 'SafeMeLink SOS', Notifications.AndroidImportance.MAX);
     console.log('[SafeMeLink Push] Canale Android SOS pronto.', {
       channelId: SOS_NOTIFICATION_CHANNEL_ID,
     });
@@ -217,21 +210,11 @@ export const PushNotificationService = {
       Notifications.getNotificationChannelAsync(SOS_NOTIFICATION_CHANNEL_ID),
       PUSH_NATIVE_STEP_TIMEOUT_MS, 'verifica canale SOS',
     );
-    return channel !== null && (channel.importance < Notifications.AndroidImportance.DEFAULT || !channel.sound);
+    return channelIsSilent(channel);
   },
 
   async openSOSChannelSettings() {
-    const packageName = Constants.expoConfig?.android?.package;
-    if (Platform.OS === 'android' && packageName) {
-      try {
-        await Linking.sendIntent('android.settings.CHANNEL_NOTIFICATION_SETTINGS', [
-          { key: 'android.provider.extra.APP_PACKAGE', value: packageName },
-          { key: 'android.provider.extra.CHANNEL_ID', value: SOS_NOTIFICATION_CHANNEL_ID },
-        ]);
-        return;
-      } catch { console.warn('[SafeMeLink Push] Impostazioni canale non disponibili.'); }
-    }
-    await Linking.openSettings();
+    await openOperationalChannelSettings(SOS_NOTIFICATION_CHANNEL_ID);
   },
 
   registerDeviceForUser(userId: string) {

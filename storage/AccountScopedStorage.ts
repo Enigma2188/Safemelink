@@ -7,6 +7,7 @@ export type AccountStorageNamespace =
   | 'go-home-events'
   | 'go-home-location'
   | 'go-home-transport-mode'
+  | 'network-phone-verification'
   | 'passphrase'
   | 'sos-events'
   | 'sos-network-location'

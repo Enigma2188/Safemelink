@@ -13,6 +13,18 @@ const executing = new Set<string>();
 const cancelled = new Set<string>();
 const phaseListeners = new Set<(userId: string, schedule: SafetyExpirationSchedule | null) => void>();
 const errorListeners = new Set<(userId: string) => void>();
+const trace = (event: string, schedule?: SafetyExpirationSchedule) => console.info(
+  `[SafetyExpiration] ${event}`,
+  schedule ? {
+    kind: schedule.kind,
+    phase: schedule.phase,
+    nowMs: Date.now(),
+    expiresAt: schedule.expiresAt,
+    expiresAtMs: Date.parse(schedule.expiresAt),
+    confirmationExpiresAt: schedule.confirmationExpiresAt,
+    confirmationExpiresAtMs: Date.parse(schedule.confirmationExpiresAt),
+  } : { nowMs: Date.now() },
+);
 const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
   const result = operationQueue.then(operation, operation);
   operationQueue = result.then(() => undefined, () => undefined);
@@ -43,6 +55,7 @@ const clearSourceSession = async (userId: string, kind: SafetyExpirationKind) =>
 
 // Delivery runs outside the queue: a native/network Promise cannot block cancellation.
 const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) => {
+  trace('SOS_EXECUTION_STARTED', schedule);
   try {
     VoiceProtectionRuntime.notifySOSExecutionStarted(userId);
     const result = await SOSService.completeSOS(userId, {
@@ -54,6 +67,7 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
     await clear(userId).catch(() => reportSafetyError('completed_cleanup'));
     VoiceProtectionRuntime.notifySOSCompleted(userId, result);
     notifyPhase(userId, null);
+    trace('SOS_EXECUTION_COMPLETED', schedule);
   } catch (error: unknown) {
     reportSafetyError('sos_execution');
     const failed = { ...schedule, phase: 'failed' as const };
@@ -61,6 +75,7 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
     notifyPhase(userId, failed);
     void SafetyNotifications.show(schedule.sessionId, schedule.kind, true);
     VoiceProtectionRuntime.notifySOSFailed(userId, error);
+    trace('SOS_EXECUTION_FAILED', schedule);
   } finally {
     executing.delete(userId);
     VoiceProtectionRuntime.wakeBackgroundTask();
@@ -76,8 +91,10 @@ export const SafetyExpirationRuntime = {
         kind, sessionId, expiresAt,
         confirmationExpiresAt: new Date(Date.parse(expiresAt) + confirmationSeconds * 1_000).toISOString(),
         phase: 'waiting',
+        confirmationNotificationScheduled: false,
       };
       await save(userId, schedule);
+      trace('DEADLINE_PERSISTED', schedule);
       if (revision(userId) !== expectedRevision) {
         await clear(userId);
         throw new Error('Avvio annullato.');
@@ -99,7 +116,10 @@ export const SafetyExpirationRuntime = {
     cancelled.add(userId);
     return enqueue(async () => {
       const existing = await read(userId);
-      if (!existing) return true;
+      if (!existing) {
+        if (sessionId) void SafetyNotifications.cancelConfirmation(sessionId);
+        return true;
+      }
       if ((kind && existing.kind !== kind) || (sessionId && existing.sessionId !== sessionId)) {
         cancelled.delete(userId);
         return false;
@@ -109,6 +129,7 @@ export const SafetyExpirationRuntime = {
         return false;
       }
       await clear(userId);
+      void SafetyNotifications.cancelConfirmation(existing.sessionId);
       await clearSourceSession(userId, existing.kind);
       notifyPhase(userId, null);
       return true;
@@ -123,10 +144,19 @@ export const SafetyExpirationRuntime = {
       VoiceProtectionRuntime.wakeBackgroundTask();
     }).then(() => this.processDue(userId));
   },
+  markConfirmationScheduled(userId: string, kind: SafetyExpirationKind, sessionId: string) {
+    return enqueue(async () => {
+      const existing = await read(userId);
+      if (!existing || existing.kind !== kind || existing.sessionId !== sessionId || existing.phase !== 'waiting') return false;
+      await save(userId, { ...existing, confirmationNotificationScheduled: true });
+      return true;
+    });
+  },
   processDue(userId: string): Promise<{ schedule: SafetyExpirationSchedule | null; waitMs: number }> {
     const expectedRevision = revision(userId);
     return enqueue(async () => {
       try {
+        trace('PROCESS_DUE_STARTED');
         if (cancelled.has(userId) && !executing.has(userId)) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         let schedule = await read(userId);
         if (!schedule) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
@@ -139,6 +169,7 @@ export const SafetyExpirationRuntime = {
         if (revision(userId) !== expectedRevision) return { schedule, waitMs: 0 };
         if (!(await sourceSessionExists(userId, schedule))) {
           await clear(userId);
+          void SafetyNotifications.cancelConfirmation(schedule.sessionId);
           notifyPhase(userId, null);
           return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         }
@@ -148,11 +179,16 @@ export const SafetyExpirationRuntime = {
         const expiresAt = Date.parse(schedule.expiresAt);
         const confirmationExpiresAt = Date.parse(schedule.confirmationExpiresAt);
         if (schedule.phase === 'waiting' && Date.now() >= expiresAt && schedule.kind !== 'manual_sos') {
+          trace('DEADLINE_DUE', schedule);
           schedule = { ...schedule, phase: 'confirming' };
+          trace('PHASE_TRANSITION_STARTED', schedule);
           await save(userId, schedule);
+          trace('PHASE_TRANSITION_COMPLETED', schedule);
           notifyPhase(userId, schedule);
           // A notification must never hold the deadline queue.
-          void SafetyNotifications.show(schedule.sessionId, schedule.kind);
+          if (!schedule.confirmationNotificationScheduled) {
+            void SafetyNotifications.show(schedule.sessionId, schedule.kind);
+          }
         }
         const nextDeadline = schedule.phase === 'waiting' ? expiresAt : confirmationExpiresAt;
         if (Date.now() < confirmationExpiresAt) {
@@ -161,6 +197,7 @@ export const SafetyExpirationRuntime = {
         }
         if (revision(userId) !== expectedRevision) return { schedule, waitMs: 0 };
         const claim = { ...schedule, phase: 'executing' as const };
+        trace('SOS_EXECUTION_CLAIM_STARTED', claim);
         try {
           await save(userId, claim);
         } catch (error) {
@@ -174,6 +211,7 @@ export const SafetyExpirationRuntime = {
           return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         }
         executing.add(userId);
+        trace('SOS_EXECUTION_CLAIMED', claim);
         notifyPhase(userId, claim);
         void executeSOS(userId, claim).catch(() => reportSafetyError('completion_listener'));
         return { schedule: claim, waitMs: MAX_BACKGROUND_WAIT_MS };
@@ -183,6 +221,8 @@ export const SafetyExpirationRuntime = {
           try { listener(userId); } catch { reportSafetyError('error_listener'); }
         }
         throw error;
+      } finally {
+        trace('PROCESS_DUE_FINISHED');
       }
     });
   },

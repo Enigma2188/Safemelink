@@ -133,6 +133,17 @@ const sosDeliveryLiveMigration = read(
 const sosLiveLocationService = read('services/SOSLiveLocationService.ts');
 const sosLiveLocationTask = read('services/SOSLiveLocationBackgroundTask.ts');
 const appConfig = read('app.json');
+const phoneOtpMigration = read(
+  'supabase/migrations/20260908120000_safemelink_phone_otp.sql',
+);
+const phoneVerificationFunction = read('supabase/functions/phone-verification/index.ts');
+const phoneOtpV2Migration = read('supabase/migrations/20260910120000_phone_otp_operation_v2.sql');
+const phoneOtpV2Storage = read('storage/NetworkPhoneVerificationStorage.ts');
+const phoneVerificationCrypto = read('supabase/functions/phone-verification/crypto.ts');
+const phoneVerificationPhone = read('supabase/functions/phone-verification/phone.ts');
+const phoneVerificationProvider = read('supabase/functions/phone-verification/smsProvider.ts');
+const phoneVerificationClientIp = read('supabase/functions/phone-verification/clientIp.ts');
+const networkRepository = read('backend/repositories/NetworkRepository.ts');
 
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
@@ -935,10 +946,10 @@ check('Permission recovery and logout cleanup remain bounded', () => {
   );
 });
 
-check('Foreground SOS uses the in-app alert while preserving one sound', () => {
-  assert.match(pushNotificationService, /isForegroundSOS/);
-  assert.match(pushNotificationService, /shouldPlaySound: true/);
-  assert.match(pushNotificationService, /shouldShowBanner: !isForegroundSOS/);
+check('Foreground operational alerts use Android channel presentation and selective sound', () => {
+  assert.match(pushNotificationService, /requiresNotificationAttention/);
+  assert.match(pushNotificationService, /shouldPlaySound: requiresAttention/);
+  assert.match(pushNotificationService, /shouldShowList: true/);
   assert.match(sosNotificationCenter, /SOS RICEVUTO/);
   assert.match(sosNotificationCenter, /APRI EMERGENZA/);
 });
@@ -1266,6 +1277,9 @@ check('Checkpoint and Go Home expirations run outside the React UI lifecycle', (
   assert.match(safetyExpirationStorage, /'safety-expiration'/);
   assert.match(safetyExpirationService, /VoiceProtectionService\.ensureSafetyMonitoring\(userId\)/);
   assert.match(safetyExpirationRuntime, /SafetyExpirationRuntime =/);
+  assert.match(safetyExpirationService, /SafetyNotifications\.scheduleConfirmation/);
+  assert.match(safetyExpirationRuntime, /confirmationNotificationScheduled/);
+  assert.match(safetyExpirationRuntime, /SafetyNotifications\.cancelConfirmation/);
   assert.match(safetyExpirationRuntime, /phase: 'executing'/);
   assert.match(safetyExpirationRuntime, /SOSService\.completeSOS\(userId/);
   assert.match(safetyExpirationRuntime, /allowRemoteDelivery: true/);
@@ -1484,6 +1498,57 @@ check('Android package visibility exposes only SOS SMS fallback channels', () =>
   assert.match(sosChannelQueriesPlugin, /scheme: 'sms'/);
   assert.match(sosChannelQueriesPlugin, /scheme: 'smsto'/);
   assert.doesNotMatch(sosChannelQueriesPlugin, /whatsapp/i);
+});
+
+check('Dedicated phone OTP is server-authoritative and isolated from Auth MFA', () => {
+  assert.match(phoneOtpMigration, /verification_source = 'safemelink_phone_otp'/);
+  assert.match(phoneOtpMigration, /account_verifications_unique_verified_phone_idx/);
+  assert.match(phoneOtpMigration, /phone_verification_one_pending_per_account_idx/);
+  assert.match(phoneOtpMigration, /for update/);
+  assert.match(phoneOtpMigration, /to service_role/);
+  assert.doesNotMatch(phoneOtpMigration, /auth\.mfa_factors|supabase_mfa_phone/i);
+  assert.match(phoneVerificationFunction, /auth\.getUser\(accessToken\)/);
+  assert.doesNotMatch(phoneVerificationFunction, /body\.(?:userId|user_id)/);
+  assert.match(phoneVerificationCrypto, /HMAC[\s\S]*SHA-256/);
+  assert.match(phoneVerificationCrypto, /AES-GCM/);
+  assert.doesNotMatch(phoneVerificationCrypto, /Math\.random/);
+  assert.match(phoneVerificationPhone, /normalizeE164Phone/);
+  assert.match(phoneVerificationPhone, /E164_PATTERN/);
+  assert.match(phoneVerificationClientIp, /TRUSTED_IP_HEADERS/);
+  assert.doesNotMatch(phoneVerificationFunction, /code: 'phone_unavailable'/);
+  assert.match(phoneVerificationProvider, /PHONE_OTP_PROVIDER_ALLOWED_HOST/);
+  assert.match(phoneVerificationProvider, /endpoint\.protocol !== 'https:'/);
+  assert.match(phoneVerificationProvider, /redirect: 'error'/);
+  assert.match(phoneVerificationProvider, /response\.status !== config\.acceptedStatus/);
+  assert.match(networkRepository, /functions\.invoke<PhoneFunctionResponse>\('phone-verification'/);
+  assert.doesNotMatch(networkRepository, /auth\.mfa\.|signInWithOtp|updateUser\(\{\s*phone/);
+});
+
+check('Phone OTP V2 operations are ownership-safe and service-role-only', () => {
+  assert.match(phoneOtpV2Migration, /create table public\.phone_verification_operations/);
+  assert.match(phoneOtpV2Migration, /create table public\.phone_verification_attempts/);
+  assert.match(phoneOtpV2Migration, /verification_operation_id uuid/);
+  assert.match(phoneOtpV2Migration, /on delete restrict/);
+  assert.match(phoneOtpV2Migration, /enable row level security/g);
+  assert.match(phoneOtpV2Migration, /PHONE_VERIFICATION_OPERATION_IDENTITY_IMMUTABLE/);
+  assert.match(phoneOtpV2Migration, /candidate_fingerprint <> target_candidate_fingerprint/);
+  assert.doesNotMatch(phoneOtpV2Migration, /candidate_matches/);
+  assert.match(phoneOtpV2Migration, /verification_operation_id = target_operation_id/);
+  assert.match(phoneOtpV2Migration, /account_verifications_operation_owner_fk/);
+  assert.match(phoneOtpV2Migration, /result_code = 'superseded'/);
+  assert.match(phoneOtpV2Migration, /challenge\.status <> 'PENDING'/);
+  assert.match(phoneOtpV2Migration, /delivery_lease_expires_at = now_at \+ interval '2 minutes'/);
+  assert.match(phoneOtpV2Migration, /PHONE_VERIFICATION_DELIVERY_STALE/);
+  assert.match(phoneOtpV2Migration, /safemelink_test_purpose[\s\S]*phone_otp_runtime_disposable/);
+  assert.doesNotMatch(phoneOtpV2Migration, /grant execute[\s\S]{0,180}to authenticated/i);
+  assert.match(phoneVerificationFunction, /create_phone_verification_challenge_v2/);
+  assert.match(phoneVerificationFunction, /target_candidate_fingerprint: candidateDigest/);
+  assert.match(phoneVerificationFunction, /decryptOtpForDelivery/);
+  assert.match(phoneVerificationFunction, /target_delivery_attempt_id: deliveryAttemptId/);
+  assert.match(networkRepository, /NetworkPhoneVerificationStorage/);
+  assert.match(networkRepository, /operationId/);
+  assert.match(networkRepository, /attemptId/);
+  assert.doesNotMatch(phoneOtpV2Storage, /phoneE164|phone_hmac|otpDigest|ciphertext|nonce|\bcode\s*:/i);
 });
 
 process.stdout.write('All static audit checks passed.\n');

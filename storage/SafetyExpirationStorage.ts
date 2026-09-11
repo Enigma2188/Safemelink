@@ -14,6 +14,7 @@ export type SafetyExpirationKind = 'checkpoint' | 'go_home' | 'manual_sos';
 export type SafetyExpirationPhase = 'waiting' | 'confirming' | 'executing' | 'failed';
 
 export type SafetyExpirationSchedule = {
+  confirmationNotificationScheduled?: boolean;
   confirmationExpiresAt: string;
   expiresAt: string;
   kind: SafetyExpirationKind;

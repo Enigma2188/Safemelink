@@ -60,6 +60,7 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
   await taskStartGate;
   ready();
   const voiceStartupUntil = Date.now() + 15_000;
+  console.info('[SafetyExpiration] BACKGROUND_TASK_STARTED', { nowMs: Date.now() });
   let transitionFailures = 0;
   try {
   let taskExpiresAtMs = taskData?.expiresAt
@@ -150,6 +151,7 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
     await VoiceProtectionRuntime.waitForBackgroundWake(waitMs);
   }
   } finally {
+    console.info('[SafetyExpiration] BACKGROUND_TASK_FINISHED', { nowMs: Date.now() });
     exitTask();
   }
 };
@@ -191,7 +193,7 @@ const calculateExpiresAt = (durationMinutes: VoiceProtectionDurationMinutes) =>
 
 export const VoiceProtectionService = {
   isRunning() {
-    return BackgroundService.isRunning();
+    return Platform.OS === 'android' && BackgroundService.isRunning();
   },
 
   async getPermissionState(): Promise<VoiceProtectionPermissionState> {
@@ -275,8 +277,8 @@ export const VoiceProtectionService = {
 
   async start(userId: string, durationMinutes: VoiceProtectionDurationMinutes) {
     return serializeService(async () => {
-    if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
-      throw new Error('Protezione Vocale è disponibile soltanto su Android e iOS.');
+    if (Platform.OS !== 'android') {
+      throw new Error('Protezione Vocale continua non disponibile su questa piattaforma.');
     }
 
     if (BackgroundService.isRunning()) {
@@ -315,6 +317,9 @@ export const VoiceProtectionService = {
 
   async ensureSafetyMonitoring(userId: string) {
     return serializeService(async () => {
+    // iOS owns the first deadline through a scheduled local notification.
+    // It cannot emulate Android's foreground service with unrestricted JS execution.
+    if (Platform.OS !== 'android') return;
     if (BackgroundService.isRunning() && activeTaskUserId === userId) {
       VoiceProtectionRuntime.wakeBackgroundTask();
       return;
@@ -348,6 +353,7 @@ export const VoiceProtectionService = {
 
   async releaseSafetyMonitoring(userId: string) {
     return serializeService(async () => {
+    if (Platform.OS !== 'android') return;
     if (activeTaskUserId !== userId) return;
     const [safetySchedule, voiceSettings] = await Promise.all([
       SafetyExpirationRuntime.get(userId),
@@ -366,6 +372,7 @@ export const VoiceProtectionService = {
 
   async stop() {
     return serializeService(async () => {
+    if (Platform.OS !== 'android') return;
     if (activeTaskUserId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }

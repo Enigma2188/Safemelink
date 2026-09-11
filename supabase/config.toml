@@ -5,3 +5,9 @@
 # public.
 [functions.send-sos-push]
 verify_jwt = false
+
+# The handler validates the caller with auth.getUser(accessToken). Keeping the
+# gateway verifier disabled supports asymmetric Auth keys without weakening the
+# application-level identity check.
+[functions.phone-verification]
+verify_jwt = false
