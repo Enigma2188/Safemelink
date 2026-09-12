@@ -3,6 +3,12 @@ const path = require('node:path');
 
 const migrationPath = path.join(process.cwd(), 'supabase', 'migrations', '20260907120000_network_backend_phase1.sql');
 const sql = fs.readFileSync(migrationPath, 'utf8');
+const runtimeMigration = fs.readFileSync(path.join(
+  process.cwd(),
+  'supabase',
+  'migrations',
+  '20260912120000_network_runtime_radius_5km.sql',
+), 'utf8');
 const feedFunction = sql.match(
   /create or replace function public\.list_nearby_network_reports\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
@@ -13,6 +19,15 @@ const contentReportFunction = sql.match(
   /create or replace function public\.report_network_content\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
 const checks = [
+  ['five kilometre runtime default',
+    /default_feed_radius_meters = 5000/i.test(runtimeMigration)
+      && /max_feed_radius_meters = 5000/i.test(runtimeMigration)
+      && /where feed_radius_meters = 1000/i.test(runtimeMigration)],
+  ['authenticated onboarding runtime RPC',
+    /create or replace function public\.get_my_network_onboarding_status\(\)/i.test(runtimeMigration)
+      && /security definer/i.test(runtimeMigration)
+      && /set search_path = public, auth, pg_temp/i.test(runtimeMigration)
+      && /grant execute on function public\.get_my_network_onboarding_status\(\) to authenticated/i.test(runtimeMigration)],
   ['PostGIS geography', /create extension if not exists postgis[\s\S]*geography\(Point, 4326\)/i],
   ['domain tables', /create table public\.network_reports[\s\S]*create table public\.network_report_confirmations[\s\S]*create table public\.network_report_updates[\s\S]*create table public\.network_content_reports/i],
   ['authoritative phone verification', /account_verifications[\s\S]*phone_verified_at[\s\S]*network_user_is_eligible/i],

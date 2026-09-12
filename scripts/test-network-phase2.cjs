@@ -11,6 +11,7 @@ const screen = read('screens/NetworkScreen.tsx');
 const route = read('app/network.tsx');
 const layout = read('app/_layout.tsx');
 const home = read('app/(tabs)/index.tsx');
+const runtimeMigration = read('supabase/migrations/20260912120000_network_runtime_radius_5km.sql');
 
 for (const category of [
   'SUSPICIOUS_ACTIVITY',
@@ -22,6 +23,7 @@ for (const category of [
 
 assert.match(service, /LocationService\.getCurrentLocation/);
 assert.match(service, /NETWORK_FEED_RADIUS_METERS/);
+assert.match(models, /NETWORK_FEED_RADIUS_METERS = 5_000/);
 assert.doesNotMatch(service, /watchPosition|setInterval|WhatsApp|whatsapp/);
 const publicFeedModel = models.match(/export type NetworkFeedReport = \{[\s\S]*?\n\};/)?.[0] ?? '';
 assert.ok(publicFeedModel);
@@ -35,9 +37,19 @@ assert.match(screen, /NetworkService\.loadFeed/);
 assert.match(screen, /NetworkService\.createReport/);
 assert.match(screen, /NetworkService\.respond/);
 assert.match(screen, /La posizione mostrata è sempre approssimativa/);
+assert.match(screen, /entro 5 km/);
+assert.doesNotMatch(screen, /entro 1 km/);
+assert.match(screen, /error instanceof BackendError/);
+assert.match(screen, /error instanceof RemoteRequestTimeoutError/);
+assert.doesNotMatch(screen, /\/network\|fetch/);
 assert.doesNotMatch(screen, /setInterval|watchPosition|latitude|longitude/);
 assert.match(route, /NetworkScreen as default/);
 assert.match(layout, /name="network"/);
 assert.match(home, /navigateFromDrawer\('\/network'/);
+assert.match(runtimeMigration, /create or replace function public\.get_my_network_onboarding_status\(\)/);
+assert.match(runtimeMigration, /default_feed_radius_meters = 5000/);
+assert.match(runtimeMigration, /max_feed_radius_meters = 5000/);
+assert.match(runtimeMigration, /where feed_radius_meters = 1000/);
+assert.match(runtimeMigration, /grant execute on function public\.get_my_network_onboarding_status\(\) to authenticated/);
 
 console.log('NETWORK Phase 2 client contract checks passed.');

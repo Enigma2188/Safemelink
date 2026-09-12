@@ -1551,4 +1551,34 @@ check('Phone OTP V2 operations are ownership-safe and service-role-only', () => 
   assert.doesNotMatch(phoneOtpV2Storage, /phoneE164|phone_hmac|otpDigest|ciphertext|nonce|\bcode\s*:/i);
 });
 
+check('NETWORK runtime uses the five kilometre MVP radius', () => {
+  const networkModels = read('services/NetworkModels.ts');
+  const networkScreen = read('screens/NetworkScreen.tsx');
+  const runtimeMigration = read('supabase/migrations/20260912120000_network_runtime_radius_5km.sql');
+  assert.match(networkModels, /NETWORK_FEED_RADIUS_METERS = 5_000/);
+  assert.match(networkScreen, /entro 5 km/);
+  assert.match(runtimeMigration, /default_feed_radius_meters = 5000/);
+  assert.match(runtimeMigration, /max_feed_radius_meters = 5000/);
+  assert.match(runtimeMigration, /where feed_radius_meters = 1000/);
+});
+
+check('Onboarding is versioned, permission-free and leaves a permanent guide', () => {
+  const onboardingStorage = read('storage/OnboardingStorage.ts');
+  const onboardingProvider = read('components/OnboardingProvider.tsx');
+  const onboardingScreen = read('app/onboarding.tsx');
+  const guideScreen = read('app/how-safemelink-works.tsx');
+  assert.match(onboardingStorage, /safemelink_onboarding_version/);
+  assert.match(onboardingProvider, /completedVersion >= CURRENT_ONBOARDING_VERSION/);
+  assert.match(onboardingScreen, /SALTA/);
+  assert.match(onboardingScreen, /ENTRA IN SAFEMELINK/);
+  assert.match(onboardingScreen, /BackHandler\.addEventListener\('hardwareBackPress'/);
+  assert.match(onboardingScreen, /subscription\.remove\(\)/);
+  assert.doesNotMatch(onboardingScreen, /requestPermissions|expo-notifications|expo-location/);
+  assert.match(homeScreen, /Come funziona SafeMeLink/);
+  assert.match(rootLayout, /name="how-safemelink-works"/);
+  assert.match(guideScreen, /A COSA SERVE/);
+  assert.match(guideScreen, /DATI E PERMESSI/);
+  assert.doesNotMatch(`${onboardingScreen}\n${guideScreen}`, /setInterval|watchPosition/);
+});
+
 process.stdout.write('All static audit checks passed.\n');

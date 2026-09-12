@@ -2772,6 +2772,15 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.drawerSeparator} />
+            <Text style={styles.drawerSectionLabel}>GUIDA</Text>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/how-safemelink-works' as unknown as Href)}>
+              <Ionicons color="#72C8FF" name="help-circle-outline" size={20} />
+              <Text style={styles.drawerItemText}>Come funziona SafeMeLink</Text>
+            </Pressable>
+
+            <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>ACCOUNT</Text>
             <Pressable
               style={styles.drawerItem}

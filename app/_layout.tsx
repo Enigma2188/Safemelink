@@ -1,5 +1,5 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Redirect, type Href, Stack, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
@@ -8,6 +8,7 @@ import '@/services/SOSLiveLocationBackgroundTask';
 
 import { AuthProvider } from '@/backend/auth/AuthProvider';
 import { OfflineStatusBanner } from '@/components/OfflineStatusBanner';
+import { OnboardingProvider, useOnboarding } from '@/components/OnboardingProvider';
 import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
 import { SOSNetworkPresenceProvider } from '@/components/SOSNetworkPresenceProvider';
@@ -19,7 +20,39 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
+  return (
+    <OnboardingProvider>
+      <RootNavigator />
+    </OnboardingProvider>
+  );
+}
+
+function RootNavigator() {
   const colorScheme = useColorScheme();
+  const segments = useSegments();
+  const { isComplete, isLoading } = useOnboarding();
+  const currentRootSegment = String(segments[0] ?? '');
+
+  if (isLoading) {
+    return <View style={styles.loadingScreen} />;
+  }
+
+  if (!isComplete) {
+    if (currentRootSegment !== 'onboarding') {
+      return <Redirect href={'/onboarding' as Href} />;
+    }
+
+    return (
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <View style={styles.container}>
+          <Stack>
+            <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+          </Stack>
+          <StatusBar style="light" />
+        </View>
+      </ThemeProvider>
+    );
+  }
 
   return (
     <AuthProvider>
@@ -49,6 +82,11 @@ export default function RootLayout() {
                 options={{ headerShown: false }}
               />
               <Stack.Screen name="network" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="how-safemelink-works"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen name="onboarding" options={{ headerShown: false }} />
             </Stack>
             <SOSNotificationCenter />
             <StatusBar style="auto" />
@@ -61,6 +99,10 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  loadingScreen: {
+    backgroundColor: '#050816',
     flex: 1,
   },
 });

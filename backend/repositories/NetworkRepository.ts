@@ -337,7 +337,7 @@ export const NetworkRepository = {
     await requireChallengeOwner(userId);
   },
 
-  async acceptTerms(termsVersion: string, feedRadiusMeters = 1_000) {
+  async acceptTerms(termsVersion: string, feedRadiusMeters: number) {
     const client = requireSupabaseClient();
     const { error } = await request((signal) =>
       client.rpc('accept_network_terms', {

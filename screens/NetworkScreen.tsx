@@ -16,6 +16,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import type { NetworkConfirmationKind, NetworkReportCategory } from '@/backend/database.types';
+import { BackendError } from '@/backend/errors/BackendError';
+import { RemoteRequestTimeoutError } from '@/backend/remoteRequest';
+import {
+  LocationPermissionError,
+  LocationTimeoutError,
+  LocationUnavailableError,
+} from '@/services/LocationService';
 import {
   getNetworkCategoryLabel,
   NETWORK_CATEGORIES,
@@ -25,9 +32,26 @@ import {
 import { NetworkService } from '@/services/NetworkService';
 
 const friendlyError = (fallback: string) => (error: unknown) => {
-  const message = error instanceof Error ? error.message : '';
-  if (/permission|location|gps/i.test(message)) return 'Attiva la posizione e autorizza SafeMeLink, poi riprova.';
-  if (/network|fetch|timeout|timed out/i.test(message)) return 'Connessione non disponibile. Riprova tra poco.';
+  if (error instanceof LocationPermissionError) {
+    return 'Autorizza SafeMeLink ad accedere alla posizione, poi riprova.';
+  }
+  if (error instanceof LocationUnavailableError) {
+    return 'Attiva la posizione sul dispositivo, poi riprova.';
+  }
+  if (error instanceof LocationTimeoutError) {
+    return 'La posizione non è arrivata in tempo. Controlla il GPS e riprova.';
+  }
+  if (error instanceof RemoteRequestTimeoutError) {
+    return 'Il servizio NETWORK non risponde. Riprova tra poco.';
+  }
+  if (error instanceof BackendError) {
+    if (error.category === 'backend_unavailable') {
+      return 'Il servizio NETWORK deve essere aggiornato. Riprova dopo l’aggiornamento.';
+    }
+    if (error.category === 'unauthenticated') return 'Sessione scaduta. Accedi di nuovo.';
+    if (error.category === 'forbidden') return 'Completa i requisiti NETWORK prima di continuare.';
+    if (error.category === 'network') return 'Connessione non disponibile. Riprova tra poco.';
+  }
   return fallback;
 };
 
@@ -186,7 +210,7 @@ export function NetworkScreen() {
           <View style={styles.hero}>
             <Ionicons color="#45B7FF" name="shield-checkmark-outline" size={42} />
             <Text style={styles.title}>Sicurezza condivisa, con privacy</Text>
-            <Text style={styles.body}>Segnalazioni di sicurezza vicine entro 1 km. La posizione mostrata è sempre approssimativa.</Text>
+            <Text style={styles.body}>Segnalazioni di sicurezza vicine entro 5 km. La posizione mostrata è sempre approssimativa.</Text>
           </View>
 
           {message ? (

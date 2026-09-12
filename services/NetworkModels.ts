@@ -5,7 +5,7 @@ import type {
   NetworkReportStatus,
 } from '@/backend/database.types';
 
-export const NETWORK_FEED_RADIUS_METERS = 1_000;
+export const NETWORK_FEED_RADIUS_METERS = 5_000;
 export const NETWORK_PAGE_SIZE = 20;
 
 export type NetworkRestrictionStatus =
