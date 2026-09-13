@@ -6,6 +6,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const migration = read('supabase/migrations/20260911120000_neighborhood_network_mvp.sql');
+const runtimeFix = read('supabase/migrations/20260913120000_neighborhood_and_network_runtime_fixes.sql');
 const trustedMigration = read('supabase/migrations/20260721120000_trusted_links.sql');
 const screen = read('screens/NeighborhoodNetworkScreen.tsx');
 const service = read('services/NeighborhoodNetworkService.ts');
@@ -89,6 +90,18 @@ check('expired invitations are persisted as expired and never accepted', () => {
   assert.ok((migration.match(/set status = 'expired', responded_at = now\(\)/g) ?? []).length >= 3);
   assert.match(migration, /where invited_user_id = actor_id and status = 'pending' and expires_at <= now\(\)/);
   assert.match(repository, /data\.invitation_status === 'expired'/);
+});
+
+check('invitation expiry uses qualified columns and preserves the RPC contract', () => {
+  const fixedFunction = runtimeFix.match(
+    /create or replace function public\.list_my_neighborhood_invitations\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0] ?? '';
+  assert.match(fixedFunction, /update public\.neighborhood_invitations as expired_invitation/);
+  assert.match(fixedFunction, /expired_invitation\.status = 'pending'/);
+  assert.match(fixedFunction, /expired_invitation\.expires_at <= now\(\)/);
+  assert.doesNotMatch(fixedFunction, /where\s+status\s*=\s*'pending'\s+and\s+expires_at/i);
+  assert.match(runtimeFix, /revoke all on function public\.list_my_neighborhood_invitations\(\) from public, anon;/i);
+  assert.match(runtimeFix, /grant execute on function public\.list_my_neighborhood_invitations\(\) to authenticated;/i);
 });
 
 check('MVP single-network create and accept paths share an account lock', () => {

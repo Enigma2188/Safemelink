@@ -9,6 +9,18 @@ const runtimeMigration = fs.readFileSync(path.join(
   'migrations',
   '20260912120000_network_runtime_radius_5km.sql',
 ), 'utf8');
+const runtimeFix = fs.readFileSync(path.join(
+  process.cwd(),
+  'supabase',
+  'migrations',
+  '20260913120000_neighborhood_and_network_runtime_fixes.sql',
+), 'utf8');
+const feedRuntimeFix = fs.readFileSync(path.join(
+  process.cwd(),
+  'supabase',
+  'migrations',
+  '20260913130000_network_feed_runtime_fix.sql',
+), 'utf8');
 const feedFunction = sql.match(
   /create or replace function public\.list_nearby_network_reports\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
@@ -19,6 +31,21 @@ const contentReportFunction = sql.match(
   /create or replace function public\.report_network_content\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
 const checks = [
+  ['feed visibility grants avoid report-id ambiguity',
+    /insert into public\.network_report_visibility_grants as visibility_grant/i.test(feedRuntimeFix)
+      && /on conflict on constraint network_report_visibility_grants_pkey/i.test(feedRuntimeFix)
+      && /returning visibility_grant\.report_id/i.test(feedRuntimeFix)
+      && !/on conflict \(user_id, report_id\)/i.test(feedRuntimeFix)
+      && !/returning\s+report_id/i.test(feedRuntimeFix)],
+  ['feed replacement preserves signature and authenticated-only grant',
+    /create or replace function public\.list_nearby_network_reports\([\s\S]*?viewer_latitude double precision[\s\S]*?requested_page_size integer default null/i.test(feedRuntimeFix)
+      && /security definer set search_path = public, extensions, pg_temp/i.test(feedRuntimeFix)
+      && /revoke all on function public\.list_nearby_network_reports\(double precision, double precision, integer, integer, timestamptz, uuid, integer\) from public, anon;/i.test(feedRuntimeFix)
+      && /grant execute on function public\.list_nearby_network_reports\(double precision, double precision, integer, integer, timestamptz, uuid, integer\) to authenticated;/i.test(feedRuntimeFix)],
+  ['report rate limits qualify created-at against their table aliases',
+    /from public\.network_reports as hourly_report where hourly_report\.author_user_id = actor and hourly_report\.created_at >=/i.test(runtimeFix)
+      && /from public\.network_reports as daily_report where daily_report\.author_user_id = actor and daily_report\.created_at >=/i.test(runtimeFix)
+      && !/from public\.network_reports where author_user_id = actor and created_at >=/i.test(runtimeFix)],
   ['five kilometre runtime default',
     /default_feed_radius_meters = 5000/i.test(runtimeMigration)
       && /max_feed_radius_meters = 5000/i.test(runtimeMigration)

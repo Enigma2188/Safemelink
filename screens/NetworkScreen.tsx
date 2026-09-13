@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -77,6 +78,7 @@ export function NetworkScreen() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [category, setCategory] = useState<NetworkReportCategory>('SUSPICIOUS_ACTIVITY');
   const [description, setDescription] = useState('');
+  const [publishMessage, setPublishMessage] = useState<string | null>(null);
 
   const isCurrent = useCallback((expectedUser: string, generation: number, request?: number) => (
     mountedRef.current
@@ -123,6 +125,7 @@ export function NetworkScreen() {
     setOnboarding(null);
     setReports([]);
     setMessage(null);
+    setPublishMessage(null);
     setBusy(false);
     void load();
     return () => {
@@ -137,6 +140,7 @@ export function NetworkScreen() {
     operation: () => Promise<unknown>,
     success: string,
     onSuccess?: () => void,
+    onFeedback?: (feedback: string) => void,
   ) => {
     if (actionRef.current || !userId) return;
     const expectedUser = userId;
@@ -148,11 +152,13 @@ export function NetworkScreen() {
       await operation();
       if (!isCurrent(expectedUser, generation)) return;
       onSuccess?.();
-      setMessage(success);
+      (onFeedback ?? setMessage)(success);
       await load(false);
     } catch (error) {
       if (isCurrent(expectedUser, generation)) {
-        setMessage(friendlyError('Operazione non riuscita. Riprova tra poco.')(error));
+        (onFeedback ?? setMessage)(
+          friendlyError('Operazione non riuscita. Riprova tra poco.')(error),
+        );
       }
     } finally {
       if (isCurrent(expectedUser, generation)) {
@@ -170,16 +176,19 @@ export function NetworkScreen() {
   const publish = () => {
     const clean = description.trim();
     if (clean.length < 10 || clean.length > 500) {
-      setMessage('Descrivi la situazione usando da 10 a 500 caratteri.');
+      setPublishMessage('Descrivi la situazione usando da 10 a 500 caratteri.');
       return;
     }
+    Keyboard.dismiss();
+    setPublishMessage(null);
     void runAction(
       () => NetworkService.createReport(category, clean),
-      'Segnalazione pubblicata nella zona approssimativa.',
+      'Segnalazione pubblicata.',
       () => {
         setDescription('');
         setComposerOpen(false);
       },
+      setPublishMessage,
     );
   };
 
@@ -202,9 +211,10 @@ export function NetworkScreen() {
         </Pressable>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.content}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} tintColor="#45B7FF" />}>
           <View style={styles.hero}>
@@ -247,10 +257,22 @@ export function NetworkScreen() {
                 <PrimaryButton
                   disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'PUBLISH_BLOCKED'}
                   label={composerOpen ? 'CHIUDI' : 'SEGNALA'}
-                  onPress={() => setComposerOpen((value) => !value)}
+                  onPress={() => {
+                    setPublishMessage(null);
+                    setComposerOpen((value) => !value);
+                  }}
                   compact
                 />
               </View>
+
+              {publishMessage ? (
+                <View accessibilityLiveRegion="polite" style={styles.message}>
+                  <Text style={styles.messageText}>{publishMessage}</Text>
+                  <Pressable accessibilityLabel="Chiudi messaggio pubblicazione" onPress={() => setPublishMessage(null)}>
+                    <Ionicons color="#D2DDEE" name="close" size={20} />
+                  </Pressable>
+                </View>
+              ) : null}
 
               {composerOpen ? (
                 <View style={styles.card}>
@@ -264,14 +286,17 @@ export function NetworkScreen() {
                     accessibilityLabel="Descrizione della segnalazione"
                     maxLength={500}
                     multiline
-                    onChangeText={setDescription}
+                    onChangeText={(value) => {
+                      setDescription(value);
+                      setPublishMessage(null);
+                    }}
                     placeholder="Descrivi brevemente la situazione…"
                     placeholderTextColor="#71809B"
                     style={styles.input}
                     value={description}
                   />
                   <Text style={styles.counter}>{description.trim().length}/500</Text>
-                  <PrimaryButton disabled={busy} label="PUBBLICA" onPress={publish} />
+                  <PrimaryButton disabled={busy} label={busy ? 'PUBBLICAZIONE…' : 'PUBBLICA'} onPress={publish} />
                 </View>
               ) : null}
 
@@ -318,7 +343,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#071020' }, flex: { flex: 1 },
   header: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#21314B' },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, headerTitle: { color: '#F7FAFF', fontSize: 19, fontWeight: '800', letterSpacing: 1.2 },
-  content: { padding: 18, paddingBottom: 48, gap: 14 }, hero: { alignItems: 'center', gap: 8, paddingVertical: 12 }, title: { color: '#F7FAFF', fontSize: 23, fontWeight: '800', textAlign: 'center' },
+  content: { padding: 18, paddingBottom: 96, gap: 14 }, hero: { alignItems: 'center', gap: 8, paddingVertical: 12 }, title: { color: '#F7FAFF', fontSize: 23, fontWeight: '800', textAlign: 'center' },
   body: { color: '#AEBBD0', fontSize: 15, lineHeight: 21 }, card: { backgroundColor: '#0D1A2F', borderWidth: 1, borderColor: '#1B3354', borderRadius: 18, padding: 16, gap: 11 },
   cardTitle: { color: '#F7FAFF', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 13, backgroundColor: '#142846' }, messageText: { flex: 1, color: '#E8F2FF', lineHeight: 20 },
   requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#D8E2F2', fontSize: 15 }, hint: { color: '#8F9DB2', fontSize: 13, lineHeight: 18 },
