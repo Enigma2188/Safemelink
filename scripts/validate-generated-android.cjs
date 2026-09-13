@@ -71,6 +71,11 @@ assert.match(
   /<uses-permission\b[^>]*android:name=["']android\.permission\.SEND_SMS["'][^>]*>/,
   'Permesso Android SEND_SMS mancante per gli SMS automatici di emergenza.',
 );
+assert.match(
+  manifest,
+  /<uses-permission\b[^>]*android:name=["']android\.permission\.SCHEDULE_EXACT_ALARM["'][^>]*>/,
+  'Permesso Android SCHEDULE_EXACT_ALARM mancante per le scadenze di sicurezza.',
+);
 
 const voiceProtectionServiceTag = manifest.match(
   /<service\b(?=[^>]*android:name=["']com\.asterinet\.react\.bgactions\.RNBackgroundActionsTask["'])[^>]*>/,

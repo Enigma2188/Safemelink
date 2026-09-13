@@ -1271,6 +1271,12 @@ check('Checkpoint expiry is absolute, persisted, account-scoped and single-fire'
 });
 
 check('Checkpoint and Go Home expirations run outside the React UI lifecycle', () => {
+  assert.ok(
+    JSON.parse(appConfig).expo.android.permissions.includes(
+      'android.permission.SCHEDULE_EXACT_ALARM',
+    ),
+    'Android exact alarm permission is required for deadline notifications.',
+  );
   assert.match(safetyExpirationStorage, /SafetyExpirationKind = 'checkpoint' \| 'go_home'/);
   assert.match(safetyExpirationStorage, /confirmationExpiresAt: string/);
   assert.match(safetyExpirationStorage, /phase: SafetyExpirationPhase/);

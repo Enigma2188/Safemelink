@@ -13,6 +13,11 @@ function load(file, modules) {
   return exports;
 }
 async function main() {
+  const appConfig = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+  assert.ok(
+    appConfig.expo.android.permissions.includes('android.permission.SCHEDULE_EXACT_ALARM'),
+    'deadline notifications require Android exact alarm permission',
+  );
   const payload = load('services/SOSNotificationPayload.ts', {});
   const policy = load('services/NotificationSoundPolicy.ts', { '@/services/SOSNotificationPayload': payload });
   const id = '00000000-0000-4000-8000-000000000001';

@@ -113,6 +113,10 @@ for (const permission of [
 }
 assert.ok(appConfig.expo.plugins.includes('expo-notifications'));
 assert.ok(
+  appConfig.expo.android.permissions.includes('android.permission.SCHEDULE_EXACT_ALARM'),
+  'Permesso Android per notifiche di sicurezza alla scadenza esatta mancante.',
+);
+assert.ok(
   appConfig.expo.plugins.includes('./plugins/withSOSChannelQueries.cjs'),
   'Plugin Android per i canali fallback SOS mancante.',
 );
