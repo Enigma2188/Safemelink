@@ -28,6 +28,7 @@ const normalizeFeed = (
   confirmationCount: Math.max(0, row.confirmation_count),
   noLongerPresentCount: Math.max(0, row.no_longer_present_count),
   myConfirmation: row.my_confirmation,
+  isMine: row.is_mine,
 }));
 
 export const NetworkService = {
@@ -35,7 +36,10 @@ export const NetworkService = {
     const row = await NetworkRepository.getOnboardingStatus();
     return {
       emailVerified: row.email_verified,
+      firstNamePresent: row.first_name_present,
+      lastNamePresent: row.last_name_present,
       nicknamePresent: row.nickname_present,
+      phonePresent: row.phone_present,
       phoneVerified: row.phone_verified,
       currentTermsVersion: row.current_terms_version,
       acceptedTermsVersion: row.accepted_terms_version,
@@ -43,11 +47,24 @@ export const NetworkService = {
       eligible: row.eligible,
       restrictionStatus: row.restriction_status,
       nickname: row.nickname,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      phone: row.phone,
     };
+  },
+
+  updateIdentity(input: { firstName: string; lastName: string; nickname: string; phone: string }) {
+    return NetworkRepository.updateIdentity(input);
   },
 
   acceptCurrentTerms(status: NetworkOnboardingStatus) {
     return NetworkRepository.acceptTerms(status.currentTermsVersion, NETWORK_FEED_RADIUS_METERS);
+  },
+
+  getFeedRadius: NetworkRepository.getFeedRadius,
+
+  setFeedRadius(radiusMeters: number) {
+    return NetworkRepository.setFeedRadius(radiusMeters);
   },
 
   startPhoneVerification(phone: string): Promise<NetworkPhoneChallenge> {
@@ -66,7 +83,7 @@ export const NetworkService = {
     return NetworkRepository.cancelPhoneVerification(challenge.userId, challenge.challengeId);
   },
 
-  async loadFeed(cursor?: NetworkFeedCursor | null) {
+  async loadFeed(radiusMeters = NETWORK_FEED_RADIUS_METERS, cursor?: NetworkFeedCursor | null) {
     const location = await LocationService.getCurrentLocation({
       timeoutMs: 15_000,
       accuracy: 'balanced',
@@ -74,7 +91,7 @@ export const NetworkService = {
     const reports = normalizeFeed(await NetworkRepository.listFeed({
       latitude: location.latitude,
       longitude: location.longitude,
-      radiusMeters: NETWORK_FEED_RADIUS_METERS,
+      radiusMeters,
       pageSize: NETWORK_PAGE_SIZE,
       cursor,
     }));

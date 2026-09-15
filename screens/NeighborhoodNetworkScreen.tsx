@@ -375,7 +375,7 @@ export function NeighborhoodNetworkScreen() {
 
               {isAdmin ? (
                 <Section title="Invita una persona">
-                  <Text style={styles.body}>Inserisci il codice temporaneo che la persona ha scelto di condividere. Non servono email o telefono.</Text>
+                  <Text style={styles.body}>Inserisci il codice temporaneo NQ-… che la persona ha scelto di condividere. Non usare il codice pubblico del profilo.</Text>
                   <TextInput
                     accessibilityLabel="Codice temporaneo Rete di quartiere"
                     autoCapitalize="characters"

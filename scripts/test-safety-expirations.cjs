@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 const source = fs.readFileSync(path.resolve('services/SafetyExpirationRuntime.ts'), 'utf8');
+const homeSource = fs.readFileSync(path.resolve('app/(tabs)/index.tsx'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
 function fixture(initial = null) {
@@ -51,6 +52,10 @@ function fixture(initial = null) {
 }
 
 async function main() {
+  assert.match(homeSource, /const preventiveStartInFlightRef = useRef\(false\)/);
+  assert.match(homeSource, /if \(preventiveStartInFlightRef\.current\)[\s\S]{0,180}Attendi il completamento/);
+  assert.match(homeSource, /statusRef\.current !== 'idle'[\s\S]{0,180}checkpointStatusRef\.current !== 'idle'/);
+  assert.match(homeSource, /VoiceProtectionRuntime\.onSOSRequested[\s\S]{0,900}startSOSCountdown\('voice'/);
   {
     const exports = {};
     let fire;

@@ -181,6 +181,17 @@ export const NetworkRepository = {
     return data;
   },
 
+  async updateIdentity(input: { firstName: string; lastName: string; nickname: string; phone: string }) {
+    const client = requireSupabaseClient();
+    const { error } = await request((signal) => client.rpc('update_my_network_identity', {
+      target_first_name: input.firstName,
+      target_last_name: input.lastName,
+      target_nickname: input.nickname,
+      target_phone: input.phone,
+    }).abortSignal(signal));
+    if (error) throw fail('network.update_identity', 'Impossibile aggiornare i requisiti NETWORK.', error);
+  },
+
   async startPhoneVerification(phone: string) {
     const normalizedPhone = canonicalizeInternationalPhone(phone);
     if (!normalizedPhone || !/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
@@ -346,6 +357,26 @@ export const NetworkRepository = {
       }).abortSignal(signal),
     );
     if (error) throw fail('network.accept_terms', 'Impossibile accettare ora le regole NETWORK.', error);
+  },
+
+  async getFeedRadius() {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('get_my_network_feed_radius').abortSignal(signal),
+    );
+    if (error) throw fail('network.get_feed_radius', 'Impossibile caricare il raggio NETWORK.', error);
+    return data;
+  },
+
+  async setFeedRadius(feedRadiusMeters: number) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('set_my_network_feed_radius', {
+        target_feed_radius_meters: feedRadiusMeters,
+      }).abortSignal(signal),
+    );
+    if (error) throw fail('network.set_feed_radius', 'Impossibile aggiornare il raggio NETWORK.', error);
+    return data;
   },
 
   async listFeed(input: {

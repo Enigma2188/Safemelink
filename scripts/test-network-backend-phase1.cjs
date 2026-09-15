@@ -21,6 +21,18 @@ const feedRuntimeFix = fs.readFileSync(path.join(
   'migrations',
   '20260913130000_network_feed_runtime_fix.sql',
 ), 'utf8');
+const expirySchedule = fs.readFileSync(path.join(
+  process.cwd(),
+  'supabase',
+  'migrations',
+  '20260914121000_network_report_expiry_schedule.sql',
+), 'utf8');
+const launchEligibility = fs.readFileSync(path.join(
+  process.cwd(),
+  'supabase',
+  'migrations',
+  '20260914122000_network_launch_eligibility.sql',
+), 'utf8');
 const feedFunction = sql.match(
   /create or replace function public\.list_nearby_network_reports\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
@@ -31,6 +43,14 @@ const contentReportFunction = sql.match(
   /create or replace function public\.report_network_content\([\s\S]*?\n\$\$;/i,
 )?.[0] ?? '';
 const checks = [
+  ['launch eligibility requires identity and phone presence but not Phone OTP',
+    /profile\.first_name[\s\S]*profile\.last_name[\s\S]*profile\.nickname[\s\S]*profile\.phone/i.test(launchEligibility)
+      && !/join public\.account_verifications/i.test(
+        launchEligibility.match(/create or replace function public\.network_user_is_eligible[\s\S]*?\n\$\$;/i)?.[0] ?? '',
+      )],
+  ['expired reports are scheduled and excluded from duplicate detection',
+    /cron\.schedule\([\s\S]*safemelink-expire-network-reports[\s\S]*\*\/5 \* \* \* \*[\s\S]*expire_network_reports\(\)/i.test(expirySchedule)
+      && /r\.status = 'ACTIVE' and r\.expires_at > now\(\)/i.test(expirySchedule)],
   ['feed visibility grants avoid report-id ambiguity',
     /insert into public\.network_report_visibility_grants as visibility_grant/i.test(feedRuntimeFix)
       && /on conflict on constraint network_report_visibility_grants_pkey/i.test(feedRuntimeFix)

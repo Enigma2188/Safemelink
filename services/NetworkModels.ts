@@ -6,6 +6,7 @@ import type {
 } from '@/backend/database.types';
 
 export const NETWORK_FEED_RADIUS_METERS = 5_000;
+export const NETWORK_FEED_RADIUS_OPTIONS = [1_000, 2_500, 5_000, 10_000] as const;
 export const NETWORK_PAGE_SIZE = 20;
 
 export type NetworkRestrictionStatus =
@@ -17,7 +18,10 @@ export type NetworkRestrictionStatus =
 
 export type NetworkOnboardingStatus = {
   emailVerified: boolean;
+  firstNamePresent: boolean;
+  lastNamePresent: boolean;
   nicknamePresent: boolean;
+  phonePresent: boolean;
   phoneVerified: boolean;
   currentTermsVersion: string;
   acceptedTermsVersion: string | null;
@@ -25,6 +29,9 @@ export type NetworkOnboardingStatus = {
   eligible: boolean;
   restrictionStatus: NetworkRestrictionStatus;
   nickname: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
 };
 
 export type NetworkPhoneChallenge = {
@@ -89,9 +96,10 @@ export type NetworkFeedReport = {
   confirmationCount: number;
   noLongerPresentCount: number;
   myConfirmation: NetworkConfirmationKind | null;
+  isMine: boolean;
 };
 
-export type NetworkReportDetail = Omit<NetworkFeedReport, 'distanceBucketMeters'> & {
+export type NetworkReportDetail = Omit<NetworkFeedReport, 'distanceBucketMeters' | 'isMine'> & {
   updates: NetworkReportUpdate[];
 };
 

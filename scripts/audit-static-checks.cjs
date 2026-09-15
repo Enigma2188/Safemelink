@@ -185,6 +185,15 @@ check('SOS network background location is bounded, opportunistic and account-sco
   assert.match(sosNetworkProvider, /location_services_required/);
   assert.match(sosNetworkProvider, /notification_permission_required/);
   assert.match(sosNetworkProvider, /AppState\.addEventListener\('change'/);
+  assert.match(
+    sosNetworkProvider,
+    /requestPermissions\(\)[\s\S]*activeUserIdRef\.current !== expectedUserId[\s\S]*updatePreference\(true\)/,
+  );
+  assert.match(
+    sosNetworkProvider,
+    /stopBackgroundUpdates\(\)[\s\S]*activeUserIdRef\.current !== expectedUserId[\s\S]*updatePreference\(false\)/,
+  );
+  assert.match(sosNetworkProvider, /saveInFlightRef\.current\?\.userId === userId/);
   assert.doesNotMatch(sosNetworkProvider, /setInterval/);
   assert.doesNotMatch(sosNetworkService, /watchPositionAsync/);
   assert.match(sosNetworkTask, /TaskManager\.defineTask/);
@@ -1557,15 +1566,47 @@ check('Phone OTP V2 operations are ownership-safe and service-role-only', () => 
   assert.doesNotMatch(phoneOtpV2Storage, /phoneE164|phone_hmac|otpDigest|ciphertext|nonce|\bcode\s*:/i);
 });
 
-check('NETWORK runtime uses the five kilometre MVP radius', () => {
+check('NETWORK runtime supports persisted privacy-safe feed radii', () => {
   const networkModels = read('services/NetworkModels.ts');
   const networkScreen = read('screens/NetworkScreen.tsx');
   const runtimeMigration = read('supabase/migrations/20260912120000_network_runtime_radius_5km.sql');
+  const radiusMigration = read('supabase/migrations/20260914120000_network_feed_radius_and_resolution.sql');
   assert.match(networkModels, /NETWORK_FEED_RADIUS_METERS = 5_000/);
-  assert.match(networkScreen, /entro 5 km/);
+  assert.match(networkModels, /\[1_000, 2_500, 5_000, 10_000\]/);
+  assert.match(networkScreen, /Zona approssimativa/);
+  assert.doesNotMatch(networkScreen, /formatDistance|distanceBucketMeters/);
   assert.match(runtimeMigration, /default_feed_radius_meters = 5000/);
   assert.match(runtimeMigration, /max_feed_radius_meters = 5000/);
   assert.match(runtimeMigration, /where feed_radius_meters = 1000/);
+  assert.match(radiusMigration, /max_feed_radius_meters = 10000/);
+  assert.match(radiusMigration, /resolved_visibility = interval '24 hours'/);
+  assert.match(radiusMigration, /report\.author_user_id = actor/);
+});
+
+check('NETWORK reports expire automatically and stale rows cannot block publishing', () => {
+  const expiryMigration = read('supabase/migrations/20260914121000_network_report_expiry_schedule.sql');
+  assert.match(expiryMigration, /cron\.schedule\([\s\S]*safemelink-expire-network-reports/);
+  assert.match(expiryMigration, /'\*\/5 \* \* \* \*'/);
+  assert.match(expiryMigration, /select public\.expire_network_reports\(\);/);
+  assert.match(expiryMigration, /r\.status = 'ACTIVE' and r\.expires_at > now\(\)/);
+});
+
+check('NETWORK launch eligibility keeps Phone OTP optional and requirements recoverable', () => {
+  const eligibilityMigration = read('supabase/migrations/20260914122000_network_launch_eligibility.sql');
+  const networkScreen = read('screens/NetworkScreen.tsx');
+  const eligibilityFunction = eligibilityMigration.match(
+    /create or replace function public\.network_user_is_eligible[\s\S]*?\n\$\$;/,
+  )?.[0] ?? '';
+  assert.match(eligibilityFunction, /profile\.first_name/);
+  assert.match(eligibilityFunction, /profile\.last_name/);
+  assert.match(eligibilityFunction, /profile\.nickname/);
+  assert.match(eligibilityFunction, /profile\.phone/);
+  assert.doesNotMatch(eligibilityFunction, /account_verifications|phone_verified_at/);
+  assert.match(networkScreen, /Nome reale inserito/);
+  assert.match(networkScreen, /Numero di telefono inserito/);
+  assert.match(networkScreen, /La verifica SMS del telefono è facoltativa/);
+  assert.match(networkScreen, /setLoadError\(null\)/);
+  assert.match(networkScreen, /label="RIPROVA"/);
 });
 
 check('Onboarding is versioned, permission-free and leaves a permanent guide', () => {

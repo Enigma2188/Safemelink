@@ -78,7 +78,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
   const generationRef = useRef(0);
   const activeUserIdRef = useRef(userId);
   const previousUserIdRef = useRef(userId);
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const saveInFlightRef = useRef<{ userId: string; promise: Promise<void> } | null>(null);
   activeUserIdRef.current = userId;
 
   useEffect(() => {
@@ -95,6 +95,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
 
     setEnabledState(false);
     setLoadedUserId(null);
+    setIsSaving(false);
     setMessage(null);
 
     if (isInitializing) {
@@ -287,8 +288,8 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
 
   const setEnabled = useCallback(
     (nextEnabled: boolean) => {
-      if (saveInFlightRef.current) {
-        return saveInFlightRef.current;
+      if (saveInFlightRef.current?.userId === userId) {
+        return saveInFlightRef.current.promise;
       }
       if (!userId || isOffline) {
         return Promise.reject(new Error('Connessione e sessione necessarie.'));
@@ -302,6 +303,9 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         if (nextEnabled) {
           console.info('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_REQUESTED');
           const permissionState = await SOSNetworkPresenceService.requestPermissions();
+          if (activeUserIdRef.current !== expectedUserId) {
+            return;
+          }
           await SOSNetworkPresenceRepository.updatePreference(true);
           console.info('[SafeMeLink Rete SOS] SOS_NETWORK_OPT_IN_ENABLED');
           if (activeUserIdRef.current !== expectedUserId) {
@@ -356,7 +360,13 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           } catch (backgroundStopError: unknown) {
             stopError = backgroundStopError;
           }
+          if (activeUserIdRef.current !== expectedUserId) {
+            return;
+          }
           await SOSNetworkPresenceRepository.updatePreference(false);
+          if (activeUserIdRef.current !== expectedUserId) {
+            return;
+          }
           await SOSNetworkPresenceRepository.deactivatePresence();
           await SOSNetworkLocationStorage.clear(expectedUserId).catch(() => undefined);
           if (activeUserIdRef.current !== expectedUserId) {
@@ -392,7 +402,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           throw saveError;
         })
         .finally(() => {
-          if (saveInFlightRef.current === request) {
+          if (saveInFlightRef.current?.promise === request) {
             saveInFlightRef.current = null;
           }
           if (activeUserIdRef.current === expectedUserId) {
@@ -400,7 +410,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           }
         });
 
-      saveInFlightRef.current = request;
+      saveInFlightRef.current = { userId: expectedUserId, promise: request };
       return request;
     },
     [isOffline, userId],

@@ -27,6 +27,8 @@ import {
 import {
   getNetworkCategoryLabel,
   NETWORK_CATEGORIES,
+  NETWORK_FEED_RADIUS_METERS,
+  NETWORK_FEED_RADIUS_OPTIONS,
   type NetworkFeedReport,
   type NetworkOnboardingStatus,
 } from '@/services/NetworkModels';
@@ -50,15 +52,15 @@ const friendlyError = (fallback: string) => (error: unknown) => {
       return 'Il servizio NETWORK deve essere aggiornato. Riprova dopo l’aggiornamento.';
     }
     if (error.category === 'unauthenticated') return 'Sessione scaduta. Accedi di nuovo.';
-    if (error.category === 'forbidden') return 'Completa i requisiti NETWORK prima di continuare.';
+    if (error.category === 'forbidden') return 'Questa operazione NETWORK non è disponibile per il tuo account.';
     if (error.category === 'network') return 'Connessione non disponibile. Riprova tra poco.';
   }
   return fallback;
 };
 
-const formatDistance = (meters: number) => meters >= 1_000
-  ? `entro ${(meters / 1_000).toFixed(1).replace('.0', '')} km`
-  : `entro ${Math.max(50, Math.round(meters / 50) * 50)} m`;
+const formatRadius = (meters: number) => meters >= 1_000
+  ? `${(meters / 1_000).toFixed(1).replace('.0', '')} km`
+  : `${meters} m`;
 
 export function NetworkScreen() {
   const router = useRouter();
@@ -72,9 +74,15 @@ export function NetworkScreen() {
   const actionRef = useRef(false);
   const [onboarding, setOnboarding] = useState<NetworkOnboardingStatus | null>(null);
   const [reports, setReports] = useState<NetworkFeedReport[]>([]);
+  const [feedRadius, setFeedRadius] = useState(NETWORK_FEED_RADIUS_METERS);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [phone, setPhone] = useState('');
   const [composerOpen, setComposerOpen] = useState(false);
   const [category, setCategory] = useState<NetworkReportCategory>('SUSPICIOUS_ACTIVITY');
   const [description, setDescription] = useState('');
@@ -102,15 +110,23 @@ export function NetworkScreen() {
       const status = await NetworkService.getMyNetworkOnboardingStatus();
       if (!isCurrent(expectedUser, generation, request)) return;
       setOnboarding(status);
+      setLoadError(null);
+      setFirstName(status.firstName ?? '');
+      setLastName(status.lastName ?? '');
+      setNickname(status.nickname ?? '');
+      setPhone(status.phone ?? '');
       if (!status.eligible || status.restrictionStatus === 'FULL_NETWORK_BLOCKED') {
         setReports([]);
         return;
       }
-      const feed = await NetworkService.loadFeed();
+      const savedRadius = await NetworkService.getFeedRadius();
+      if (!isCurrent(expectedUser, generation, request)) return;
+      setFeedRadius(savedRadius);
+      const feed = await NetworkService.loadFeed(savedRadius);
       if (isCurrent(expectedUser, generation, request)) setReports(feed.reports);
     } catch (error) {
       if (isCurrent(expectedUser, generation, request)) {
-        setMessage(friendlyError('Impossibile caricare NETWORK. Riprova tra poco.')(error));
+        setLoadError(friendlyError('Impossibile caricare NETWORK. Riprova tra poco.')(error));
       }
     } finally {
       if (isCurrent(expectedUser, generation, request)) setLoading(false);
@@ -124,7 +140,13 @@ export function NetworkScreen() {
     actionRef.current = false;
     setOnboarding(null);
     setReports([]);
+    setFeedRadius(NETWORK_FEED_RADIUS_METERS);
     setMessage(null);
+    setLoadError(null);
+    setFirstName('');
+    setLastName('');
+    setNickname('');
+    setPhone('');
     setPublishMessage(null);
     setBusy(false);
     void load();
@@ -173,6 +195,19 @@ export function NetworkScreen() {
     'Condizioni NETWORK accettate.',
   );
 
+  const saveIdentity = () => {
+    const phoneDigits = phone.replace(/[^0-9]/g, '');
+    if (firstName.trim().length < 2 || lastName.trim().length < 2
+      || nickname.trim().length < 2 || phoneDigits.length < 6 || phoneDigits.length > 15) {
+      setMessage('Completa nome, cognome, nickname e numero di telefono.');
+      return;
+    }
+    void runAction(
+      () => NetworkService.updateIdentity({ firstName, lastName, nickname, phone }),
+      'Dati NETWORK aggiornati.',
+    );
+  };
+
   const publish = () => {
     const clean = description.trim();
     if (clean.length < 10 || clean.length > 500) {
@@ -195,6 +230,20 @@ export function NetworkScreen() {
   const respond = (reportId: string, kind: NetworkConfirmationKind) => void runAction(
     () => NetworkService.respond(reportId, kind),
     kind === 'CONFIRMED' ? 'Segnalazione confermata.' : 'Indicazione aggiornata.',
+  );
+
+  const changeFeedRadius = (radiusMeters: number) => {
+    if (radiusMeters === feedRadius) return;
+    void runAction(
+      () => NetworkService.setFeedRadius(radiusMeters),
+      `Raggio NETWORK aggiornato a ${formatRadius(radiusMeters)}.`,
+      () => setFeedRadius(radiusMeters),
+    );
+  };
+
+  const resolve = (reportId: string) => void runAction(
+    () => NetworkService.resolve(reportId),
+    'Segnalazione conclusa.',
   );
 
   return (
@@ -220,13 +269,20 @@ export function NetworkScreen() {
           <View style={styles.hero}>
             <Ionicons color="#45B7FF" name="shield-checkmark-outline" size={42} />
             <Text style={styles.title}>Sicurezza condivisa, con privacy</Text>
-            <Text style={styles.body}>Segnalazioni di sicurezza vicine entro 5 km. La posizione mostrata è sempre approssimativa.</Text>
+            <Text style={styles.body}>Segnalazioni di sicurezza vicine. La posizione mostrata è sempre approssimativa.</Text>
           </View>
 
           {message ? (
             <View accessibilityLiveRegion="polite" style={styles.message}>
               <Text style={styles.messageText}>{message}</Text>
               <Pressable accessibilityLabel="Chiudi messaggio" onPress={() => setMessage(null)}><Ionicons color="#D2DDEE" name="close" size={20} /></Pressable>
+            </View>
+          ) : null}
+
+          {loadError ? (
+            <View accessibilityLiveRegion="polite" style={styles.message}>
+              <Text style={styles.messageText}>{loadError}</Text>
+              <PrimaryButton compact disabled={loading} label="RIPROVA" onPress={() => void load()} />
             </View>
           ) : null}
 
@@ -238,11 +294,19 @@ export function NetworkScreen() {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Completa il tuo account</Text>
               <Requirement ok={onboarding.emailVerified} text="Email verificata" />
+              <Requirement ok={onboarding.firstNamePresent} text="Nome reale inserito" />
+              <Requirement ok={onboarding.lastNamePresent} text="Cognome reale inserito" />
               <Requirement ok={onboarding.nicknamePresent} text="Nickname impostato" />
-              <Requirement ok={onboarding.phoneVerified} text="Telefono verificato" />
+              <Requirement ok={onboarding.phonePresent} text="Numero di telefono inserito" />
               <Requirement ok={onboarding.termsAccepted} text="Condizioni NETWORK accettate" />
+              <Text style={styles.hint}>Nome, cognome e telefono restano dati interni. Nel NETWORK viene mostrato soltanto il nickname.</Text>
+              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setFirstName} placeholder="Nome" placeholderTextColor="#71809B" style={styles.shortInput} value={firstName} />
+              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setLastName} placeholder="Cognome" placeholderTextColor="#71809B" style={styles.shortInput} value={lastName} />
+              <TextInput autoCapitalize="none" editable={!busy} maxLength={40} onChangeText={setNickname} placeholder="Nickname pubblico" placeholderTextColor="#71809B" style={styles.shortInput} value={nickname} />
+              <TextInput editable={!busy} keyboardType="phone-pad" maxLength={32} onChangeText={setPhone} placeholder="Numero di telefono" placeholderTextColor="#71809B" style={styles.shortInput} value={phone} />
+              <PrimaryButton disabled={busy} label="SALVA DATI NETWORK" onPress={saveIdentity} />
               {!onboarding.termsAccepted ? <PrimaryButton disabled={busy} label="ACCETTA LE CONDIZIONI NETWORK" onPress={acceptTerms} /> : null}
-              <Text style={styles.hint}>Completa gli altri requisiti nel profilo per pubblicare e consultare le segnalazioni.</Text>
+              {!onboarding.phoneVerified ? <Text style={styles.hint}>La verifica SMS del telefono è facoltativa in questa versione.</Text> : null}
             </View>
           ) : null}
 
@@ -263,6 +327,20 @@ export function NetworkScreen() {
                   }}
                   compact
                 />
+              </View>
+
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Segnalazioni entro</Text>
+                <View style={styles.chips}>{NETWORK_FEED_RADIUS_OPTIONS.map((radius) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy}
+                    key={radius}
+                    onPress={() => changeFeedRadius(radius)}
+                    style={[styles.chip, feedRadius === radius && styles.chipSelected]}>
+                    <Text style={[styles.chipText, feedRadius === radius && styles.chipTextSelected]}>{formatRadius(radius)}</Text>
+                  </Pressable>
+                ))}</View>
               </View>
 
               {publishMessage ? (
@@ -308,15 +386,24 @@ export function NetworkScreen() {
                 <View key={report.id} style={styles.card}>
                   <View style={styles.reportHeader}>
                     <Text style={styles.category}>{getNetworkCategoryLabel(report.category)}</Text>
-                    <Text style={styles.status}>{report.status === 'ACTIVE' ? 'ATTIVA' : 'RISOLTA'}</Text>
+                    <Text style={styles.status}>{report.status === 'ACTIVE' ? 'ATTIVA' : 'CONCLUSA'}</Text>
                   </View>
                   <Text style={styles.description}>{report.description}</Text>
-                  <Text style={styles.meta}>{report.publicArea} · {formatDistance(report.distanceBucketMeters)}</Text>
+                  <Text style={styles.meta}>Zona approssimativa</Text>
                   <Text style={styles.meta}>Segnalata da {report.authorNickname}</Text>
-                  <View style={styles.reportActions}>
-                    <SecondaryButton disabled={busy || report.status !== 'ACTIVE' || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'INTERACTIONS_BLOCKED'} label={`CONFERMA · ${report.confirmationCount}`} onPress={() => respond(report.id, 'CONFIRMED')} selected={report.myConfirmation === 'CONFIRMED'} />
-                    <SecondaryButton disabled={busy || report.status !== 'ACTIVE' || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'INTERACTIONS_BLOCKED'} label="NON PIÙ PRESENTE" onPress={() => respond(report.id, 'NO_LONGER_PRESENT')} selected={report.myConfirmation === 'NO_LONGER_PRESENT'} />
-                  </View>
+                  {report.status === 'RESOLVED' ? <Text style={styles.body}>Segnalazione conclusa</Text> : null}
+                  {report.status === 'ACTIVE' ? (
+                    <View style={styles.reportActions}>
+                      {report.isMine ? (
+                        <SecondaryButton disabled={busy} label="NON PIÙ PRESENTE" onPress={() => resolve(report.id)} selected={false} />
+                      ) : (
+                        <>
+                          <SecondaryButton disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'INTERACTIONS_BLOCKED'} label={`CONFERMA · ${report.confirmationCount}`} onPress={() => respond(report.id, 'CONFIRMED')} selected={report.myConfirmation === 'CONFIRMED'} />
+                          <SecondaryButton disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'INTERACTIONS_BLOCKED'} label="NON PIÙ PRESENTE" onPress={() => respond(report.id, 'NO_LONGER_PRESENT')} selected={report.myConfirmation === 'NO_LONGER_PRESENT'} />
+                        </>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               ))}
             </>
@@ -351,6 +438,7 @@ const styles = StyleSheet.create({
   primaryButton: { minHeight: 48, borderRadius: 13, backgroundColor: '#078DEB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 }, compactButton: { minHeight: 42 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' }, disabled: { opacity: 0.45 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { borderWidth: 1, borderColor: '#344967', borderRadius: 16, paddingHorizontal: 11, paddingVertical: 8 }, chipSelected: { backgroundColor: '#113F69', borderColor: '#45B7FF' }, chipText: { color: '#B6C3D6', fontSize: 13 }, chipTextSelected: { color: '#E8F7FF' },
   input: { minHeight: 112, borderWidth: 1, borderColor: '#31445F', borderRadius: 13, padding: 12, color: '#F7FAFF', textAlignVertical: 'top', fontSize: 15 }, counter: { color: '#8492A8', textAlign: 'right', fontSize: 12 },
+  shortInput: { minHeight: 48, borderWidth: 1, borderColor: '#31445F', borderRadius: 13, paddingHorizontal: 12, color: '#F7FAFF', fontSize: 15 },
   reportHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, category: { flex: 1, color: '#72C8FF', fontWeight: '700', fontSize: 15 }, status: { color: '#39D98A', fontSize: 11, fontWeight: '800' }, description: { color: '#F0F5FC', fontSize: 16, lineHeight: 23 }, meta: { color: '#91A1B8', fontSize: 13 }, reportActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
   secondaryButton: { minHeight: 42, justifyContent: 'center', borderWidth: 1, borderColor: '#335071', borderRadius: 12, paddingHorizontal: 12 }, secondarySelected: { backgroundColor: '#173B5C', borderColor: '#45B7FF' }, secondaryText: { color: '#D7E7F8', fontSize: 12, fontWeight: '700' },
 });

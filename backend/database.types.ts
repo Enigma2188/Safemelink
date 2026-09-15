@@ -28,6 +28,8 @@ export type Database = {
           id: string;
           nickname: string | null;
           phone: string | null;
+          first_name: string | null;
+          last_name: string | null;
           avatar: string | null;
           available: boolean;
           last_position: unknown | null;
@@ -39,6 +41,8 @@ export type Database = {
           id: string;
           nickname?: string | null;
           phone?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
           avatar?: string | null;
           available?: boolean;
           last_position?: unknown | null;
@@ -49,6 +53,8 @@ export type Database = {
         Update: {
           nickname?: string | null;
           phone?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
           avatar?: string | null;
           available?: boolean;
           last_position?: unknown | null;
@@ -497,11 +503,22 @@ export type Database = {
         Args: { target_terms_version: string; target_feed_radius_meters?: number | null };
         Returns: undefined;
       };
+      get_my_network_feed_radius: {
+        Args: Record<string, never>;
+        Returns: number;
+      };
+      set_my_network_feed_radius: {
+        Args: { target_feed_radius_meters: number };
+        Returns: number;
+      };
       get_my_network_onboarding_status: {
         Args: Record<string, never>;
         Returns: {
           email_verified: boolean;
+          first_name_present: boolean;
+          last_name_present: boolean;
           nickname_present: boolean;
+          phone_present: boolean;
           phone_verified: boolean;
           current_terms_version: string;
           accepted_terms_version: string | null;
@@ -514,7 +531,19 @@ export type Database = {
             | 'INTERACTIONS_BLOCKED'
             | 'FULL_NETWORK_BLOCKED';
           nickname: string | null;
+          first_name: string | null;
+          last_name: string | null;
+          phone: string | null;
         }[];
+      };
+      update_my_network_identity: {
+        Args: {
+          target_first_name: string;
+          target_last_name: string;
+          target_nickname: string;
+          target_phone: string;
+        };
+        Returns: undefined;
       };
       create_network_report: {
         Args: {
@@ -559,6 +588,7 @@ export type Database = {
           confirmation_count: number;
           no_longer_present_count: number;
           my_confirmation: NetworkConfirmationKind | null;
+          is_mine: boolean;
         }[];
       };
       get_network_report: {

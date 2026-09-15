@@ -317,6 +317,7 @@ export default function HomeScreen() {
   const sosCompletionInFlightRef = useRef(false);
   const sosEndingInFlightRef = useRef(false);
   const checkpointStartInFlightRef = useRef(false);
+  const preventiveStartInFlightRef = useRef(false);
   const checkpointOperationGenerationRef = useRef(0);
   const checkpointExpirationHandledRef = useRef<string | null>(null);
   const checkpointOwnerUserIdRef = useRef<string | null>(userId);
@@ -455,6 +456,7 @@ export default function HomeScreen() {
     statusRef.current = 'countdown';
     checkpointOperationGenerationRef.current += 1;
     checkpointStartInFlightRef.current = false;
+    preventiveStartInFlightRef.current = false;
     const checkpointOwnerUserId = checkpointOwnerUserIdRef.current;
     void clearPersistedCheckpoint(checkpointOwnerUserId);
     if (checkpointOwnerUserId) {
@@ -566,6 +568,7 @@ export default function HomeScreen() {
     setRemainingSeconds(SAFETY_TIMER_SECONDS);
     checkpointOperationGenerationRef.current += 1;
     checkpointStartInFlightRef.current = false;
+    preventiveStartInFlightRef.current = false;
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
     checkpointStatusRef.current = 'idle';
@@ -938,11 +941,11 @@ export default function HomeScreen() {
       Alert.alert('Checkpoint', 'Seleziona una durata valida prima di avviare il Checkpoint.');
       return false;
     }
-    if (status !== 'idle') {
+    if (statusRef.current !== 'idle') {
       Alert.alert('Checkpoint', 'Puoi avviare un checkpoint solo quando non ci sono SOS attivi.');
       return false;
     }
-    if (goHomeStatus !== 'idle') {
+    if (goHomeStatusRef.current !== 'idle') {
       Alert.alert('Checkpoint', 'Concludi o annulla Torno a casa prima di avviare un Checkpoint.');
       return false;
     }
@@ -953,6 +956,11 @@ export default function HomeScreen() {
 
     const operationGeneration = checkpointOperationGenerationRef.current + 1;
     checkpointOperationGenerationRef.current = operationGeneration;
+    if (preventiveStartInFlightRef.current) {
+      Alert.alert('Checkpoint', 'Attendi il completamento dell’operazione in corso.');
+      return false;
+    }
+    preventiveStartInFlightRef.current = true;
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     const expiresAt = new Date(startedAtMs + minutes * 60_000).toISOString();
@@ -988,6 +996,8 @@ export default function HomeScreen() {
       await withSafetyTimeout(clearPersistedCheckpoint(userId), 'checkpoint_cleanup').catch(() => reportSafetyError('checkpoint_cleanup'));
       Alert.alert('Checkpoint', getSafetyErrorMessage(error));
       return false;
+    } finally {
+      preventiveStartInFlightRef.current = false;
     }
 
     if (
@@ -1208,17 +1218,22 @@ export default function HomeScreen() {
       return;
     }
 
+    if (preventiveStartInFlightRef.current) {
+      Alert.alert('Torno a casa', 'Attendi il completamento dell’operazione in corso.');
+      return;
+    }
+
     if (!userId) {
       Alert.alert('Torno a casa', 'Accedi prima di avviare Torno a casa.');
       return;
     }
 
-    if (status !== 'idle') {
+    if (statusRef.current !== 'idle') {
       Alert.alert('Torno a casa', 'Puoi avviare Torno a casa solo quando non ci sono SOS attivi.');
       return;
     }
 
-    if (checkpointStatus !== 'idle') {
+    if (checkpointStatusRef.current !== 'idle') {
       Alert.alert('Torno a casa', 'Concludi o annulla il checkpoint prima di avviare Torno a casa.');
       return;
     }
@@ -1226,6 +1241,7 @@ export default function HomeScreen() {
     const requestGeneration = goHomeEstimateGenerationRef.current + 1;
     goHomeEstimateGenerationRef.current = requestGeneration;
     goHomeEstimateInFlightRef.current = true;
+    preventiveStartInFlightRef.current = true;
     setGoHomeStatus('estimating');
     setGoHomeError('');
     setGoHomeErrorAction(null);
@@ -1295,35 +1311,52 @@ export default function HomeScreen() {
           {
             text: 'Avvia',
             onPress: () => void (async () => {
-              if (
-                activeUserIdRef.current !== actionUserId ||
-                goHomeEstimateGenerationRef.current !== requestGeneration
-              ) {
-                return;
-              }
-              const operationGeneration = goHomeOperationGenerationRef.current + 1;
-              goHomeOperationGenerationRef.current = operationGeneration;
-              const startedAtMs = Date.now();
-              const startedAt = new Date(startedAtMs).toISOString();
-              const expiresAt = new Date(
-                startedAtMs + estimatedMinutes * 60_000,
-              ).toISOString();
-              const session: ActiveGoHomeSession = {
-                active: true,
-                id: `${startedAtMs}`,
-                createdAt: startedAt,
-                distanceKm,
-                estimatedMinutes,
-                expiresAt,
-                startedAt,
-                transportMode,
-              };
-              const runtimeSession: GoHomeSession = {
-                ...session,
-                homeLocation: savedHomeLocation,
-                startLocation,
-              };
+              let operationGeneration: number | null = null;
+              let pendingSession: ActiveGoHomeSession | null = null;
               try {
+                if (
+                  preventiveStartInFlightRef.current ||
+                  statusRef.current !== 'idle' ||
+                  checkpointStatusRef.current !== 'idle'
+                ) {
+                  Alert.alert(
+                    'Torno a casa',
+                    checkpointStatusRef.current !== 'idle'
+                      ? 'Concludi o annulla il checkpoint prima di avviare Torno a casa.'
+                      : 'Attendi il completamento dell’operazione in corso.',
+                  );
+                  return;
+                }
+                preventiveStartInFlightRef.current = true;
+                if (
+                  activeUserIdRef.current !== actionUserId ||
+                  goHomeEstimateGenerationRef.current !== requestGeneration
+                ) {
+                  return;
+                }
+                operationGeneration = goHomeOperationGenerationRef.current + 1;
+                goHomeOperationGenerationRef.current = operationGeneration;
+                const startedAtMs = Date.now();
+                const startedAt = new Date(startedAtMs).toISOString();
+                const expiresAt = new Date(
+                  startedAtMs + estimatedMinutes * 60_000,
+                ).toISOString();
+                const session: ActiveGoHomeSession = {
+                  active: true,
+                  id: `${startedAtMs}`,
+                  createdAt: startedAt,
+                  distanceKm,
+                  estimatedMinutes,
+                  expiresAt,
+                  startedAt,
+                  transportMode,
+                };
+                pendingSession = session;
+                const runtimeSession: GoHomeSession = {
+                  ...session,
+                  homeLocation: savedHomeLocation,
+                  startLocation,
+                };
                 if (
                   activeUserIdRef.current !== actionUserId ||
                   goHomeEstimateGenerationRef.current !== requestGeneration ||
@@ -1347,48 +1380,55 @@ export default function HomeScreen() {
                   expiresAt,
                   GO_HOME_CONFIRM_SECONDS,
                 );
+                if (
+                  activeUserIdRef.current !== actionUserId ||
+                  goHomeEstimateGenerationRef.current !== requestGeneration ||
+                  goHomeOperationGenerationRef.current !== operationGeneration ||
+                  statusRef.current !== 'idle' ||
+                  checkpointStatusRef.current !== 'idle'
+                ) {
+                  void clearPersistedGoHome(actionUserId);
+                  void SafetyExpirationService.cancel(
+                    actionUserId,
+                    'go_home',
+                    session.id,
+                  ).catch(() => reportSafetyError('go_home_stale_cleanup'));
+                  return;
+                }
+
+                goHomeOwnerUserIdRef.current = actionUserId;
+                goHomeExpirationHandledRef.current = null;
+                goHomeStatusRef.current = 'running';
+                setGoHomeSession(runtimeSession);
+                setGoHomeExpiresAt(expiresAt);
+                setGoHomeRemainingSeconds(
+                  Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+                );
+                setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
+                setGoHomeStatus('running');
               } catch (error) {
-                await SafetyExpirationService.cancel(actionUserId, 'go_home', session.id).catch(() => reportSafetyError('go_home_rollback'));
-                await withSafetyTimeout(clearPersistedGoHome(actionUserId), 'go_home_cleanup').catch(() => reportSafetyError('go_home_cleanup'));
+                if (pendingSession) {
+                  await SafetyExpirationService.cancel(
+                    actionUserId,
+                    'go_home',
+                    pendingSession.id,
+                  ).catch(() => reportSafetyError('go_home_rollback'));
+                  await withSafetyTimeout(
+                    clearPersistedGoHome(actionUserId),
+                    'go_home_cleanup',
+                  ).catch(() => reportSafetyError('go_home_cleanup'));
+                }
                 if (
                   activeUserIdRef.current === actionUserId &&
+                  operationGeneration !== null &&
                   goHomeOperationGenerationRef.current === operationGeneration
                 ) {
-                  Alert.alert(
-                    'Torno a casa',
-                    getSafetyErrorMessage(error),
-                  );
+                  Alert.alert('Torno a casa', getSafetyErrorMessage(error));
                   setGoHomeStatus('idle');
                 }
-                return;
+              } finally {
+                preventiveStartInFlightRef.current = false;
               }
-
-              if (
-                activeUserIdRef.current !== actionUserId ||
-                goHomeEstimateGenerationRef.current !== requestGeneration ||
-                goHomeOperationGenerationRef.current !== operationGeneration ||
-                statusRef.current !== 'idle' ||
-                checkpointStatusRef.current !== 'idle'
-              ) {
-                void clearPersistedGoHome(actionUserId);
-                void SafetyExpirationService.cancel(
-                  actionUserId,
-                  'go_home',
-                  session.id,
-                ).catch(() => reportSafetyError('go_home_stale_cleanup'));
-                return;
-              }
-
-              goHomeOwnerUserIdRef.current = actionUserId;
-              goHomeExpirationHandledRef.current = null;
-              goHomeStatusRef.current = 'running';
-              setGoHomeSession(runtimeSession);
-              setGoHomeExpiresAt(expiresAt);
-              setGoHomeRemainingSeconds(
-                Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
-              );
-              setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
-              setGoHomeStatus('running');
             })(),
           },
         ]
@@ -1449,6 +1489,7 @@ export default function HomeScreen() {
         );
       }
     } finally {
+      preventiveStartInFlightRef.current = false;
       if (goHomeEstimateGenerationRef.current === requestGeneration) {
         goHomeEstimateInFlightRef.current = false;
         setGoHomeStatus((current) => (current === 'estimating' ? 'idle' : current));

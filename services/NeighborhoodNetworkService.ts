@@ -28,7 +28,7 @@ export const NeighborhoodNetworkService = {
   invite(networkId: string, inviteToken: string) {
     const normalized = inviteToken.trim().toUpperCase();
     if (!INVITE_TOKEN_PATTERN.test(normalized)) {
-      throw new Error('Impossibile inviare l’invito.');
+      throw new Error('Inserisci il codice temporaneo NQ-… generato dall’altra persona.');
     }
     return NeighborhoodNetworkRepository.invite(networkId, normalized);
   },
