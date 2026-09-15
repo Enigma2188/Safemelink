@@ -145,6 +145,7 @@ export const SOSService = {
         reason: 'native_send_failed' as const,
         sentCount: 0,
         failedCount: 0,
+        skippedCount: contacts.length,
       }));
 
     const pushResult: SOSDeliveryResult = allowRemoteDelivery

@@ -80,7 +80,15 @@ const getSOSDeliveryNotice = (
   automaticSmsResult: SOSAutomaticSmsResult,
 ) => {
   const automaticSmsNotice = automaticSmsResult.status === 'sent'
-    ? `SMS automatici inviati ai contatti fidati: ${automaticSmsResult.sentCount}.`
+    ? [
+        `SMS automatici affidati al sistema: ${automaticSmsResult.sentCount}.`,
+        automaticSmsResult.failedCount > 0
+          ? `Invio automatico non avviato per ${automaticSmsResult.failedCount} contatti.`
+          : null,
+        automaticSmsResult.skippedCount > 0
+          ? `Contatti non utilizzabili, duplicati o oltre il limite: ${automaticSmsResult.skippedCount}.`
+          : null,
+      ].filter(Boolean).join(' ')
     : null;
   if (result.notificationsSent > 0) {
     return [
@@ -89,9 +97,11 @@ const getSOSDeliveryNotice = (
     ].filter(Boolean).join(' ');
   }
 
-  const fallbackNotice = automaticSmsNotice ?? (
-    localResult.status === 'sms_opened'
-      ? 'Fallback SMS avviato.'
+  const automaticFailureNotice = automaticSmsResult.failedCount > 0
+    ? `Invio automatico non avviato per ${automaticSmsResult.failedCount} contatti.`
+    : null;
+  const interactiveFallbackNotice = localResult.status === 'sms_opened'
+      ? 'Composer SMS aperto: controlla il destinatario e premi Invia.'
       : automaticSmsResult.status === 'consent_required'
         ? 'Gli SMS automatici non sono autorizzati; puoi inviarli manualmente dalla schermata SOS.'
         : automaticSmsResult.status === 'permission_required'
@@ -100,8 +110,11 @@ const getSOSDeliveryNotice = (
             ? 'Nessun numero fidato valido è disponibile per l’invio automatico.'
             : localResult.status === 'no_channel'
               ? 'Nessun canale SMS utilizzabile. Verifica i contatti fidati e le app disponibili.'
-              : 'L’invio SMS non è disponibile per un problema tecnico.'
-  );
+              : 'L’invio SMS non è disponibile per un problema tecnico.';
+  const fallbackNotice = automaticSmsNotice ?? [
+    automaticFailureNotice,
+    interactiveFallbackNotice,
+  ].filter(Boolean).join(' ');
 
   if (
     result.reason === 'no_eligible_recipients' ||

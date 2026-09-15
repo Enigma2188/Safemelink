@@ -17,18 +17,33 @@ export type SOSAutomaticSmsResult = {
     | 'native_send_failed';
   sentCount: number;
   failedCount: number;
+  skippedCount: number;
 };
 
 const createEmergencySms = (event: ActiveSOSEvent) =>
   `SOS SafeMeLink. Ho bisogno di aiuto. Posizione: https://maps.google.com/?q=${event.location.latitude},${event.location.longitude}`;
 
-const getUniquePhones = (contacts: TrustedContact[]) => [
-  ...new Set(
-    contacts
-      .map((contact) => getPhoneIdentityKey(contact.phone, contact.phoneE164))
-      .filter((phone): phone is string => Boolean(phone)),
-  ),
-];
+const MAX_AUTOMATIC_SMS_RECIPIENTS = 3;
+
+const getDeliveryTargets = (contacts: TrustedContact[]) => {
+  const phones: string[] = [];
+  const seen = new Set<string>();
+  let skippedCount = 0;
+
+  for (const contact of [...contacts].sort(
+    (first, second) => first.priority - second.priority,
+  )) {
+    const phone = getPhoneIdentityKey(contact.phone, contact.phoneE164);
+    if (!phone || seen.has(phone) || phones.length >= MAX_AUTOMATIC_SMS_RECIPIENTS) {
+      skippedCount += 1;
+      continue;
+    }
+    seen.add(phone);
+    phones.push(phone);
+  }
+
+  return { phones, skippedCount };
+};
 
 export const SOSAutomaticSmsService = {
   isSupported() {
@@ -80,6 +95,7 @@ export const SOSAutomaticSmsService = {
         reason: 'native_module_unavailable',
         sentCount: 0,
         failedCount: 0,
+        skippedCount: contacts.length,
       };
     }
     if (!(await SOSAutomaticSmsStorage.hasConsent(userId))) {
@@ -91,6 +107,7 @@ export const SOSAutomaticSmsService = {
         reason: 'consent_missing',
         sentCount: 0,
         failedCount: 0,
+        skippedCount: contacts.length,
       };
     }
     if (!(await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS))) {
@@ -102,10 +119,11 @@ export const SOSAutomaticSmsService = {
         reason: 'permission_missing',
         sentCount: 0,
         failedCount: 0,
+        skippedCount: contacts.length,
       };
     }
 
-    const phones = getUniquePhones(contacts);
+    const { phones, skippedCount } = getDeliveryTargets(contacts);
     if (phones.length === 0) {
       console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
         category: 'no_eligible_contacts',
@@ -115,6 +133,7 @@ export const SOSAutomaticSmsService = {
         reason: 'no_eligible_contacts',
         sentCount: 0,
         failedCount: 0,
+        skippedCount,
       };
     }
     const attempted = await SOSAutomaticSmsStorage.getAttemptedRecipients(userId, event.id);
@@ -138,7 +157,7 @@ export const SOSAutomaticSmsService = {
       outcome: sentCount > 0 ? 'success' : 'failure',
       sentCount,
       failedCount,
-      skippedCount: phones.length - sentCount - failedCount,
+      skippedCount,
     });
     return {
       status: sentCount > 0 ? 'sent' : failedCount > 0 ? 'failed' : 'unavailable',
@@ -150,6 +169,7 @@ export const SOSAutomaticSmsService = {
             : 'no_eligible_contacts',
       sentCount,
       failedCount,
+      skippedCount,
     };
   },
 };

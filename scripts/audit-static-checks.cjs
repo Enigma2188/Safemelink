@@ -1166,7 +1166,7 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
     /SOSAutomaticSmsStorage\.setConsent\(userId, true\)[\s\S]*PermissionsAndroid\.request/,
   );
   assert.match(contactsScreen, /value=\{smsConsent\}/);
-  assert.match(sosAutomaticSmsService, /getUniquePhones/);
+  assert.match(sosAutomaticSmsService, /getDeliveryTargets/);
   assert.match(
     sosAutomaticSmsService,
     /getPhoneIdentityKey\(contact\.phone, contact\.phoneE164\)/,
@@ -1180,6 +1180,11 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   assert.match(smsNativeModule, /Manifest\.permission\.SEND_SMS/);
   assert.match(smsNativeModule, /sendTextMessage|sendMultipartTextMessage/);
   assert.doesNotMatch(sosAutomaticSmsService, /whatsapp|wa\.me/i);
+  assert.match(sosAutomaticSmsService, /MAX_AUTOMATIC_SMS_RECIPIENTS = 3/);
+  assert.match(sosAutomaticSmsService, /first\.priority - second\.priority/);
+  assert.match(sosAutomaticSmsService, /seen\.has\(phone\)/);
+  assert.match(homeScreen, /SMS automatici affidati al sistema/);
+  assert.match(homeScreen, /Composer SMS aperto: controlla il destinatario e premi Invia/);
   const smsLogStatements = (
     sosAutomaticSmsService.match(/console\.(?:log|info|warn)\([\s\S]*?\);/g) ?? []
   ).join('\n');
@@ -1203,10 +1208,19 @@ check('Voice SOS can use only a fresh accurate account-scoped network location f
 });
 
 check('Fresh-user and trusted-contact forms keep keyboard-visible stable scroll containers', () => {
+  const appConfig = read('app.json');
+  const networkScreen = read('screens/NetworkScreen.tsx');
+  const neighborhoodScreen = read('screens/NeighborhoodNetworkScreen.tsx');
   assert.match(accountAccessPanel, /placeholderTextColor="#7180A3"/);
+  assert.match(appConfig, /"softwareKeyboardLayoutMode": "resize"/);
   assert.match(contactsScreen, /behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}/);
   assert.match(contactsScreen, /keyboardDismissMode=\{Platform\.OS === 'ios' \? 'interactive' : 'none'\}/);
   assert.match(contactsScreen, /keyboardShouldPersistTaps="handled"/);
+  for (const screen of [networkScreen, neighborhoodScreen, emergencyScreen, voiceProtectionScreen]) {
+    assert.match(screen, /behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}/);
+    assert.match(screen, /automaticallyAdjustKeyboardInsets=\{Platform\.OS === 'ios'\}/);
+    assert.match(screen, /keyboardShouldPersistTaps="handled"/);
+  }
   assert.doesNotMatch(contactsScreen, /key=\{(?:form|linkCode|editingId)/);
 });
 

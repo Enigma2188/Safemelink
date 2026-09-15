@@ -54,7 +54,7 @@ const getContactsWithValidPhones = (contacts: SafeMeLinkContact[]) => {
     }
   }
 
-  return [...uniqueContacts.values()];
+  return [...uniqueContacts.values()].slice(0, 3);
 };
 
 const runLinkingOperation = async <T,>(operation: Promise<T>) => {
