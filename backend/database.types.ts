@@ -67,8 +67,8 @@ export type Database = {
         Row: {
           id: string;
           user_id: string;
-          latitude: number;
-          longitude: number;
+          latitude: number | null;
+          longitude: number | null;
           accuracy: number | null;
           device_time: string | null;
           created_at: string;
@@ -85,8 +85,8 @@ export type Database = {
         Insert: {
           id?: string;
           user_id: string;
-          latitude: number;
-          longitude: number;
+          latitude: number | null;
+          longitude: number | null;
           accuracy?: number | null;
           device_time?: string | null;
           created_at?: string;
@@ -499,6 +499,10 @@ export type Database = {
         Args: { target_network_id: string };
         Returns: undefined;
       };
+      create_my_safety_sos: {
+        Args: { operation_id: string; expected_user_id: string; position_latitude: number | null; position_longitude: number | null; position_accuracy: number | null; event_time: string | null; position_observed_at: string | null };
+        Returns: Database['public']['Tables']['sos']['Row'][];
+      };
       accept_network_terms: {
         Args: { target_terms_version: string; target_feed_radius_meters?: number | null };
         Returns: undefined;
@@ -716,11 +720,11 @@ export type Database = {
           sos_id: string;
           sender_display_name: string;
           sos_status: SosStatus;
-          latitude: number;
-          longitude: number;
+          latitude: number | null;
+          longitude: number | null;
           accuracy: number | null;
           event_time: string;
-          location_updated_at: string;
+          location_updated_at: string | null;
         }[];
       };
       get_sos_status: {

@@ -641,12 +641,12 @@ export default function HomeScreen() {
         latestStoredEvent?.remoteStatus === 'open' ||
         latestStoredEvent?.remoteStatus === 'accepted';
 
-      if (latestStoredEvent?.location && latestStoredEvent.message && latestEventWasActive) {
+      if (latestStoredEvent?.message && latestEventWasActive) {
         const restoreLatestEvent = () => {
           restoredActiveEvent = {
             ...latestStoredEvent,
             isActive: true,
-            location: latestStoredEvent.location!,
+            location: latestStoredEvent.location,
             message: latestStoredEvent.message!,
           };
         };
@@ -2415,7 +2415,7 @@ export default function HomeScreen() {
           </Text>
           <Text style={styles.emergencyText}>Messaggio preparato e evento salvato.</Text>
           <Text style={styles.coordinates}>
-            {activeEvent.location.latitude}, {activeEvent.location.longitude}
+            {activeEvent.location ? `${activeEvent.location.latitude}, ${activeEvent.location.longitude}` : 'Posizione non disponibile.'}
           </Text>
           {pushDeliveryNotice ? (
             <View style={styles.pushDeliveryNotice}>

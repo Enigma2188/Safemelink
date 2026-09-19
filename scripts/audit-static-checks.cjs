@@ -1293,7 +1293,35 @@ check('Checkpoint expiry is absolute, persisted, account-scoped and single-fire'
   assert.equal(remainingSeconds(60_000, 60_001), 0);
 });
 
-check('Checkpoint and Go Home expirations run outside the React UI lifecycle', () => {
+check('Checkpoint and Go Home use private native T1/T2 alarms and one SOS runtime', () => {
+  const nativeRoot = 'modules/safemelink-safety/android/src/main/java/com/tiziano/safemelink/safety/';
+  const store = read(`${nativeRoot}SafetyDeadlineStore.kt`);
+  const receiver = read(`${nativeRoot}SafetyDeadlineReceiver.kt`);
+  const service = read(`${nativeRoot}SafetyEscalationService.kt`);
+  const manifest = read('modules/safemelink-safety/android/src/main/AndroidManifest.xml');
+  assert.match(store, /setAlarmClock\(AlarmManager\.AlarmClockInfo/);
+  assert.match(store, /t2 == t1 \+ 30_000/);
+  assert.match(store, /@Synchronized fun claim/);
+  assert.match(store, /optInt\("attempts"\) >= 3/);
+  assert.match(store, /now \+ 300_000/);
+  assert.match(store, /recoveryAlarm\(context, record\)/);
+  assert.match(safetyExpirationRuntime, /escalationOperationId: schedule\.operationId/);
+  assert.match(store, /write\(context, record\).*Durable before/);
+  assert.match(store, /alarms\(context\)\.cancel\(operation\)/);
+  assert.match(receiver, /context\.startForegroundService/);
+  assert.match(manifest, /SafetyDeadlineReceiver" android:exported="false"/);
+  assert.match(manifest, /SafetyEscalationService" android:exported="false"/);
+  assert.match(service, /acquire\(240_000\)/);
+  assert.match(service, /wakeLock\?\.release\(\)/);
+  assert.match(service, /removeTaskEventListener/);
+  assert.match(service, /START_NOT_STICKY/);
+  const task = read('services/SafetyHeadlessTask.ts');
+  assert.match(task, /session\?\.user\.id !== data\.userId/);
+  assert.match(task, /SafetyExpirationRuntime\.processDue\(data\.userId\)/);
+  assert.match(task, /waitForExecution\(data\.userId\)/);
+  assert.doesNotMatch(task, /completeSOS\(/);
+  assert.match(read('index.ts'), /SafetyHeadlessTask/);
+  assert.equal(JSON.parse(read('package.json')).main, 'index.ts');
   assert.ok(
     JSON.parse(appConfig).expo.android.permissions.includes(
       'android.permission.SCHEDULE_EXACT_ALARM',

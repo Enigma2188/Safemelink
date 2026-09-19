@@ -24,7 +24,7 @@ export const SOSStorage = {
 
   async saveEvent(userId: string, event: SOSEvent) {
     const events = await SOSStorage.listEvents(userId);
-    const nextEvents = [event, ...events].slice(0, MAX_STORED_EVENTS);
+    const nextEvents = [event, ...events.filter((existing) => existing.id !== event.id)].slice(0, MAX_STORED_EVENTS);
 
     await setAccountStorageItem(
       userId,

@@ -4,6 +4,7 @@ import { SafeMeLinkSms } from 'safemelink-sms';
 import type { TrustedContact } from '@/services/ContactsService';
 import { getPhoneIdentityKey } from '@/services/PhoneIdentity';
 import type { ActiveSOSEvent } from '@/services/SOSService';
+import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
 import { SOSAutomaticSmsStorage } from '@/storage/SOSAutomaticSmsStorage';
 
 export type SOSAutomaticSmsResult = {
@@ -14,14 +15,17 @@ export type SOSAutomaticSmsResult = {
     | 'permission_missing'
     | 'native_module_unavailable'
     | 'no_eligible_contacts'
-    | 'native_send_failed';
+    | 'native_send_failed'
+    | 'session_changed';
   sentCount: number;
   failedCount: number;
   skippedCount: number;
 };
 
 const createEmergencySms = (event: ActiveSOSEvent) =>
-  `SOS SafeMeLink. Ho bisogno di aiuto. Posizione: https://maps.google.com/?q=${event.location.latitude},${event.location.longitude}`;
+  event.location
+    ? `SOS SafeMeLink. Ho bisogno di aiuto. Ultima posizione disponibile: https://maps.google.com/?q=${event.location.latitude},${event.location.longitude}${event.location.observedAt ? ` (rilevata ${new Date(event.location.observedAt).toLocaleString()})` : ''}`
+    : 'SOS SafeMeLink. Ho bisogno di aiuto. Posizione non disponibile.';
 
 const MAX_AUTOMATIC_SMS_RECIPIENTS = 3;
 
@@ -143,13 +147,23 @@ export const SOSAutomaticSmsService = {
 
     for (const phone of phones) {
       if (attempted.has(phone)) continue;
+      const sessionMatches = async () => (await getSOSSessionWithTimeout().catch(() => null))?.user.id === userId;
+      const stoppedForAccountChange = (): SOSAutomaticSmsResult => ({
+        status: 'failed', reason: 'session_changed', sentCount, failedCount,
+        skippedCount: skippedCount + phones.length - sentCount - failedCount,
+      });
+      if (!(await sessionMatches())) return stoppedForAccountChange();
       // Persist the attempt first: an uncertain native result must never duplicate an emergency SMS.
-      await SOSAutomaticSmsStorage.markAttempted(userId, event.id, phone);
+      if (await SOSAutomaticSmsStorage.markAttempted(userId, event.id, phone) === false) continue;
+      // Marker persistence may overlap logout/account switch. Do not hand off A's SMS as B.
+      if (!(await sessionMatches())) return stoppedForAccountChange();
       try {
         await SafeMeLinkSms!.sendSms(phone, message);
         sentCount += 1;
+        await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'handed_to_system').catch(() => undefined);
       } catch {
         failedCount += 1;
+        await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'unknown').catch(() => undefined);
       }
     }
 

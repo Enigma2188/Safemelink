@@ -1,0 +1,7 @@
+{
+  "name": "safemelink-safety",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "private": true,
+  "peerDependencies": { "expo": "*", "react-native": "*" }
+}

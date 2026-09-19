@@ -5,6 +5,8 @@ export type SOSLocation = {
   latitude: number;
   longitude: number;
   accuracy: number | null;
+  observedAt?: string;
+  source?: 'fresh' | 'recent';
 };
 
 export const CURRENT_LOCATION_TIMEOUT_MS = 30_000;
@@ -63,6 +65,7 @@ export const LocationService = {
     timeoutMs?: number;
     accuracy?: 'balanced' | 'high';
     allowRecentNetworkLocationForUserId?: string;
+    allowLastKnownLocation?: boolean;
   }): Promise<SOSLocation> {
     try {
       const permission = options?.allowRecentNetworkLocationForUserId
@@ -86,6 +89,8 @@ export const LocationService = {
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
+        observedAt: new Date(position.timestamp).toISOString(),
+        source: 'fresh',
       };
     } catch (error) {
       console.warn('[SafeMeLink Location] Acquisizione GPS non riuscita.', {
@@ -111,8 +116,21 @@ export const LocationService = {
             latitude: cached.latitude,
             longitude: cached.longitude,
             accuracy: cached.accuracy,
+            observedAt: cached.observedAt,
+            source: 'recent',
           };
         }
+      }
+      // Read an already cached OS fix, never start another watcher/request.
+      const lastKnown = options?.allowLastKnownLocation ? await Location.getLastKnownPositionAsync({
+        maxAge: SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS,
+        requiredAccuracy: SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS,
+      }).catch(() => null) : null;
+      if (lastKnown && lastKnown.coords.accuracy !== null && lastKnown.coords.accuracy >= 0 &&
+          lastKnown.coords.accuracy <= SOS_NETWORK_CACHED_LOCATION_MAX_ACCURACY_METERS &&
+          Date.now() - lastKnown.timestamp >= 0 && Date.now() - lastKnown.timestamp <= SOS_NETWORK_CACHED_LOCATION_MAX_AGE_MS) {
+        return { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude,
+          accuracy: lastKnown.coords.accuracy, observedAt: new Date(lastKnown.timestamp).toISOString(), source: 'recent' };
       }
       if (
         error instanceof LocationTimeoutError ||

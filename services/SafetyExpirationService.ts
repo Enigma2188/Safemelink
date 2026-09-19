@@ -4,6 +4,7 @@ import { VoiceProtectionService } from '@/services/VoiceProtectionService';
 import type { SafetyExpirationKind } from '@/storage/SafetyExpirationStorage';
 import { reportSafetyError, withSafetyTimeout } from '@/services/SafetyOperation';
 import { SafetyNotifications } from '@/services/SafetyNotifications';
+import { Platform } from 'react-native';
 
 export const SafetyExpirationService = {
   async schedule(
@@ -26,6 +27,7 @@ export const SafetyExpirationService = {
           sessionId,
           kind,
           expiresAt,
+          schedule.nativeDeadlineGeneration,
         );
         if (notificationScheduled) {
           const retained = await SafetyExpirationRuntime.markConfirmationScheduled(
@@ -36,7 +38,7 @@ export const SafetyExpirationService = {
           if (!retained) void SafetyNotifications.cancelConfirmation(sessionId);
         }
       }
-      await VoiceProtectionService.ensureSafetyMonitoring(userId);
+      if (kind === 'manual_sos' || Platform.OS !== 'android') await VoiceProtectionService.ensureSafetyMonitoring(userId);
       VoiceProtectionRuntime.wakeBackgroundTask();
       return schedule;
     } catch (error) {
@@ -64,19 +66,20 @@ export const SafetyExpirationService = {
       kind !== 'manual_sos' &&
       schedule.phase === 'waiting' &&
       !schedule.confirmationNotificationScheduled &&
-      Date.parse(expiresAt) > Date.now()
+      (Platform.OS === 'android' || Date.parse(expiresAt) > Date.now())
     ) {
       const notificationScheduled = await SafetyNotifications.scheduleConfirmation(
         sessionId,
         kind,
         expiresAt,
+        schedule.nativeDeadlineGeneration,
       );
       if (notificationScheduled) {
         await SafetyExpirationRuntime.markConfirmationScheduled(userId, kind, sessionId);
       }
     }
     if (schedule.phase === 'failed' || schedule.phase === 'executing') return schedule;
-    await VoiceProtectionService.ensureSafetyMonitoring(userId);
+    if (kind === 'manual_sos' || Platform.OS !== 'android') await VoiceProtectionService.ensureSafetyMonitoring(userId);
     VoiceProtectionRuntime.wakeBackgroundTask();
     return schedule;
   },
@@ -106,7 +109,8 @@ export const SafetyExpirationService = {
 
   async reconcile(userId: string) {
     const schedule = await SafetyExpirationRuntime.get(userId);
-    if (schedule && schedule.phase !== 'failed' && schedule.phase !== 'executing') {
+    if (schedule && schedule.phase !== 'failed' && schedule.phase !== 'executing' &&
+      (schedule.kind === 'manual_sos' || Platform.OS !== 'android')) {
       await VoiceProtectionService.ensureSafetyMonitoring(userId);
     }
     await this.processDue(userId);

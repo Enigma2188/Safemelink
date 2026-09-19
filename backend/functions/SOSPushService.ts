@@ -147,10 +147,12 @@ async function sendSOSPush(
 
     const sos = await createRemoteSOSWithTimeout({
       user_id: session.user.id,
-      latitude: event.location.latitude,
-      longitude: event.location.longitude,
-      accuracy: event.location.accuracy,
+      ...( /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.id) ? { id: event.id } : {}),
+      latitude: event.location?.latitude ?? null,
+      longitude: event.location?.longitude ?? null,
+      accuracy: event.location?.accuracy ?? null,
       device_time: event.createdAt,
+      location_updated_at: event.location ? event.location.observedAt ?? event.createdAt : null,
     });
 
     console.log('[SafeMeLink Push] SOS remoto creato.', {

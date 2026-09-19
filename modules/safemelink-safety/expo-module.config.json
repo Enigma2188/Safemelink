@@ -1,0 +1,4 @@
+{
+  "platforms": ["android"],
+  "android": { "modules": ["com.tiziano.safemelink.safety.SafeMeLinkSafetyModule"] }
+}

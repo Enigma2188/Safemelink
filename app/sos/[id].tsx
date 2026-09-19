@@ -21,7 +21,8 @@ const statusLabels: Record<ReceivedSOS['sos_status'], string> = {
 
 const formatSOSReference = (sosId: string) => sosId.slice(0, 8).toUpperCase();
 
-const formatLocationFreshness = (updatedAt: string) => {
+const formatLocationFreshness = (updatedAt: string | null) => {
+  if (!updatedAt || !Number.isFinite(Date.parse(updatedAt))) return 'Data della posizione non disponibile.';
   const ageSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(updatedAt)) / 1000));
   if (ageSeconds < 90) return 'Aggiornata da meno di un minuto';
   const ageMinutes = Math.floor(ageSeconds / 60);
@@ -169,6 +170,7 @@ export default function ReceivedSOSScreen() {
   };
 
   const openMap = async () => {
+    if (!sos || sos.latitude === null || sos.longitude === null) return;
     if (!sos) {
       return;
     }
@@ -257,16 +259,16 @@ export default function ReceivedSOSScreen() {
 
           <Text style={styles.label}>Coordinate</Text>
           <Text style={styles.value}>
-            {sos.latitude}, {sos.longitude}
+            {sos.latitude !== null && sos.longitude !== null ? `${sos.latitude}, ${sos.longitude}` : 'Posizione non disponibile.'}
           </Text>
           <Text style={styles.locationFreshness}>
-            {formatLocationFreshness(sos.location_updated_at)}
+            {sos.latitude !== null && sos.longitude !== null ? formatLocationFreshness(sos.location_updated_at) : ''}
           </Text>
 
           <Text style={styles.label}>Riferimento evento</Text>
           <Text style={styles.eventId}>{formatSOSReference(sos.sos_id)}</Text>
 
-          <Pressable style={styles.primaryButton} onPress={() => void openMap()}>
+          <Pressable disabled={sos.latitude === null || sos.longitude === null} style={styles.primaryButton} onPress={() => void openMap()}>
             <Text style={styles.primaryButtonText}>Apri posizione nella mappa</Text>
           </Pressable>
 

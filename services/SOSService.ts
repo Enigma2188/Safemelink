@@ -18,6 +18,7 @@ import {
 } from '@/services/SOSAutomaticSmsService';
 import { SOSStorage } from '@/storage/SOSStorage';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { SafetySOSOperationStorage } from '@/storage/SafetySOSOperationStorage';
 
 export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
 
@@ -33,7 +34,7 @@ export type SOSEvent = {
 };
 
 export type ActiveSOSEvent = SOSEvent & {
-  location: SOSLocation;
+  location: SOSLocation | null;
   message: string;
 };
 
@@ -42,7 +43,7 @@ const createMapsLink = (location: SOSLocation) =>
 
 const SOS_LOCAL_OPERATION_TIMEOUT_MS = 8_000;
 
-const runLocalOperationWithTimeout = async <T,>(operation: Promise<T>) => {
+const runLocalOperationWithTimeout = async <T,>(operation: Promise<T>, timeoutMs = SOS_LOCAL_OPERATION_TIMEOUT_MS) => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -50,7 +51,7 @@ const runLocalOperationWithTimeout = async <T,>(operation: Promise<T>) => {
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
           () => reject(new Error('Operazione locale SOS non disponibile.')),
-          SOS_LOCAL_OPERATION_TIMEOUT_MS,
+          timeoutMs,
         );
       }),
     ]);
@@ -71,12 +72,12 @@ export type SOSCompletionResult = {
 };
 
 export const SOSService = {
-  createMessage(location: SOSLocation, createdAt: string) {
+  createMessage(location: SOSLocation | null, createdAt: string) {
     return [
       'SOS SafeMeLink',
       'Ho bisogno di aiuto. Contattami appena possibile.',
-      `Coordinate GPS: ${location.latitude}, ${location.longitude}`,
-      `Google Maps: ${createMapsLink(location)}`,
+      ...(location ? [`Coordinate GPS: ${location.latitude}, ${location.longitude}`, `Google Maps: ${createMapsLink(location)}`] : ['Posizione non disponibile.']),
+      ...(location?.observedAt ? [`Ultima posizione disponibile: ${new Date(location.observedAt).toLocaleString()}`] : []),
       `Data e ora: ${new Date(createdAt).toLocaleString()}`,
     ].join('\n');
   },
@@ -87,6 +88,7 @@ export const SOSService = {
       allowRemoteDelivery?: boolean;
       allowRecentNetworkLocation?: boolean;
       allowInteractiveFallback?: boolean;
+      escalationOperationId?: string;
     } = {},
   ): Promise<SOSCompletionResult> {
     const allowRemoteDelivery = options.allowRemoteDelivery ?? true;
@@ -97,14 +99,21 @@ export const SOSService = {
       throw new Error('Sessione cambiata: riavvia l’SOS con l’account attivo.');
     }
 
-    const location = await LocationService.getCurrentLocation({
+    const operationId = options.escalationOperationId;
+    const previous = operationId ? await runLocalOperationWithTimeout(SafetySOSOperationStorage.get(expectedUserId, operationId)) : null;
+    if (previous?.result) {
+      if ((await getSOSSessionWithTimeout())?.user.id !== expectedUserId) throw new Error('Sessione cambiata durante il recupero SOS.');
+      return previous.result;
+    }
+    const location = previous ? previous.event.location : await runLocalOperationWithTimeout(LocationService.getCurrentLocation({
+      allowLastKnownLocation: true,
       ...(options.allowRecentNetworkLocation
         ? {
             timeoutMs: 12_000,
             allowRecentNetworkLocationForUserId: expectedUserId,
           }
         : {}),
-    });
+    }), options.allowRecentNetworkLocation ? 15_000 : 33_000).catch(() => null);
     const currentSession = await getSOSSessionWithTimeout();
 
     if (currentSession?.user.id !== expectedUserId) {
@@ -131,16 +140,19 @@ export const SOSService = {
       throw new Error('Sessione cambiata durante l’SOS. Nessun evento remoto è stato creato.');
     }
 
-    const event: ActiveSOSEvent = {
-      id: `${Date.now()}`,
+    const event: ActiveSOSEvent = previous?.event ?? {
+      id: operationId ?? `${Date.now()}`,
       createdAt,
       location,
       message,
       contactIds: contacts.map((contact) => contact.id),
     };
+    // Persist identity/content BEFORE any SMS or remote side effect.
+    if (operationId && !previous) await runLocalOperationWithTimeout(SafetySOSOperationStorage.save(expectedUserId, operationId, { event }));
+    if ((await getSOSSessionWithTimeout())?.user.id !== expectedUserId) throw new Error('Sessione cambiata durante l’SOS.');
 
     const automaticSmsPromise: Promise<SOSAutomaticSmsResult> =
-      SOSAutomaticSmsService.sendForSOS(expectedUserId, event, contacts).catch(() => ({
+      runLocalOperationWithTimeout(SOSAutomaticSmsService.sendForSOS(expectedUserId, event, contacts)).catch(() => ({
         status: 'failed' as const,
         reason: 'native_send_failed' as const,
         sentCount: 0,
@@ -247,7 +259,7 @@ export const SOSService = {
       });
     }
 
-    return {
+    const result: SOSCompletionResult = {
       event: completedEvent,
       events,
       pushResult,
@@ -255,6 +267,15 @@ export const SOSService = {
       localDeliveryResult,
       localPersistenceFailed,
     };
+    if (operationId) {
+      // A settled call is not a completed escalation if remote creation remains uncertain.
+      // SMS attempts already persisted under this same event ID will not be repeated.
+      if (!pushResult.sosCreated || !pushResult.sosId || localPersistenceFailed) {
+        throw new Error('Escalation da recuperare.');
+      }
+      await runLocalOperationWithTimeout(SafetySOSOperationStorage.save(expectedUserId, operationId, { event: completedEvent, result }));
+    }
+    return result;
   },
 
   async sendSOS(event: ActiveSOSEvent, contacts: TrustedContact[]) {

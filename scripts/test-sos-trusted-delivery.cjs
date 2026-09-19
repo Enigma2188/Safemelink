@@ -13,6 +13,8 @@ const compiled = ts.transpileModule(automaticSource, {
 const attempted = new Set();
 const nativeCalls = [];
 const diagnostics = [];
+let activeAccount = 'user';
+let switchDuringMarker = false;
 const fixture = { exports: {} };
 const canonicalize = (phone) => (/^\+[1-9]\d{6,14}$/.test(phone ?? '') ? phone : null);
 
@@ -36,10 +38,15 @@ vm.runInNewContext(compiled, {
     if (specifier.endsWith('/PhoneIdentity')) return {
       getPhoneIdentityKey: (phone, phoneE164) => canonicalize(phoneE164) ?? canonicalize(phone),
     };
+    if (specifier.endsWith('/SOSSessionTimeout')) return { getSOSSessionWithTimeout: async () => ({ user: { id: activeAccount } }) };
     if (specifier.endsWith('/SOSAutomaticSmsStorage')) return { SOSAutomaticSmsStorage: {
       hasConsent: async () => true,
       getAttemptedRecipients: async () => new Set(attempted),
-      markAttempted: async (_userId, _eventId, phone) => attempted.add(phone),
+      markAttempted: async (_userId, _eventId, phone) => {
+        if (switchDuringMarker) activeAccount = 'other';
+        return attempted.add(phone);
+      },
+      markResult: async () => undefined,
       setConsent: async () => undefined,
     } };
     throw new Error(`Unexpected import: ${specifier}`);
@@ -70,6 +77,16 @@ async function main() {
   assert.equal(result.skippedCount, 3);
   await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, contacts);
   assert.equal(nativeCalls.length, 3, 'A repeated completion must not resend attempted SMS.');
+  attempted.clear();
+  switchDuringMarker = true;
+  const switched = await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, contacts);
+  assert.equal(switched.reason, 'session_changed');
+  assert.equal(nativeCalls.length, 3, 'Switch during marker write must stop native handoff.');
+  attempted.clear();
+  switchDuringMarker = false;
+  const mismatched = await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, contacts);
+  assert.equal(mismatched.reason, 'session_changed');
+  assert.equal(attempted.size, 0, 'Wrong account must not claim recipients.');
   assert.match(fallbackSource, /Linking\.canOpenURL\(url\)/);
   assert.match(fallbackSource, /if \(!canOpen\)[\s\S]*return \{ opened: false/);
   assert.match(fallbackSource, /Linking\.openURL\(url\)/);

@@ -11,9 +11,11 @@ const ordered = <T>(operation: () => Promise<T>) => {
 };
 
 export type SafetyExpirationKind = 'checkpoint' | 'go_home' | 'manual_sos';
-export type SafetyExpirationPhase = 'waiting' | 'confirming' | 'executing' | 'failed';
+export type SafetyExpirationPhase = 'waiting' | 'confirming' | 'executing' | 'recoverable' | 'completed' | 'failed';
 
 export type SafetyExpirationSchedule = {
+  nativeDeadlineGeneration?: string;
+  operationId?: string;
   confirmationNotificationScheduled?: boolean;
   confirmationExpiresAt: string;
   expiresAt: string;
@@ -31,7 +33,7 @@ const isSchedule = (value: unknown): value is SafetyExpirationSchedule => {
     (candidate.kind === 'checkpoint' || candidate.kind === 'go_home' || candidate.kind === 'manual_sos') &&
     typeof candidate.sessionId === 'string' &&
     candidate.sessionId.length > 0 &&
-    ['waiting', 'confirming', 'executing', 'failed'].includes(candidate.phase ?? '') &&
+    ['waiting', 'confirming', 'executing', 'recoverable', 'completed', 'failed'].includes(candidate.phase ?? '') &&
     Number.isFinite(expiresAt) &&
     Number.isFinite(confirmationExpiresAt) &&
     confirmationExpiresAt >= expiresAt
