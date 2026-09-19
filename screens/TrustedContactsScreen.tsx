@@ -5,16 +5,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
 import { SOSAutomaticSmsService } from '@/services/SOSAutomaticSmsService';

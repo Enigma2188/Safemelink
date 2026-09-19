@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 

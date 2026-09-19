@@ -7,15 +7,14 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import type { NetworkConfirmationKind, NetworkReportCategory } from '@/backend/database.types';
 import { BackendError } from '@/backend/errors/BackendError';
 import { RemoteRequestTimeoutError } from '@/backend/remoteRequest';

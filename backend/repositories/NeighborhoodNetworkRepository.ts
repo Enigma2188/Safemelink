@@ -24,6 +24,49 @@ const fail = (operation: string, fallback: string, cause: unknown) =>
   createBackendError(operation, { ...messages, fallback }, cause);
 
 export const NeighborhoodNetworkRepository = {
+  async getDiscoveryPreference() {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('get_my_neighborhood_discovery_preference').abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.discovery_preference', 'Impossibile caricare la disponibilità agli inviti.', error);
+    return data === true;
+  },
+
+  async setDiscoveryPreference(userId: string, enabled: boolean) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('set_my_neighborhood_discovery_preference', { enabled, expected_user_id: userId }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.set_discovery_preference', 'Impossibile aggiornare la disponibilità agli inviti.', error);
+    if (data !== enabled) throw new Error('Impossibile confermare la disponibilità agli inviti.');
+  },
+
+  async publishDiscoveryPresence(userId: string, location: { latitude: number; longitude: number; accuracy: number; observedAt: string }, inviteOrigin = false) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('publish_my_neighborhood_discovery_presence', {
+        position_latitude: location.latitude,
+        position_longitude: location.longitude,
+        position_accuracy: location.accuracy,
+        position_observed_at: location.observedAt,
+        expected_user_id: userId,
+        invite_origin: inviteOrigin,
+      }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.publish_presence', 'Impossibile aggiornare la posizione per gli inviti.', error);
+    if (data !== true) throw new Error('Impossibile confermare la posizione per gli inviti.');
+  },
+
+  async inviteNearby(userId: string, networkId: string) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('invite_nearby_neighborhood_users', { target_network_id: networkId, expected_user_id: userId }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.invite_nearby', 'Impossibile cercare persone disponibili. Riprova più tardi.', error);
+    return data === true;
+  },
+
   async getOverview(): Promise<FunctionRows<'get_my_neighborhood_overview'>> {
     const client = requireSupabaseClient();
     const { data, error } = await request((signal) =>

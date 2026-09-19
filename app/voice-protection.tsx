@@ -11,15 +11,14 @@ import {
   Linking,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import { VoiceProtectionService } from '@/services/VoiceProtectionService';
 import { normalizePassphrase } from '@/storage/PassphraseStorage';

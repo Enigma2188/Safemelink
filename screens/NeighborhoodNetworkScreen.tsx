@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { type Href, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
@@ -7,15 +7,15 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
+  Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import type { Database } from '@/backend/database.types';
 import { NeighborhoodNetworkService } from '@/services/NeighborhoodNetworkService';
 
@@ -28,9 +28,10 @@ type ScreenData = {
   network: Overview | null;
   members: Member[];
   invitations: Invitation[];
+  discoveryOptIn: boolean;
 };
 
-const EMPTY_DATA: ScreenData = { network: null, members: [], invitations: [] };
+const EMPTY_DATA: ScreenData = { network: null, members: [], invitations: [], discoveryOptIn: false };
 
 export function NeighborhoodNetworkScreen() {
   const router = useRouter();
@@ -43,6 +44,7 @@ export function NeighborhoodNetworkScreen() {
   const sessionGenerationRef = useRef(0);
   const actionSequenceRef = useRef(0);
   const actionRef = useRef<number | null>(null);
+  const presenceRefreshRef = useRef<string | null>(null);
   const [data, setData] = useState<ScreenData>(EMPTY_DATA);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -98,7 +100,7 @@ export function NeighborhoodNetworkScreen() {
     setNetworkName('');
     setInviteCode('');
     setMyInviteToken(null);
-    void load();
+    presenceRefreshRef.current = null;
     return () => {
       mountedRef.current = false;
       requestRef.current += 1;
@@ -106,6 +108,21 @@ export function NeighborhoodNetworkScreen() {
       actionRef.current = null;
     };
   }, [load]);
+
+  useFocusEffect(useCallback(() => {
+    presenceRefreshRef.current = null;
+    void load();
+  }, [load]));
+
+  useEffect(() => {
+    if (!userId || !data.discoveryOptIn || loading || presenceRefreshRef.current === userId) return;
+    presenceRefreshRef.current = userId;
+    void NeighborhoodNetworkService.refreshDiscoveryPresence(userId).catch(() => {
+      if (mountedRef.current && accountRef.current === userId) {
+        setMessage('Disponibilità attiva, ma posizione non aggiornata. Riapri la schermata e riprova.');
+      }
+    });
+  }, [data.discoveryOptIn, loading, userId]);
 
   const runAction = useCallback(async <T,>(
     operation: () => Promise<T>,
@@ -142,6 +159,7 @@ export function NeighborhoodNetworkScreen() {
         && actionRef.current === operationId
       ) {
         setMessage(error instanceof Error ? error.message : 'Operazione non riuscita. Riprova.');
+        void load(false);
       }
     } finally {
       if (
@@ -176,6 +194,31 @@ export function NeighborhoodNetworkScreen() {
     'Codice temporaneo generato. Condividilo soltanto con la persona che deve invitarti.',
     setMyInviteToken,
   );
+
+  const toggleDiscovery = (enabled: boolean) => {
+    if (!userId) return;
+    if (enabled) presenceRefreshRef.current = userId;
+    else presenceRefreshRef.current = null;
+    void runAction(
+      async () => {
+        try {
+          await NeighborhoodNetworkService.setDiscoveryPreference(userId, enabled);
+        } catch (error) {
+          presenceRefreshRef.current = null;
+          throw error;
+        }
+      },
+      enabled ? 'Disponibilità agli inviti attivata.' : 'Disponibilità agli inviti disattivata.',
+    );
+  };
+
+  const inviteNearby = () => {
+    if (!userId || !data.network) return;
+    void runAction(
+      () => NeighborhoodNetworkService.inviteNearby(userId, data.network!.network_id),
+      'Ricerca completata. Eventuali inviti sono stati inviati alle persone disponibili nelle vicinanze.',
+    );
+  };
 
   const confirmLeave = () => {
     if (!data.network) return;
@@ -260,13 +303,35 @@ export function NeighborhoodNetworkScreen() {
             </View>
           ) : null}
 
+          {userId && !loading ? (
+            <Section title="Inviti da reti vicine">
+              <Text style={styles.body}>
+                Se scegli di renderti disponibile, potrai ricevere inviti da Reti di quartiere vicine. La posizione è approssimata, privata e aggiornata solo quando apri questa schermata.
+              </Text>
+              <View style={styles.preferenceRow}>
+                <Text style={styles.itemTitle}>Disponibile agli inviti</Text>
+                <Switch
+                  accessibilityLabel="Disponibile agli inviti da reti vicine"
+                  disabled={busy}
+                  onValueChange={toggleDiscovery}
+                  value={data.discoveryOptIn}
+                />
+              </View>
+              <Text style={styles.itemMeta}>Puoi disattivare questa scelta in qualsiasi momento.</Text>
+            </Section>
+          ) : null}
+
           {userId && received.length > 0 ? (
             <Section title="Inviti ricevuti">
               {received.map((invitation) => (
                 <View key={invitation.invitation_id} style={styles.listItem}>
                   <View style={styles.listText}>
                     <Text style={styles.itemTitle}>{invitation.network_name}</Text>
-                    <Text style={styles.itemMeta}>Invito di {invitation.counterpart_nickname}</Text>
+                    <Text style={styles.itemMeta}>
+                      {invitation.invitation_source === 'NEARBY'
+                        ? 'Una Rete di quartiere vicina ti invita a partecipare.'
+                        : `Invito di ${invitation.counterpart_nickname}`}
+                    </Text>
                   </View>
                   <View style={styles.inlineActions}>
                     <SmallButton
@@ -376,7 +441,15 @@ export function NeighborhoodNetworkScreen() {
               </Section>
 
               {isAdmin ? (
-                <Section title="Invita una persona">
+                <Section title="Invita utenti Safe vicini">
+                  <Text style={styles.body}>Cerca una volta le persone che hanno scelto di ricevere inviti entro circa 500 metri. Non vedrai nomi, posizioni o il numero di persone trovate.</Text>
+                  <PrimaryButton disabled={busy} label={busy ? 'RICERCA IN CORSO…' : 'INVITA UTENTI SAFE VICINI'} onPress={inviteNearby} />
+                  <Text style={styles.itemMeta}>Per tutelare la privacy, puoi ripetere la ricerca dopo 30 minuti.</Text>
+                </Section>
+              ) : null}
+
+              {isAdmin ? (
+                <Section title="Invita con codice">
                   <Text style={styles.body}>Inserisci il codice temporaneo NQ-… che la persona ha scelto di condividere. Non usare il codice pubblico del profilo.</Text>
                   <TextInput
                     accessibilityLabel="Codice temporaneo Rete di quartiere"
@@ -467,6 +540,7 @@ const styles = StyleSheet.create({
   itemMeta: { color: '#91A2BF', fontSize: 13, marginTop: 3 },
   avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#183455' },
   inlineActions: { flexDirection: 'row', gap: 7 },
+  preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   smallButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: '#4A6387', alignItems: 'center', justifyContent: 'center' },
   smallAccent: { backgroundColor: '#138DCE', borderColor: '#138DCE' },
   smallText: { color: '#BFD0EA', fontSize: 11, fontWeight: '800' },

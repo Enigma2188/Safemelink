@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useRef } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { KeyboardSafeScrollView as ScrollView } from '@/components/KeyboardSafeForm';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';

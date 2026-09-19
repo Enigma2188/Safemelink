@@ -1208,6 +1208,15 @@ check('Voice SOS can use only a fresh accurate account-scoped network location f
 });
 
 check('Fresh-user and trusted-contact forms keep keyboard-visible stable scroll containers', () => {
+  const keyboardForm = read('components/KeyboardSafeForm.tsx');
+  assert.match(keyboardForm, /minHeight: viewportHeight \+ keyboardHeight \+ CLEARANCE/);
+  assert.match(keyboardForm, /measureInWindow/);
+  assert.match(keyboardForm, /show\.remove\(\)/);
+  assert.match(keyboardForm, /hide\.remove\(\)/);
+  assert.doesNotMatch(keyboardForm, /setInterval|setTimeout/);
+  for (const path of ['screens/NetworkScreen.tsx', 'screens/NeighborhoodNetworkScreen.tsx', 'screens/EmergencyProfileScreen.tsx', 'app/voice-protection.tsx', 'screens/TrustedContactsScreen.tsx']) {
+    assert.match(read(path), /KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput/);
+  }
   const appConfig = read('app.json');
   const networkScreen = read('screens/NetworkScreen.tsx');
   const neighborhoodScreen = read('screens/NeighborhoodNetworkScreen.tsx');

@@ -340,6 +340,7 @@ export type Database = {
           invited_user_id: string;
           invited_by: string;
           status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
+          source: 'TOKEN' | 'NEARBY';
           created_at: string;
           responded_at: string | null;
           expires_at: string;
@@ -350,6 +351,7 @@ export type Database = {
           invited_user_id: string;
           invited_by: string;
           status?: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
+          source?: 'TOKEN' | 'NEARBY';
           created_at?: string;
           responded_at?: string | null;
           expires_at?: string;
@@ -382,6 +384,24 @@ export type Database = {
         Row: { id: number; actor_user_id: string; attempted_at: string };
         Insert: { id?: never; actor_user_id: string; attempted_at?: string };
         Update: never;
+        Relationships: [];
+      };
+      neighborhood_discovery_preferences: {
+        Row: { user_id: string; invite_opt_in: boolean; updated_at: string };
+        Insert: { user_id: string; invite_opt_in?: boolean; updated_at?: string };
+        Update: { invite_opt_in?: boolean; updated_at?: string };
+        Relationships: [];
+      };
+      neighborhood_discovery_presence: {
+        Row: { user_id: string; coarse_position: unknown; accuracy_meters: number; observed_at: string; expires_at: string };
+        Insert: { user_id: string; coarse_position: unknown; accuracy_meters: number; observed_at: string; expires_at: string };
+        Update: Partial<Database['public']['Tables']['neighborhood_discovery_presence']['Insert']>;
+        Relationships: [];
+      };
+      neighborhood_nearby_invite_runs: {
+        Row: { network_id: string; admin_id: string; attempted_at: string };
+        Insert: { network_id: string; admin_id: string; attempted_at?: string };
+        Update: { attempted_at?: string };
         Relationships: [];
       };
       emergency_profiles: {
@@ -430,6 +450,13 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      get_my_neighborhood_discovery_preference: { Args: Record<string, never>; Returns: boolean };
+      set_my_neighborhood_discovery_preference: { Args: { enabled: boolean; expected_user_id: string }; Returns: boolean };
+      publish_my_neighborhood_discovery_presence: {
+        Args: { position_latitude: number; position_longitude: number; position_accuracy: number; position_observed_at: string; expected_user_id: string; invite_origin: boolean };
+        Returns: boolean;
+      };
+      invite_nearby_neighborhood_users: { Args: { target_network_id: string; expected_user_id: string }; Returns: boolean };
       create_neighborhood_network: {
         Args: { target_name: string };
         Returns: { network_id: string }[];
@@ -463,6 +490,7 @@ export type Database = {
           network_name: string;
           counterpart_nickname: string;
           invitation_status: 'pending';
+          invitation_source: 'TOKEN' | 'NEARBY';
           created_at: string;
           expires_at: string;
         }[];
