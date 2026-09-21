@@ -152,9 +152,13 @@ jobs:
             --dependency com.facebook.react:react-android \
             --no-daemon
 
-      # Temporary diagnostic-only run: keep APK steps disabled until the classpath is reviewed.
+      - name: Compile Safety Kotlin before APK build
+        working-directory: android
+        run: |
+          set -o pipefail
+          ./gradlew :safemelink-safety:compileReleaseKotlin --no-daemon --stacktrace 2>&1 | tee ../safety-kotlin-build.log
+
       - name: Build standalone test APK
-        if: ${{ false }}
         working-directory: android
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
@@ -165,7 +169,6 @@ jobs:
           ./gradlew :app:assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee ../gradle-build.log
 
       - name: Prepare named APK artifact
-        if: ${{ false }}
         run: |
           mkdir -p artifacts
           cp android/app/build/outputs/apk/release/app-release.apk artifacts/safemelink-test.apk
@@ -175,7 +178,6 @@ jobs:
         run: rm -f google-services.json android/app/google-services.json
 
       - name: Upload SafeMeLink test APK
-        if: ${{ false }}
         uses: actions/upload-artifact@v4
         with:
           name: safemelink-android-test-apk
@@ -184,13 +186,14 @@ jobs:
           retention-days: 14
 
       - name: Upload diagnostic logs
-        if: ${{ false }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: safemelink-android-build-logs
           path: |
             expo-prebuild.log
             gradle-build.log
+            safety-kotlin-build.log
             android/app/build/reports
           if-no-files-found: ignore
           retention-days: 14

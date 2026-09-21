@@ -6,6 +6,11 @@ plugins {
 group = 'com.tiziano.safemelink.safety'
 version = '1.0.0'
 
+dependencies {
+  // Aligned with the app by the React Native Gradle Plugin.
+  implementation 'com.facebook.react:react-android'
+}
+
 android {
   namespace 'com.tiziano.safemelink.safety'
   defaultConfig {
