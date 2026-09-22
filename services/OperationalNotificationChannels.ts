@@ -43,7 +43,8 @@ export async function ensureOperationalChannel(id: string, name: string, importa
   }
   console.info('[NotificationSound] CHANNEL_STATE', {
     channelId: id, exists: channel !== null, importance: channel?.importance ?? null,
-    sound: channel?.sound ?? null, vibration: channel?.enableVibrate ?? null,
+    sound: channel?.sound === 'default' ? 'default' : channel?.sound ? 'custom' : 'none',
+    vibration: channel?.enableVibrate ?? null,
   });
   return channel;
 }

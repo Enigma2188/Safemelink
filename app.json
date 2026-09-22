@@ -63,6 +63,7 @@
         }
       ],
       "./plugins/withVoiceProtectionForegroundService.cjs",
+      "./plugins/withLocalSpeechRecognition.cjs",
       "./plugins/withSOSChannelQueries.cjs",
       [
         "expo-speech-recognition",

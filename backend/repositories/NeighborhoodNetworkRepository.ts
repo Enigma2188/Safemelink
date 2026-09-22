@@ -170,4 +170,53 @@ export const NeighborhoodNetworkRepository = {
     );
     if (error) throw fail('neighborhood.leave', 'Impossibile lasciare la rete.', error);
   },
+
+  async listDiscussions(): Promise<FunctionRows<'list_my_neighborhood_discussions'>> {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('list_my_neighborhood_discussions').abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.discussions', 'Impossibile caricare le discussioni.', error);
+    return data ?? [];
+  },
+
+  async createDiscussion(networkId: string, title: string, category: string) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('create_neighborhood_discussion', {
+        target_network_id: networkId,
+        target_title: title,
+        target_category: category,
+      }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.discussion_create', 'Impossibile creare la discussione.', error);
+    return data;
+  },
+
+  async listMessages(discussionId: string): Promise<FunctionRows<'list_neighborhood_messages'>> {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('list_neighborhood_messages', { target_discussion_id: discussionId }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.messages', 'Impossibile caricare i messaggi.', error);
+    return data ?? [];
+  },
+
+  async createMessage(discussionId: string, body: string) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('create_neighborhood_message', { target_discussion_id: discussionId, target_body: body }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.message_create', 'Impossibile inviare il messaggio.', error);
+    return data;
+  },
+
+  async closeDiscussion(discussionId: string) {
+    const client = requireSupabaseClient();
+    const { data, error } = await request((signal) =>
+      client.rpc('close_neighborhood_discussion', { target_discussion_id: discussionId }).abortSignal(signal),
+    );
+    if (error) throw fail('neighborhood.discussion_close', 'Impossibile chiudere la discussione.', error);
+    if (data !== true) throw new Error('Discussione non più disponibile.');
+  },
 };

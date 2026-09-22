@@ -3,6 +3,12 @@ import type { SOSCompletionResult } from '@/services/SOSService';
 type SettingsChangedListener = (userId: string) => void;
 type SOSRequestListener = (userId: string) => void;
 type RecognitionStartedListener = (userId: string) => void;
+export type VoiceRecognitionState = 'off' | 'starting' | 'listening' | 'retrying' | 'error';
+type RecognitionStateListener = (userId: string, state: VoiceRecognitionState) => void;
+const recognitionStateListeners = new Set<RecognitionStateListener>();
+const recognitionStopListeners = new Set<SettingsChangedListener>();
+let recognitionStatus: { userId: string; state: VoiceRecognitionState } | null = null;
+let recognitionFailure: { userId: string; category: 'permission' | 'readiness' | 'start' | 'circuit_breaker' } | null = null;
 type SOSExecutionListener = (userId: string) => void;
 type SOSCompletionListener = (userId: string, result: SOSCompletionResult) => void;
 type SOSFailureListener = (userId: string, error: unknown) => void;
@@ -26,7 +32,50 @@ const signalBackgroundTask = () => {
 };
 
 export const VoiceProtectionRuntime = {
+  getRecognitionState(userId: string | null): VoiceRecognitionState {
+    return recognitionStatus?.userId === userId ? recognitionStatus.state : 'off';
+  },
+
+  setRecognitionState(userId: string, state: VoiceRecognitionState) {
+    if (state === 'off' || state === 'listening') recognitionFailure = null;
+    if (recognitionStatus?.state !== state || recognitionStatus?.userId !== userId) {
+      console.info('[VoiceProtection] listener', { state });
+    }
+    recognitionStatus = { userId, state };
+    recognitionStateListeners.forEach((listener) => listener(userId, state));
+  },
+
+  setRecognitionFailure(userId: string, category: 'permission' | 'readiness' | 'start' | 'circuit_breaker') {
+    recognitionFailure = { userId, category };
+  },
+
+  getRecognitionFailureMessage(userId: string | null) {
+    if (recognitionFailure?.userId !== userId) return '';
+    switch (recognitionFailure?.category) {
+      case 'readiness': return 'Il motore non riesce a usare l’italiano offline. Controlla il servizio vocale e il modello italiano nelle impostazioni, poi riprova.';
+      case 'permission': return 'Il microfono o il servizio vocale non è autorizzato. Controlla i permessi nelle impostazioni Android.';
+      case 'circuit_breaker': return 'Il motore vocale si interrompe ripetutamente. Aggiorna il servizio vocale e controlla la lingua italiana offline prima di riprovare.';
+      default: return '';
+    }
+  },
+
+  onRecognitionStateChanged(listener: RecognitionStateListener) {
+    recognitionStateListeners.add(listener);
+    return () => { recognitionStateListeners.delete(listener); };
+  },
+
+  requestRecognitionStop(userId: string) {
+    recognitionStopListeners.forEach((listener) => listener(userId));
+    VoiceProtectionRuntime.setRecognitionState(userId, 'off');
+  },
+
+  onRecognitionStopRequested(listener: SettingsChangedListener) {
+    recognitionStopListeners.add(listener);
+    return () => { recognitionStopListeners.delete(listener); };
+  },
+
   notifyRecognitionStarted(userId: string) {
+    VoiceProtectionRuntime.setRecognitionState(userId, 'listening');
     recognitionStartedListeners.forEach((listener) => listener(userId));
   },
 

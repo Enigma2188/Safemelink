@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useFocusEffect } from 'expo-router';
-import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -19,8 +18,9 @@ import {
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
-import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
+import { VoiceProtectionRuntime, type VoiceRecognitionState } from '@/services/VoiceProtectionRuntime';
 import { VoiceProtectionService } from '@/services/VoiceProtectionService';
+import { voiceReadinessMessage } from '@/services/VoiceRecognitionCapabilities';
 import { normalizePassphrase } from '@/storage/PassphraseStorage';
 import {
   DEFAULT_VOICE_PROTECTION_SETTINGS,
@@ -119,6 +119,8 @@ export default function VoiceProtectionScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [activationFeedback, setActivationFeedback] = useState('');
+  const [recognitionState, setRecognitionState] = useState<VoiceRecognitionState>(() =>
+    VoiceProtectionRuntime.getRecognitionState(userId));
   const [italianModelDownloadRequired, setItalianModelDownloadRequired] = useState(false);
   const [passphraseSaveFeedback, setPassphraseSaveFeedback] =
     useState<PassphraseSaveFeedback | null>(null);
@@ -133,6 +135,13 @@ export default function VoiceProtectionScreen() {
   const settingsRefreshPendingRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  useEffect(() => {
+    setRecognitionState(VoiceProtectionRuntime.getRecognitionState(userId));
+    return VoiceProtectionRuntime.onRecognitionStateChanged((owner, state) => {
+      if (owner === userId) setRecognitionState(state);
+    });
+  }, [userId]);
 
   useEffect(() => {
     if (!italianModelDownloadRequired) {
@@ -230,7 +239,8 @@ export default function VoiceProtectionScreen() {
       ) {
         setSettings(reconciledSettings);
         setPassphraseDraft(reconciledSettings.passphrase);
-        setMicrophoneState(reconciledSettings.enabled ? 'ready' : 'off');
+        setMicrophoneState(reconciledSettings.enabled &&
+          VoiceProtectionRuntime.getRecognitionState(userId) === 'listening' ? 'ready' : 'off');
       }
     } catch (error) {
       if (
@@ -458,28 +468,10 @@ export default function VoiceProtectionScreen() {
     setActivationFeedback('Avvio della protezione in corso…');
 
     try {
-      if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
-        const feedback = 'Il riconoscimento vocale locale non è supportato dal dispositivo.';
-        setActivationFeedback(feedback);
-        setMessage(feedback);
-        return;
-      }
       const recognitionReadiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
-      if (recognitionReadiness === 'recognition_unavailable') {
-        const feedback = 'Riconoscimento vocale non disponibile su questo dispositivo.';
-        setActivationFeedback(feedback);
-        setMessage(feedback);
-        return;
-      }
-      if (recognitionReadiness === 'on_device_unavailable') {
-        const feedback = 'Il riconoscimento vocale locale non è supportato dal dispositivo.';
-        setActivationFeedback(feedback);
-        setMessage(feedback);
-        return;
-      }
-      if (recognitionReadiness === 'italian_model_missing') {
-        const feedback = 'Installa il modello italiano offline prima di attivare la protezione.';
-        setItalianModelDownloadRequired(true);
+      if (recognitionReadiness !== 'ready' && recognitionReadiness !== 'model_status_unknown') {
+        const feedback = voiceReadinessMessage(recognitionReadiness);
+        setItalianModelDownloadRequired(recognitionReadiness === 'italian_model_missing');
         setActivationFeedback(feedback);
         setMessage(feedback);
         return;
@@ -588,13 +580,15 @@ export default function VoiceProtectionScreen() {
       refreshGenerationRef.current += 1;
       setItalianModelDownloadRequired(false);
       VoiceProtectionRuntime.notifySettingsChanged(userId);
-      if (!(await recognitionStarted)) {
+      if (!(await recognitionStarted) || !VoiceProtectionService.isRunning() ||
+        VoiceProtectionRuntime.getRecognitionState(userId) !== 'listening') {
         const inactiveSettings: VoiceProtectionSettings = {
           ...activeSettings,
           enabled: false,
           enabledAt: null,
           expiresAt: null,
         };
+        VoiceProtectionRuntime.requestRecognitionStop(userId);
         await VoiceProtectionService.stop().catch(() => {});
         await VoiceProtectionStorage.save(userId, inactiveSettings).catch(() => {});
         refreshGenerationRef.current += 1;
@@ -613,6 +607,7 @@ export default function VoiceProtectionScreen() {
       setActivationFeedback(feedback);
       setMessage(feedback);
     } catch {
+      VoiceProtectionRuntime.requestRecognitionStop(userId);
       await VoiceProtectionService.stop().catch(() => {});
       const feedback =
         'Il servizio di protezione non si è avviato. Controlla i permessi e riprova.';
@@ -637,10 +632,9 @@ export default function VoiceProtectionScreen() {
     activationInFlightRef.current = true;
     refreshGenerationRef.current += 1;
     setIsSaving(true);
+    setActivationFeedback('Arresto della protezione in corso…');
     try {
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {}
+      VoiceProtectionRuntime.requestRecognitionStop(userId);
       await VoiceProtectionService.stop();
       const inactiveSettings: VoiceProtectionSettings = {
         ...settings,
@@ -657,9 +651,11 @@ export default function VoiceProtectionScreen() {
       setSettings(inactiveSettings);
       setMicrophoneState('off');
       VoiceProtectionRuntime.notifySettingsChanged(userId);
+      setActivationFeedback('Protezione disattivata. Puoi riattivarla quando vuoi.');
       setMessage('Protezione disattivata.');
     } catch (error) {
       setMicrophoneState('error');
+      setActivationFeedback('Disattivazione non completata. Riprova: l’ascolto è stato interrotto.');
       setMessage(
         error instanceof Error
           ? error.message
@@ -668,6 +664,10 @@ export default function VoiceProtectionScreen() {
     } finally {
       activationInFlightRef.current = false;
       setIsSaving(false);
+      if (settingsRefreshPendingRef.current) {
+        settingsRefreshPendingRef.current = false;
+        void refreshState(false);
+      }
     }
   };
 
@@ -734,7 +734,7 @@ export default function VoiceProtectionScreen() {
   const microphoneLabel =
     microphoneState === 'error'
       ? 'Richiede attenzione'
-      : microphoneState === 'ready'
+      : settings.enabled && recognitionState === 'listening'
         ? 'Ascolto locale attivo'
         : 'Non in uso';
 
@@ -792,7 +792,9 @@ export default function VoiceProtectionScreen() {
                   styles.status,
                   settings.enabled ? styles.statusActive : styles.statusInactive,
                 ]}>
-                {settings.enabled ? 'ATTIVA' : 'NON ATTIVA'}
+                {settings.enabled
+                  ? recognitionState === 'listening' ? 'IN ASCOLTO' : 'ASCOLTO IN RIPRISTINO'
+                  : 'NON ATTIVA'}
               </Text>
             </View>
             <Switch
@@ -806,14 +808,20 @@ export default function VoiceProtectionScreen() {
             />
           </View>
 
-          {toggleUnavailableFeedback || activationFeedback ? (
+          {toggleUnavailableFeedback || activationFeedback || recognitionState === 'error' || settings.enabled ? (
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
-              {toggleUnavailableFeedback || activationFeedback}
+              {toggleUnavailableFeedback || (recognitionState === 'error'
+                ? VoiceProtectionRuntime.getRecognitionFailureMessage(userId) || 'Ascolto interrotto. Controlla i permessi e riprova ad attivare la protezione.'
+                : settings.enabled
+                  ? recognitionState === 'listening'
+                    ? 'Microfono in ascolto. La parola d’ordine può avviare il countdown SOS.'
+                    : 'L’ascolto non è ancora pronto. SafeMeLink sta tentando di ripristinarlo.'
+                  : activationFeedback)}
             </Text>
           ) : null}
           <Text style={styles.cardDescription}>
             {Platform.OS === 'android'
-              ? 'Quando è attiva, Android mostra una notifica persistente e mantiene l’ascolto locale anche in background o con lo schermo bloccato.'
+              ? 'Pensata soprattutto per l’uso in background. Attendi “IN ASCOLTO” prima di cambiare schermata. Android può interromperla per risparmio energetico o se il microfono è occupato.'
               : 'iOS non consente a questa modalità di mantenere un ascolto vocale continuo quando sospende l’app.'}
           </Text>
           {showPermissionSettings ? (
@@ -943,6 +951,21 @@ export default function VoiceProtectionScreen() {
           ) : null}
         </View>
 
+        {Platform.OS === 'android' ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Servizio vocale del telefono</Text>
+            <Text style={styles.cardDescription}>
+              Se l’ascolto locale non è disponibile, controlla nelle impostazioni Android che il servizio vocale sia abilitato e aggiornato e che la lingua italiana offline sia installata. I nomi delle impostazioni dipendono dal telefono. Dopo le modifiche torna qui e riprova Attiva.
+            </Text>
+            <Pressable accessibilityRole="button" style={styles.batteryButton} onPress={() => {
+              void Linking.sendIntent('android.settings.VOICE_INPUT_SETTINGS')
+                .catch(() => Linking.sendIntent('android.settings.SETTINGS'))
+                .catch(() => setMessage('Apri manualmente le impostazioni Android e cerca il servizio vocale.'));
+            }}>
+              <Text style={styles.batteryButtonText}>APRI IMPOSTAZIONI VOCALI</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {italianModelDownloadRequired ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Modello italiano offline</Text>

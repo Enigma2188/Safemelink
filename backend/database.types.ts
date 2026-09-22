@@ -527,6 +527,38 @@ export type Database = {
         Args: { target_network_id: string };
         Returns: undefined;
       };
+      list_my_neighborhood_discussions: {
+        Args: Record<string, never>;
+        Returns: {
+          discussion_id: string;
+          network_id: string;
+          title: string;
+          category: 'Sicurezza' | 'Aiuto' | 'Informazioni' | 'Altro';
+          author_nickname: string;
+          status: 'open' | 'closed';
+          is_general: boolean;
+          can_close: boolean;
+          message_count: number;
+          last_message: string | null;
+          updated_at: string;
+        }[];
+      };
+      create_neighborhood_discussion: {
+        Args: { target_network_id: string; target_title: string; target_category: string };
+        Returns: string;
+      };
+      list_neighborhood_messages: {
+        Args: { target_discussion_id: string };
+        Returns: { message_id: string; author_nickname: string; body: string; created_at: string }[];
+      };
+      create_neighborhood_message: {
+        Args: { target_discussion_id: string; target_body: string };
+        Returns: string;
+      };
+      close_neighborhood_discussion: {
+        Args: { target_discussion_id: string };
+        Returns: boolean;
+      };
       create_my_safety_sos: {
         Args: { operation_id: string; expected_user_id: string; position_latitude: number | null; position_longitude: number | null; position_accuracy: number | null; event_time: string | null; position_observed_at: string | null };
         Returns: Database['public']['Tables']['sos']['Row'][];

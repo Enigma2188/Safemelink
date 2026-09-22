@@ -331,7 +331,8 @@ check('Radar missing preferences are initialized with safe OFF defaults', () => 
 });
 
 check('Fresh users can sign up and receive an idempotent account bootstrap', () => {
-  assert.match(authService, /client\.auth\.signUp\(\{ email, password \}\)/);
+  assert.match(authService, /client\.auth\.signUp\(\{ email, password, options: \{ emailRedirectTo: EMAIL_CONFIRMATION_REDIRECT \} \}\)/);
+  assert.match(read('backend/auth/EmailConfirmation.ts'), /safemelink:\/\/email-confirmed/);
   assert.match(authProvider, /AuthService\.initializeAccount\(nextSession\.user\.id\)/);
   assert.match(accountAccessPanel, /Crea account/);
   assert.match(accountAccessPanel, /requiresEmailConfirmation/);
@@ -775,9 +776,11 @@ check('Closed or cancelled SOS expose neither coordinates nor medical data', () 
 check('Voice Protection recognition stays local and delegates SOS through runtime', () => {
   assert.match(voiceProtectionLifecycle, /requiresOnDeviceRecognition: true/);
   assert.match(
-    voiceProtectionScreen,
+    read('services/VoiceRecognitionCapabilities.ts'),
     /supportsOnDeviceRecognition\(\)/,
   );
+  assert.match(voiceProtectionScreen, /VoiceProtectionService\.getRecognitionReadiness\('it-IT'\)/);
+  assert.match(voiceProtectionService, /getRecognitionReadiness: getVoiceRecognitionReadiness/);
   assert.doesNotMatch(voiceProtectionScreen, /SOSService|SOSLifecycleService|completeSOS/);
   assert.doesNotMatch(voiceProtectionService, /supabase|functions\.invoke|fetch\(/);
   assert.match(voiceProtectionLifecycle, /VoiceProtectionRuntime\.requestSOS\(/);

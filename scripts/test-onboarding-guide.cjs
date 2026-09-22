@@ -11,6 +11,7 @@ const onboarding = read('app/onboarding.tsx');
 const guide = read('app/how-safemelink-works.tsx');
 const storage = read('storage/OnboardingStorage.ts');
 const home = read('app/(tabs)/index.tsx');
+const shortcuts = read('components/HomeQuickActions.tsx');
 const networkModels = read('services/NetworkModels.ts');
 const networkScreen = read('screens/NetworkScreen.tsx');
 
@@ -27,6 +28,15 @@ assert.match(onboarding, /subscription\.remove\(\)/);
 assert.doesNotMatch(onboarding, /requestPermissions|getPermissions|expo-notifications|expo-location/);
 assert.match(home, /Come funziona SafeMeLink/);
 assert.match(home, /\/how-safemelink-works/);
+assert.match(home, /<HomeQuickActions/);
+assert.match(shortcuts, /Come funziona SafeMeLink/);
+for (const label of ['Checkpoint', 'Torno a casa', 'Protezione vocale', 'Rete SafeMeLink', 'NETWORK', 'Rete di quartiere']) {
+  assert.ok(shortcuts.includes(label), `Missing labelled shortcut: ${label}`);
+}
+assert.match(shortcuts, /accessibilityRole="button"/);
+assert.match(shortcuts, /flexWrap: 'wrap'/);
+assert.match(guide, /accessibilityState=\{\{ expanded:/);
+assert.doesNotMatch(guide, /destinatari selezionati dal backend|token NQ|Token tecnico/);
 assert.match(guide, /SOS/);
 assert.match(guide, /Rete SafeMeLink/);
 assert.match(guide, /NETWORK/);
@@ -38,7 +48,10 @@ assert.match(guide, /Notifiche/);
 assert.match(guide, /Privacy e posizione/);
 assert.doesNotMatch(`${onboarding}\n${guide}`, /setInterval|watchPosition|latitude|longitude|ExponentPushToken|ExpoPushToken/);
 assert.match(networkModels, /NETWORK_FEED_RADIUS_METERS = 5_000/);
-assert.match(networkScreen, /entro 5 km/);
+assert.match(networkScreen, /formatRadius\(radius\)/);
+for (const route of ['voice-protection', 'radar', 'network', 'neighborhood-network', 'how-safemelink-works']) {
+  assert.ok(fs.existsSync(path.join(root, 'app', `${route}.tsx`)), `Missing shortcut route: ${route}`);
+}
 assert.doesNotMatch(networkScreen, /entro 1 km/);
 
 console.log('Onboarding and SafeMeLink guide checks passed.');

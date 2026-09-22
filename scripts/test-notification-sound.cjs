@@ -13,6 +13,9 @@ function load(file, modules) {
   return exports;
 }
 async function main() {
+  const channelSource = fs.readFileSync('services/OperationalNotificationChannels.ts', 'utf8');
+  assert.doesNotMatch(channelSource, /sound: channel\?\.sound \?\? null/);
+  assert.match(channelSource, /\? 'custom' : 'none'/);
   const appConfig = JSON.parse(fs.readFileSync('app.json', 'utf8'));
   assert.ok(
     appConfig.expo.android.permissions.includes('android.permission.SCHEDULE_EXACT_ALARM'),

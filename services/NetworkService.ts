@@ -1,5 +1,6 @@
 import type { NetworkConfirmationKind, NetworkReportCategory } from '@/backend/database.types';
 import { NetworkRepository } from '@/backend/repositories/NetworkRepository';
+import { AuthService } from '@/backend/auth/AuthService';
 import { LocationService } from '@/services/LocationService';
 import {
   getNetworkFeedCursor,
@@ -104,10 +105,16 @@ export const NetworkService = {
   },
 
   async createReport(category: NetworkReportCategory, description: string) {
+    const owner = (await AuthService.getSession())?.user.id;
+    if (!owner) throw new Error('Accedi prima di pubblicare una segnalazione.');
     const location = await LocationService.getCurrentLocation({
       timeoutMs: 15_000,
       accuracy: 'high',
     });
+    // The GPS request can outlive logout/login; do not publish A's draft as B.
+    if ((await AuthService.getSession())?.user.id !== owner) {
+      throw new Error('Account cambiato durante la richiesta. Riprova con l’account attuale.');
+    }
     return NetworkRepository.createReport({
       category,
       description: description.trim(),

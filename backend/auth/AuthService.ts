@@ -1,6 +1,7 @@
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
 import { getSupabaseClient } from '@/backend/supabaseClient';
+import { EMAIL_CONFIRMATION_REDIRECT } from '@/backend/auth/EmailConfirmation';
 
 const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 const ACCOUNT_INITIALIZATION_TIMEOUT_MS = 15_000;
@@ -120,7 +121,7 @@ export const AuthService = {
   async signUp(email: string, password: string) {
     const client = requireAuthClient();
     const { data, error } = await withAuthRequestTimeout(
-      client.auth.signUp({ email, password }),
+      client.auth.signUp({ email, password, options: { emailRedirectTo: EMAIL_CONFIRMATION_REDIRECT } }),
     );
 
     if (error) {

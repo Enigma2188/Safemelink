@@ -7,13 +7,15 @@ import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
 import { reportSafetyError, withSafetyTimeout } from '@/services/SafetyOperation';
 import { VoiceProtectionRuntime } from '@/services/VoiceProtectionRuntime';
 import { SOSService } from '@/services/SOSService';
+import { getVoiceRecognitionReadiness } from '@/services/VoiceRecognitionCapabilities';
 import {
   type VoiceProtectionDurationMinutes,
   VoiceProtectionStorage,
 } from '@/storage/VoiceProtectionStorage';
 
+export type { VoiceRecognitionReadiness } from '@/services/VoiceRecognitionCapabilities';
+
 const TASK_MAX_SLEEP_MS = 60_000;
-const RECOGNITION_READINESS_TIMEOUT_MS = 5_000;
 let activeTaskUserId: string | null = null;
 let serviceQueue: Promise<unknown> = Promise.resolve();
 let taskStartGate: Promise<void> = Promise.resolve();
@@ -44,15 +46,6 @@ export type VoiceProtectionPermissionState = {
   microphoneGranted: boolean;
   notificationsGranted: boolean;
 };
-
-export type VoiceRecognitionReadiness =
-  | 'ready'
-  | 'recognition_unavailable'
-  | 'on_device_unavailable'
-  | 'italian_model_missing'
-  | 'model_status_unknown';
-
-const normalizeLocale = (locale: string) => locale.replace('_', '-').toLowerCase();
 
 const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
   const exitTask = signalTaskExited;
@@ -218,55 +211,7 @@ export const VoiceProtectionService = {
     };
   },
 
-  async getRecognitionReadiness(locale = 'it-IT'): Promise<VoiceRecognitionReadiness> {
-    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
-      return 'recognition_unavailable';
-    }
-    if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
-      return 'on_device_unavailable';
-    }
-    if (Platform.OS !== 'android') {
-      return 'ready';
-    }
-
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    try {
-      const { installedLocales } = await Promise.race([
-        ExpoSpeechRecognitionModule.getSupportedLocales({}),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(
-            () => reject(new Error('recognition_readiness_timeout')),
-            RECOGNITION_READINESS_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      const expectedLocale = normalizeLocale(locale);
-      const expectedLanguage = expectedLocale.split('-')[0];
-      const modelInstalled = installedLocales.some((installedLocale) => {
-        const normalizedLocale = normalizeLocale(installedLocale);
-        return (
-          normalizedLocale === expectedLocale ||
-          normalizedLocale.split('-')[0] === expectedLanguage
-        );
-      });
-
-      if (modelInstalled) {
-        return 'ready';
-      }
-
-      const androidApiLevel =
-        typeof Platform.Version === 'number'
-          ? Platform.Version
-          : Number.parseInt(String(Platform.Version), 10);
-      return androidApiLevel >= 33 ? 'italian_model_missing' : 'model_status_unknown';
-    } catch {
-      return 'model_status_unknown';
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  },
+  getRecognitionReadiness: getVoiceRecognitionReadiness,
 
   async requestItalianModelDownload() {
     if (Platform.OS !== 'android') {

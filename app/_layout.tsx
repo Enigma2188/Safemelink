@@ -37,6 +37,11 @@ function RootNavigator() {
     return <View style={styles.loadingScreen} />;
   }
 
+  // Confirmation links must remain reachable even before first-run onboarding.
+  if (!isComplete && currentRootSegment === 'email-confirmed') {
+    return <Stack><Stack.Screen name="email-confirmed" options={{ headerShown: false }} /></Stack>;
+  }
+
   if (!isComplete) {
     if (currentRootSegment !== 'onboarding') {
       return <Redirect href={'/onboarding' as Href} />;
@@ -65,6 +70,7 @@ function RootNavigator() {
             <Stack>
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="login" options={{ title: 'Login' }} />
+              <Stack.Screen name="email-confirmed" options={{ headerShown: false }} />
               <Stack.Screen
                 name="emergency-profile"
                 options={{ title: 'Profilo di Emergenza' }}

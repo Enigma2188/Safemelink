@@ -25,7 +25,8 @@ export const NeighborhoodNetworkService = {
     const members = network
       ? await NeighborhoodNetworkRepository.listMembers(network.network_id)
       : [];
-    return { network, members, invitations, discoveryOptIn };
+    const discussions = network ? await NeighborhoodNetworkRepository.listDiscussions() : [];
+    return { network, members, invitations, discoveryOptIn, discussions };
   },
 
   async setDiscoveryPreference(userId: string, enabled: boolean) {
@@ -68,4 +69,24 @@ export const NeighborhoodNetworkService = {
   cancelInvitation: NeighborhoodNetworkRepository.cancelInvitation,
   removeMember: NeighborhoodNetworkRepository.removeMember,
   leave: NeighborhoodNetworkRepository.leave,
+  listDiscussions: NeighborhoodNetworkRepository.listDiscussions,
+  createDiscussion(networkId: string, title: string, category: string) {
+    const normalizedTitle = title.trim().replace(/\s+/g, ' ');
+    if (normalizedTitle.length < 3 || normalizedTitle.length > 100) {
+      throw new Error('Il titolo deve contenere da 3 a 100 caratteri.');
+    }
+    if (!['Sicurezza', 'Aiuto', 'Informazioni', 'Altro'].includes(category)) {
+      throw new Error('Scegli una categoria.');
+    }
+    return NeighborhoodNetworkRepository.createDiscussion(networkId, normalizedTitle, category);
+  },
+  listMessages: NeighborhoodNetworkRepository.listMessages,
+  createMessage(discussionId: string, body: string) {
+    const normalizedBody = body.trim();
+    if (normalizedBody.length < 1 || normalizedBody.length > 2000) {
+      throw new Error('Il messaggio deve contenere da 1 a 2000 caratteri.');
+    }
+    return NeighborhoodNetworkRepository.createMessage(discussionId, normalizedBody);
+  },
+  closeDiscussion: NeighborhoodNetworkRepository.closeDiscussion,
 };

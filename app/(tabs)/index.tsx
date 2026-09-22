@@ -9,6 +9,7 @@ import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
+import { HomeQuickActions } from '@/components/HomeQuickActions';
 import { useSOSNetworkPresence } from '@/components/SOSNetworkPresenceProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SOSLocalDeliveryResult } from '@/services/SOSAlertService';
@@ -311,6 +312,7 @@ export default function HomeScreen() {
   const [goHomeErrorAction, setGoHomeErrorAction] = useState<GoHomeErrorAction>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [activePanel, setActivePanel] = useState<HomePanel>('home');
+  const homeScrollRef = useRef<ScrollView>(null);
   const goHomeEstimateGenerationRef = useRef(0);
   const goHomeEstimateInFlightRef = useRef(false);
   const goHomeOperationGenerationRef = useRef(0);
@@ -2186,6 +2188,7 @@ export default function HomeScreen() {
   const openPanel = (panel: HomePanel) => {
     setActivePanel(panel);
     setDrawerVisible(false);
+    homeScrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
   const closeDrawer = () => {
@@ -2298,11 +2301,12 @@ export default function HomeScreen() {
       <SafeNetworkBackground />
 
       <ScrollView
+        ref={homeScrollRef}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <Pressable style={styles.iconButton} onPress={() => setDrawerVisible(true)}>
+        <Pressable accessibilityLabel="Apri menu" accessibilityRole="button" style={styles.iconButton} onPress={() => setDrawerVisible(true)}>
           <Ionicons color="#F7FAFF" name="menu-outline" size={25} />
         </Pressable>
         <View style={styles.topTitleWrap}>
@@ -2447,7 +2451,8 @@ export default function HomeScreen() {
             <Animated.View style={[styles.sosGlow, sosGlowAnimatedStyle]} />
             <View style={styles.sosOuterRing} />
             <View style={styles.sosInnerRing} />
-            <Pressable style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={() => startSOSCountdown()}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Avvia countdown SOS" style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={() => startSOSCountdown()}>
+              <Ionicons accessible={false} color="#FFFFFF" name="alert-circle-outline" size={32} />
               <Text style={styles.sosButtonText}>SOS</Text>
             </Pressable>
           </View>
@@ -2470,6 +2475,10 @@ export default function HomeScreen() {
             <Text style={styles.statusModeText}>{activeSafetyMode}</Text>
           </View>
         </View>
+      )}
+
+      {activePanel === 'home' && status === 'idle' && (
+        <HomeQuickActions onPanel={openPanel} onNavigate={(route) => router.push(route as Href)} />
       )}
 
       {activePanel === 'checkpoint' && (

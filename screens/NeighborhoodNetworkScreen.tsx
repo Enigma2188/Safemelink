@@ -23,15 +23,18 @@ type Overview = Database['public']['Functions']['get_my_neighborhood_overview'][
 type Member = Database['public']['Functions']['list_my_neighborhood_members']['Returns'][number];
 type Invitation = Database['public']['Functions']['list_my_neighborhood_invitations']['Returns'][number];
 type InviteToken = Database['public']['Functions']['generate_my_neighborhood_invite_token']['Returns'][number];
+type Discussion = Database['public']['Functions']['list_my_neighborhood_discussions']['Returns'][number];
+type NeighborhoodMessage = Database['public']['Functions']['list_neighborhood_messages']['Returns'][number];
 
 type ScreenData = {
   network: Overview | null;
   members: Member[];
   invitations: Invitation[];
   discoveryOptIn: boolean;
+  discussions: Discussion[];
 };
 
-const EMPTY_DATA: ScreenData = { network: null, members: [], invitations: [], discoveryOptIn: false };
+const EMPTY_DATA: ScreenData = { network: null, members: [], invitations: [], discoveryOptIn: false, discussions: [] };
 
 export function NeighborhoodNetworkScreen() {
   const router = useRouter();
@@ -52,6 +55,11 @@ export function NeighborhoodNetworkScreen() {
   const [networkName, setNetworkName] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [myInviteToken, setMyInviteToken] = useState<InviteToken | null>(null);
+  const [discussionTitle, setDiscussionTitle] = useState('');
+  const [discussionCategory, setDiscussionCategory] = useState<'Sicurezza' | 'Aiuto' | 'Informazioni' | 'Altro'>('Informazioni');
+  const [selectedDiscussionId, setSelectedDiscussionId] = useState<string | null>(null);
+  const [discussionMessages, setDiscussionMessages] = useState<NeighborhoodMessage[]>([]);
+  const [messageDraft, setMessageDraft] = useState('');
 
   const load = useCallback(async (showSpinner = true) => {
     const requestedUserId = userId;
@@ -100,6 +108,10 @@ export function NeighborhoodNetworkScreen() {
     setNetworkName('');
     setInviteCode('');
     setMyInviteToken(null);
+    setDiscussionTitle('');
+    setSelectedDiscussionId(null);
+    setDiscussionMessages([]);
+    setMessageDraft('');
     presenceRefreshRef.current = null;
     return () => {
       mountedRef.current = false;
@@ -217,6 +229,48 @@ export function NeighborhoodNetworkScreen() {
     void runAction(
       () => NeighborhoodNetworkService.inviteNearby(userId, data.network!.network_id),
       'Ricerca completata. Eventuali inviti sono stati inviati alle persone disponibili nelle vicinanze.',
+    );
+  };
+
+  const openDiscussion = async (discussion: Discussion) => {
+    setSelectedDiscussionId(discussion.discussion_id);
+    try {
+      const messages = await NeighborhoodNetworkService.listMessages(discussion.discussion_id);
+      if (mountedRef.current && accountRef.current === userId) setDiscussionMessages(messages);
+    } catch (error) {
+      if (mountedRef.current) setMessage(error instanceof Error ? error.message : 'Impossibile caricare i messaggi.');
+    }
+  };
+
+  const createDiscussion = () => {
+    if (!data.network) return;
+    void runAction(
+      () => NeighborhoodNetworkService.createDiscussion(data.network!.network_id, discussionTitle, discussionCategory),
+      'Discussione creata.',
+      () => setDiscussionTitle(''),
+    );
+  };
+
+  const sendDiscussionMessage = async () => {
+    if (!selectedDiscussionId || !messageDraft.trim() || busy) return;
+    const discussionId = selectedDiscussionId;
+    const text = messageDraft;
+    await runAction(
+      () => NeighborhoodNetworkService.createMessage(discussionId, text),
+      'Messaggio inviato.',
+      () => setMessageDraft(''),
+    );
+    try {
+      const messages = await NeighborhoodNetworkService.listMessages(discussionId);
+      if (mountedRef.current && accountRef.current === userId) setDiscussionMessages(messages);
+    } catch { /* the success feedback remains visible; a later refresh can reload messages */ }
+  };
+
+  const closeSelectedDiscussion = (discussion: Discussion) => {
+    void runAction(
+      () => NeighborhoodNetworkService.closeDiscussion(discussion.discussion_id),
+      'Discussione chiusa.',
+      () => setSelectedDiscussionId(null),
     );
   };
 
@@ -483,6 +537,56 @@ export function NeighborhoodNetworkScreen() {
                 </Section>
               ) : null}
 
+              <Section title="Discussioni della rete">
+                <Text style={styles.body}>Parla per argomenti con i membri della tua rete. Sono visibili solo nickname e messaggi, mai email, telefoni o coordinate.</Text>
+                <TextInput
+                  accessibilityLabel="Titolo nuova discussione"
+                  autoCapitalize="sentences"
+                  editable={!busy}
+                  maxLength={100}
+                  onChangeText={setDiscussionTitle}
+                  placeholder="Es. Illuminazione della strada"
+                  placeholderTextColor="#71809D"
+                  style={styles.input}
+                  value={discussionTitle}
+                />
+                <View style={styles.categoryRow}>
+                  {(['Sicurezza', 'Aiuto', 'Informazioni', 'Altro'] as const).map((category) => (
+                    <Pressable key={category} accessibilityRole="button" disabled={busy} onPress={() => setDiscussionCategory(category)} style={[styles.categoryChip, discussionCategory === category && styles.categoryChipActive]}>
+                      <Text style={[styles.categoryText, discussionCategory === category && styles.categoryTextActive]}>{category}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <PrimaryButton disabled={busy || discussionTitle.trim().length < 3} label="NUOVO ARGOMENTO" onPress={createDiscussion} />
+                {data.discussions.map((discussion) => {
+                  const selected = discussion.discussion_id === selectedDiscussionId;
+                  return (
+                    <View key={discussion.discussion_id} style={styles.discussionItem}>
+                      <Pressable accessibilityRole="button" onPress={() => void openDiscussion(discussion)} style={styles.discussionHeader}>
+                        <View style={styles.listText}>
+                          <Text style={styles.itemTitle}>{discussion.title}{discussion.is_general ? ' · Generale' : ''}</Text>
+                          <Text style={styles.itemMeta}>{discussion.category} · {discussion.message_count} messaggi · {new Date(discussion.updated_at).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}</Text>
+                          {discussion.last_message ? <Text numberOfLines={2} style={styles.itemMeta}>{discussion.last_message}</Text> : null}
+                        </View>
+                        <Ionicons color="#7BCBFF" name={selected ? 'chevron-up' : 'chevron-forward'} size={20} />
+                      </Pressable>
+                      {selected ? (
+                        <View style={styles.chatBox}>
+                          {discussionMessages.map((item) => <View key={item.message_id} style={styles.chatMessage}><Text style={styles.itemMeta}>{item.author_nickname}</Text><Text style={styles.body}>{item.body}</Text></View>)}
+                          {discussion.status === 'open' ? (
+                            <>
+                              <TextInput accessibilityLabel="Nuovo messaggio" editable={!busy} maxLength={2000} multiline onChangeText={setMessageDraft} placeholder="Scrivi un messaggio" placeholderTextColor="#71809D" style={styles.input} value={messageDraft} />
+                              <PrimaryButton disabled={busy || !messageDraft.trim()} label="INVIA MESSAGGIO" onPress={() => void sendDiscussionMessage()} />
+                            </>
+                          ) : <Text style={styles.hint}>Discussione chiusa.</Text>}
+                          {discussion.can_close && discussion.status === 'open' ? <SmallButton disabled={busy} label="CHIUDI DISCUSSIONE" onPress={() => closeSelectedDiscussion(discussion)} /> : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+              </Section>
+
               <Pressable
                 accessibilityRole="button"
                 disabled={busy || Boolean(isAdmin && data.network.member_count > 1)}
@@ -540,6 +644,15 @@ const styles = StyleSheet.create({
   itemMeta: { color: '#91A2BF', fontSize: 13, marginTop: 3 },
   avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#183455' },
   inlineActions: { flexDirection: 'row', gap: 7 },
+  categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  categoryChip: { borderWidth: 1, borderColor: '#4A6387', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 8 },
+  categoryChipActive: { backgroundColor: '#138DCE', borderColor: '#138DCE' },
+  categoryText: { color: '#BFD0EA', fontSize: 12, fontWeight: '700' },
+  categoryTextActive: { color: '#FFFFFF' },
+  discussionItem: { borderTopColor: '#21314D', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, gap: 10 },
+  discussionHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chatBox: { gap: 9, paddingTop: 4 },
+  chatMessage: { backgroundColor: '#091126', borderRadius: 10, padding: 10, gap: 3 },
   preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   smallButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: '#4A6387', alignItems: 'center', justifyContent: 'center' },
   smallAccent: { backgroundColor: '#138DCE', borderColor: '#138DCE' },
