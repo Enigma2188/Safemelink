@@ -26,6 +26,7 @@ import {
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { SOSLaunchRuntime } from '@/services/SOSLaunchRuntime';
 import { SafetyExpirationService } from '@/services/SafetyExpirationService';
 import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
 import { getSafetyErrorMessage, reportSafetyError, withSafetyTimeout } from '@/services/SafetyOperation';
@@ -533,6 +534,11 @@ export default function HomeScreen() {
       });
     }
   }, [clearPersistedCheckpoint, clearPersistedGoHome]);
+
+  useEffect(() => SOSLaunchRuntime.subscribe((requestedUserId) => {
+    if (requestedUserId !== activeUserIdRef.current) return;
+    if (statusRef.current === 'idle') startSOSCountdown('manual');
+  }), [startSOSCountdown]);
 
   useEffect(
     () =>
@@ -2454,7 +2460,7 @@ export default function HomeScreen() {
             <Animated.View style={[styles.sosGlow, sosGlowAnimatedStyle]} />
             <View style={styles.sosOuterRing} />
             <View style={styles.sosInnerRing} />
-            <Pressable accessibilityRole="button" accessibilityLabel="Avvia countdown SOS" style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={() => startSOSCountdown()}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Avvia countdown SOS" style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]} onPress={() => { const userId = activeUserIdRef.current; if (userId) SOSLaunchRuntime.request(userId); }}>
               <Ionicons accessible={false} color="#FFFFFF" name="alert-circle-outline" size={32} />
               <Text style={styles.sosButtonText}>SOS</Text>
             </Pressable>

@@ -298,6 +298,14 @@ export function NeighborhoodNetworkScreen() {
     );
   };
 
+  const openMenu = () => Alert.alert('Rete di quartiere', undefined, [
+    { text: 'Chat', onPress: () => setActiveTab('chat') },
+    { text: 'Membri', onPress: () => setActiveTab('members') },
+    { text: 'Inviti', onPress: () => setActiveTab('invites') },
+    { text: 'Aggiorna', onPress: () => void load() },
+    { text: 'Annulla', style: 'cancel' },
+  ]);
+
   const received = data.invitations.filter((item) => item.direction === 'received');
   const sent = data.invitations.filter((item) => item.direction === 'sent');
   const isAdmin = data.network?.my_role === 'admin';
@@ -311,17 +319,17 @@ export function NeighborhoodNetworkScreen() {
           hitSlop={12}
           onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)'))}
           style={styles.iconButton}>
-          <Ionicons color="#F7FAFF" name="arrow-back" size={24} />
+          <Ionicons color="#3656A3" name="arrow-back" size={24} />
         </Pressable>
         <Text style={styles.headerTitle}>Rete di quartiere</Text>
         <Pressable
-          accessibilityLabel="Aggiorna la rete"
+          accessibilityLabel="Apri menu Rete di quartiere"
           accessibilityRole="button"
           disabled={busy || loading}
           hitSlop={12}
-          onPress={() => void load()}
+          onPress={openMenu}
           style={styles.iconButton}>
-          <Ionicons color="#7BCBFF" name="refresh" size={22} />
+          <Ionicons color="#3656A3" name="ellipsis-vertical" size={24} />
         </Pressable>
       </View>
 
@@ -461,18 +469,7 @@ export function NeighborhoodNetworkScreen() {
                 </Text>
               </View>
 
-              <View accessibilityRole="tablist" style={styles.tabBar}>
-                {([
-                  ['chat', 'Chat', 'chatbubbles-outline'],
-                  ['members', 'Membri', 'people-outline'],
-                  ['invites', 'Inviti', 'person-add-outline'],
-                ] as const).map(([tab, label, icon]) => (
-                  <Pressable key={tab} accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab }} onPress={() => setActiveTab(tab)} style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}>
-                    <Ionicons color={activeTab === tab ? '#FFFFFF' : '#A8B5D1'} name={icon} size={19} />
-                    <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>{label}</Text>
-                  </Pressable>
-                ))}
-              </View>
+              {activeTab !== 'chat' ? <Pressable accessibilityRole="button" onPress={() => setActiveTab('chat')} style={styles.backToChat}><Ionicons color="#3656A3" name="arrow-back" size={18} /><Text style={styles.backToChatText}>Torna alle discussioni</Text></Pressable> : null}
 
               {activeTab === 'members' ? <Section title="Membri">
                 {data.members.map((member) => (
@@ -589,7 +586,7 @@ export function NeighborhoodNetworkScreen() {
                         <View style={styles.chatBox}>
                           {discussionMessages.map((item) => {
                             const ownMessage = item.author_nickname === data.members.find((member) => member.is_me)?.nickname;
-                            return <View key={item.message_id} style={[styles.chatMessage, ownMessage ? styles.chatMessageOwn : styles.chatMessageOther]}><Text style={styles.itemMeta}>{item.author_nickname}</Text><Text style={styles.body}>{item.body}</Text><Text style={styles.chatTime}>{new Date(item.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</Text></View>;
+                            return <View key={item.message_id} style={[styles.chatMessage, ownMessage ? styles.chatMessageOwn : styles.chatMessageOther]}><Text style={styles.chatAuthor}>{item.author_nickname}</Text><Text style={ownMessage ? styles.chatBodyOwn : styles.chatBodyOther}>{item.body}</Text><Text style={styles.chatTime}>{new Date(item.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</Text></View>;
                           })}
                           {discussion.status === 'open' ? (
                             <>
@@ -636,57 +633,57 @@ function SmallButton({ accent, disabled, label, onPress }: { accent?: boolean; d
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#070C1C' },
+  screen: { flex: 1, backgroundColor: '#F7F9FC' },
   flex: { flex: 1 },
-  header: { minHeight: 56, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { color: '#F7FAFF', fontSize: 20, fontWeight: '700' },
+  header: { minHeight: 58, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderBottomColor: '#E3E8F0', borderBottomWidth: StyleSheet.hairlineWidth },
+  headerTitle: { color: '#18243D', fontSize: 20, fontWeight: '700' },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   content: { padding: 18, paddingBottom: 48, gap: 16 },
-  hero: { alignItems: 'center', gap: 10, paddingVertical: 14 },
-  title: { color: '#F7FAFF', fontSize: 24, fontWeight: '800', textAlign: 'center' },
-  subtitle: { color: '#A8B5D1', fontSize: 15, lineHeight: 22, textAlign: 'center' },
-  card: { backgroundColor: '#101A31', borderColor: '#213557', borderWidth: 1, borderRadius: 18, padding: 16, gap: 12 },
-  cardTitle: { color: '#F7FAFF', fontSize: 18, fontWeight: '700' },
-  body: { color: '#B9C5DA', fontSize: 14, lineHeight: 21 },
-  input: { minHeight: 50, borderRadius: 12, borderWidth: 1, borderColor: '#34537E', color: '#F7FAFF', paddingHorizontal: 14, backgroundColor: '#091126' },
-  primaryButton: { minHeight: 50, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#138DCE', paddingHorizontal: 16 },
+  hero: { alignItems: 'center', gap: 6, paddingVertical: 10 },
+  title: { color: '#18243D', fontSize: 23, fontWeight: '800', textAlign: 'center' },
+  subtitle: { color: '#5D6A82', fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  card: { backgroundColor: '#FFFFFF', borderColor: '#E1E6EF', borderWidth: 1, borderRadius: 14, padding: 14, gap: 10 },
+  cardTitle: { color: '#18243D', fontSize: 18, fontWeight: '700' },
+  body: { color: '#526078', fontSize: 14, lineHeight: 21 },
+  input: { minHeight: 50, borderRadius: 12, borderWidth: 1, borderColor: '#CBD5E4', color: '#18243D', paddingHorizontal: 14, backgroundColor: '#FFFFFF' },
+  primaryButton: { minHeight: 48, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#3656A3', paddingHorizontal: 16 },
   primaryText: { color: '#FFFFFF', fontWeight: '800', letterSpacing: 0.4 },
   disabled: { opacity: 0.45 },
-  messageCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#122740', borderRadius: 12, padding: 13 },
-  messageText: { color: '#DDEBFF', flex: 1, lineHeight: 20 },
-  networkCard: { borderRadius: 18, padding: 18, backgroundColor: '#102744', borderColor: '#2C74A7', borderWidth: 1 },
-  networkName: { color: '#F7FAFF', fontSize: 23, fontWeight: '800', marginBottom: 5 },
-  tabBar: { flexDirection: 'row', backgroundColor: '#0D1930', borderRadius: 16, borderWidth: 1, borderColor: '#213557', padding: 4, gap: 4 },
-  tabButton: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
-  tabButtonActive: { backgroundColor: '#138DCE' },
-  tabText: { color: '#A8B5D1', fontSize: 13, fontWeight: '700' },
-  tabTextActive: { color: '#FFFFFF' },
-  listItem: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopColor: '#21314D', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10 },
+  messageCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#EEF3FF', borderRadius: 12, padding: 13 },
+  messageText: { color: '#263A68', flex: 1, lineHeight: 20 },
+  networkCard: { borderRadius: 14, padding: 14, backgroundColor: '#EEF3FF', borderColor: '#CFDAF4', borderWidth: 1 },
+  networkName: { color: '#1B2F68', fontSize: 20, fontWeight: '800', marginBottom: 5 },
+  listItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopColor: '#E3E8F0', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10 },
   listText: { flex: 1 },
-  itemTitle: { color: '#EDF4FF', fontSize: 15, fontWeight: '700' },
-  itemMeta: { color: '#91A2BF', fontSize: 13, marginTop: 3 },
-  avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#183455' },
+  itemTitle: { color: '#202D46', fontSize: 15, fontWeight: '700' },
+  itemMeta: { color: '#71809A', fontSize: 13, marginTop: 3 },
+  avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E7EEFF' },
   inlineActions: { flexDirection: 'row', gap: 7 },
   categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  categoryChip: { borderWidth: 1, borderColor: '#4A6387', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 8 },
-  categoryChipActive: { backgroundColor: '#138DCE', borderColor: '#138DCE' },
-  categoryText: { color: '#BFD0EA', fontSize: 12, fontWeight: '700' },
-  categoryTextActive: { color: '#FFFFFF' },
-  discussionItem: { borderTopColor: '#21314D', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, gap: 10 },
+  categoryChip: { borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 8 },
+  categoryChipActive: { backgroundColor: '#E8EEFF', borderColor: '#6B83C5' },
+  categoryText: { color: '#65738B', fontSize: 12, fontWeight: '700' },
+  categoryTextActive: { color: '#27458F' },
+  discussionItem: { borderTopColor: '#E3E8F0', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, gap: 8 },
   discussionHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   chatBox: { gap: 9, paddingTop: 4 },
   chatMessage: { maxWidth: '86%', borderRadius: 14, padding: 10, gap: 3 },
-  chatMessageOther: { alignSelf: 'flex-start', backgroundColor: '#182943', borderBottomLeftRadius: 4 },
-  chatMessageOwn: { alignSelf: 'flex-end', backgroundColor: '#0B83C7', borderBottomRightRadius: 4 },
-  chatTime: { color: '#B8D2E8', fontSize: 10, textAlign: 'right' },
+  chatMessageOther: { alignSelf: 'flex-start', backgroundColor: '#FFFFFF', borderColor: '#E0E6EF', borderWidth: 1, borderBottomLeftRadius: 4 },
+  chatMessageOwn: { alignSelf: 'flex-end', backgroundColor: '#DCE8FF', borderColor: '#C5D6FA', borderWidth: 1, borderBottomRightRadius: 4 },
+  chatAuthor: { color: '#3656A3', fontSize: 12, fontWeight: '700' },
+  chatBodyOther: { color: '#25324A', fontSize: 15, lineHeight: 21 },
+  chatBodyOwn: { color: '#182C62', fontSize: 15, lineHeight: 21 },
+  chatTime: { color: '#7A879B', fontSize: 10, textAlign: 'right' },
   preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  smallButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: '#4A6387', alignItems: 'center', justifyContent: 'center' },
-  smallAccent: { backgroundColor: '#138DCE', borderColor: '#138DCE' },
-  smallText: { color: '#BFD0EA', fontSize: 11, fontWeight: '800' },
+  smallButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: '#CBD5E4', alignItems: 'center', justifyContent: 'center' },
+  smallAccent: { backgroundColor: '#3656A3', borderColor: '#3656A3' },
+  smallText: { color: '#526078', fontSize: 11, fontWeight: '800' },
   smallAccentText: { color: '#FFFFFF' },
-  hint: { color: '#FFCE73', fontSize: 13, lineHeight: 18 },
-  tokenCard: { borderRadius: 12, backgroundColor: '#091126', padding: 13, gap: 5 },
-  tokenText: { color: '#7DE6C2', fontSize: 14, fontWeight: '800', letterSpacing: 0.4 },
+  hint: { color: '#9A6B11', fontSize: 13, lineHeight: 18 },
+  tokenCard: { borderRadius: 12, backgroundColor: '#F0F5FF', padding: 13, gap: 5 },
+  tokenText: { color: '#3656A3', fontSize: 14, fontWeight: '800', letterSpacing: 0.4 },
+  backToChat: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  backToChatText: { color: '#3656A3', fontWeight: '700' },
   leaveButton: { minHeight: 48, borderWidth: 1, borderColor: '#A94255', borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   leaveText: { color: '#FF8397', fontWeight: '800' },
 });
