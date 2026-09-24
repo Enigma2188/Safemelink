@@ -88,6 +88,7 @@ function RootNavigator() {
                 options={{ headerShown: false }}
               />
               <Stack.Screen name="network" options={{ headerShown: false }} />
+              <Stack.Screen name="protection-signal" options={{ headerShown: false }} />
               <Stack.Screen
                 name="how-safemelink-works"
                 options={{ headerShown: false }}

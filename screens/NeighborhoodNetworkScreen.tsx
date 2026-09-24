@@ -60,6 +60,7 @@ export function NeighborhoodNetworkScreen() {
   const [selectedDiscussionId, setSelectedDiscussionId] = useState<string | null>(null);
   const [discussionMessages, setDiscussionMessages] = useState<NeighborhoodMessage[]>([]);
   const [messageDraft, setMessageDraft] = useState('');
+  const [activeTab, setActiveTab] = useState<'chat' | 'members' | 'invites'>('chat');
 
   const load = useCallback(async (showSpinner = true) => {
     const requestedUserId = userId;
@@ -112,6 +113,7 @@ export function NeighborhoodNetworkScreen() {
     setSelectedDiscussionId(null);
     setDiscussionMessages([]);
     setMessageDraft('');
+    setActiveTab('chat');
     presenceRefreshRef.current = null;
     return () => {
       mountedRef.current = false;
@@ -357,7 +359,7 @@ export function NeighborhoodNetworkScreen() {
             </View>
           ) : null}
 
-          {userId && !loading ? (
+          {userId && !loading && (!data.network || activeTab === 'invites') ? (
             <Section title="Inviti da reti vicine">
               <Text style={styles.body}>
                 Se scegli di renderti disponibile, potrai ricevere inviti da Reti di quartiere vicine. La posizione è approssimata, privata e aggiornata solo quando apri questa schermata.
@@ -375,7 +377,7 @@ export function NeighborhoodNetworkScreen() {
             </Section>
           ) : null}
 
-          {userId && received.length > 0 ? (
+          {userId && received.length > 0 && (!data.network || activeTab === 'invites') ? (
             <Section title="Inviti ricevuti">
               {received.map((invitation) => (
                 <View key={invitation.invitation_id} style={styles.listItem}>
@@ -459,7 +461,20 @@ export function NeighborhoodNetworkScreen() {
                 </Text>
               </View>
 
-              <Section title="Membri">
+              <View accessibilityRole="tablist" style={styles.tabBar}>
+                {([
+                  ['chat', 'Chat', 'chatbubbles-outline'],
+                  ['members', 'Membri', 'people-outline'],
+                  ['invites', 'Inviti', 'person-add-outline'],
+                ] as const).map(([tab, label, icon]) => (
+                  <Pressable key={tab} accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab }} onPress={() => setActiveTab(tab)} style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}>
+                    <Ionicons color={activeTab === tab ? '#FFFFFF' : '#A8B5D1'} name={icon} size={19} />
+                    <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>{label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {activeTab === 'members' ? <Section title="Membri">
                 {data.members.map((member) => (
                   <View key={member.membership_id} style={styles.listItem}>
                     <View style={styles.avatar}><Ionicons color="#7BCBFF" name="person" size={18} /></View>
@@ -492,9 +507,9 @@ export function NeighborhoodNetworkScreen() {
                     ) : null}
                   </View>
                 ))}
-              </Section>
+              </Section> : null}
 
-              {isAdmin ? (
+              {isAdmin && activeTab === 'invites' ? (
                 <Section title="Invita utenti Safe vicini">
                   <Text style={styles.body}>Cerca una volta le persone che hanno scelto di ricevere inviti entro circa 500 metri. Non vedrai nomi, posizioni o il numero di persone trovate.</Text>
                   <PrimaryButton disabled={busy} label={busy ? 'RICERCA IN CORSO…' : 'INVITA UTENTI SAFE VICINI'} onPress={inviteNearby} />
@@ -502,7 +517,7 @@ export function NeighborhoodNetworkScreen() {
                 </Section>
               ) : null}
 
-              {isAdmin ? (
+              {isAdmin && activeTab === 'invites' ? (
                 <Section title="Invita con codice">
                   <Text style={styles.body}>Inserisci il codice temporaneo NQ-… che la persona ha scelto di condividere. Non usare il codice pubblico del profilo.</Text>
                   <TextInput
@@ -537,7 +552,7 @@ export function NeighborhoodNetworkScreen() {
                 </Section>
               ) : null}
 
-              <Section title="Discussioni della rete">
+              {activeTab === 'chat' ? <Section title="Discussioni">
                 <Text style={styles.body}>Parla per argomenti con i membri della tua rete. Sono visibili solo nickname e messaggi, mai email, telefoni o coordinate.</Text>
                 <TextInput
                   accessibilityLabel="Titolo nuova discussione"
@@ -572,7 +587,10 @@ export function NeighborhoodNetworkScreen() {
                       </Pressable>
                       {selected ? (
                         <View style={styles.chatBox}>
-                          {discussionMessages.map((item) => <View key={item.message_id} style={styles.chatMessage}><Text style={styles.itemMeta}>{item.author_nickname}</Text><Text style={styles.body}>{item.body}</Text></View>)}
+                          {discussionMessages.map((item) => {
+                            const ownMessage = item.author_nickname === data.members.find((member) => member.is_me)?.nickname;
+                            return <View key={item.message_id} style={[styles.chatMessage, ownMessage ? styles.chatMessageOwn : styles.chatMessageOther]}><Text style={styles.itemMeta}>{item.author_nickname}</Text><Text style={styles.body}>{item.body}</Text><Text style={styles.chatTime}>{new Date(item.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</Text></View>;
+                          })}
                           {discussion.status === 'open' ? (
                             <>
                               <TextInput accessibilityLabel="Nuovo messaggio" editable={!busy} maxLength={2000} multiline onChangeText={setMessageDraft} placeholder="Scrivi un messaggio" placeholderTextColor="#71809D" style={styles.input} value={messageDraft} />
@@ -585,7 +603,7 @@ export function NeighborhoodNetworkScreen() {
                     </View>
                   );
                 })}
-              </Section>
+              </Section> : null}
 
               <Pressable
                 accessibilityRole="button"
@@ -638,6 +656,11 @@ const styles = StyleSheet.create({
   messageText: { color: '#DDEBFF', flex: 1, lineHeight: 20 },
   networkCard: { borderRadius: 18, padding: 18, backgroundColor: '#102744', borderColor: '#2C74A7', borderWidth: 1 },
   networkName: { color: '#F7FAFF', fontSize: 23, fontWeight: '800', marginBottom: 5 },
+  tabBar: { flexDirection: 'row', backgroundColor: '#0D1930', borderRadius: 16, borderWidth: 1, borderColor: '#213557', padding: 4, gap: 4 },
+  tabButton: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
+  tabButtonActive: { backgroundColor: '#138DCE' },
+  tabText: { color: '#A8B5D1', fontSize: 13, fontWeight: '700' },
+  tabTextActive: { color: '#FFFFFF' },
   listItem: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopColor: '#21314D', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10 },
   listText: { flex: 1 },
   itemTitle: { color: '#EDF4FF', fontSize: 15, fontWeight: '700' },
@@ -652,7 +675,10 @@ const styles = StyleSheet.create({
   discussionItem: { borderTopColor: '#21314D', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, gap: 10 },
   discussionHeader: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 },
   chatBox: { gap: 9, paddingTop: 4 },
-  chatMessage: { backgroundColor: '#091126', borderRadius: 10, padding: 10, gap: 3 },
+  chatMessage: { maxWidth: '86%', borderRadius: 14, padding: 10, gap: 3 },
+  chatMessageOther: { alignSelf: 'flex-start', backgroundColor: '#182943', borderBottomLeftRadius: 4 },
+  chatMessageOwn: { alignSelf: 'flex-end', backgroundColor: '#0B83C7', borderBottomRightRadius: 4 },
+  chatTime: { color: '#B8D2E8', fontSize: 10, textAlign: 'right' },
   preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   smallButton: { minHeight: 40, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: '#4A6387', alignItems: 'center', justifyContent: 'center' },
   smallAccent: { backgroundColor: '#138DCE', borderColor: '#138DCE' },

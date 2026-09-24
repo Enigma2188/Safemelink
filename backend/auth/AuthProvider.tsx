@@ -11,6 +11,8 @@ import { RadarService } from '@/services/RadarService';
 import { SOSNetworkPresenceRepository } from '@/backend/repositories/SOSNetworkPresenceRepository';
 import { SOSNetworkPresenceService } from '@/services/SOSNetworkPresenceService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { SOSLiveLocationStorage } from '@/storage/SOSLiveLocationStorage';
+import { SOSLifecycleRepository } from '@/backend/repositories/SOSLifecycleRepository';
 import { SafetyExpirationService } from '@/services/SafetyExpirationService';
 
 type AuthContextValue = {
@@ -84,6 +86,23 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let recoveryAttempt = 0;
     let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const restoreLiveSOS = async (userId: string) => {
+      const stored = await SOSLiveLocationStorage.get(userId).catch(() => null);
+      if (!stored) return;
+      try {
+        const status = await SOSLifecycleRepository.getStatus(stored.sosId);
+        if (status.sos_status === 'open' || status.sos_status === 'accepted') {
+          await SOSLiveLocationService.restore(userId, stored.sosId);
+          return;
+        }
+      } catch {
+        // Preserve the snapshot on transient network/auth failure so the next
+        // foreground recovery can re-check the server instead of losing tracking.
+        return;
+      }
+      await SOSLiveLocationService.stop(userId).catch(() => undefined);
+    };
+
     const clearRecoveryTimer = () => {
       if (recoveryTimer) {
         clearTimeout(recoveryTimer);
@@ -125,6 +144,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setSession(nextSession);
         setIsOffline(false);
         setError(null);
+        void restoreLiveSOS(nextSession.user.id);
       } catch (initializationError: unknown) {
         if (!isMounted || generation !== sessionGeneration) {
           return;

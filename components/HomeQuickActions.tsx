@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 type Props = {
   onPanel: (panel: 'checkpoint' | 'goHome') => void;
-  onNavigate: (route: '/voice-protection' | '/radar' | '/network' | '/neighborhood-network' | '/how-safemelink-works') => void;
+  onNavigate: (route: '/voice-protection' | '/radar' | '/network' | '/neighborhood-network' | '/how-safemelink-works' | '/protection-signal') => void;
 };
 
 export function HomeQuickActions({ onPanel, onNavigate }: Props) {
@@ -14,6 +14,7 @@ export function HomeQuickActions({ onPanel, onNavigate }: Props) {
     { label: 'Rete SafeMeLink', hint: 'Disponibilità ad aiutare negli SOS', icon: 'people-circle-outline', open: () => onNavigate('/radar') },
     { label: 'NETWORK', hint: 'Segnalazioni nella tua zona', icon: 'shield-checkmark-outline', open: () => onNavigate('/network') },
     { label: 'Rete di quartiere', hint: 'Il gruppo privato di persone invitate', icon: 'people-outline', open: () => onNavigate('/neighborhood-network') },
+    { label: 'Segnale Tutela', hint: 'Segnala una situazione che ti preoccupa', icon: 'shield-outline', open: () => onNavigate('/protection-signal') },
   ];
 
   return (
@@ -25,7 +26,6 @@ export function HomeQuickActions({ onPanel, onNavigate }: Props) {
             onPress={action.open} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
             <Ionicons accessible={false} color="#91D8FF" name={action.icon} size={28} />
             <Text style={styles.label}>{action.label}</Text>
-            <Text style={styles.hint}>{action.hint}</Text>
           </Pressable>
         ))}
       </View>
@@ -34,7 +34,6 @@ export function HomeQuickActions({ onPanel, onNavigate }: Props) {
         <Ionicons accessible={false} color="#91D8FF" name="help-circle-outline" size={30} />
         <View style={styles.guideCopy}>
           <Text style={styles.label}>Come funziona SafeMeLink</Text>
-          <Text style={styles.hint}>La guida è sempre qui, quando ti serve.</Text>
         </View>
       </Pressable>
     </View>
@@ -42,13 +41,12 @@ export function HomeQuickActions({ onPanel, onNavigate }: Props) {
 }
 
 const styles = StyleSheet.create({
-  section: { gap: 12, marginVertical: 18 },
-  heading: { color: '#F7FAFF', fontSize: 21, fontWeight: '700' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  card: { flexBasis: '46%', flexGrow: 1, minWidth: 140, minHeight: 130, padding: 16, gap: 8, backgroundColor: '#10213D', borderColor: '#365476', borderWidth: 1, borderRadius: 16 },
-  label: { color: '#F7FAFF', fontSize: 17, fontWeight: '700', flexShrink: 1 },
-  hint: { color: '#C2CDE0', fontSize: 14, lineHeight: 20 },
-  guide: { minHeight: 76, flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12, backgroundColor: '#10213D', borderColor: '#365476', borderWidth: 1, borderRadius: 16 },
-  guideCopy: { flex: 1, gap: 5 },
+  section: { gap: 9, marginVertical: 8 },
+  heading: { color: '#F7FAFF', fontSize: 19, fontWeight: '700' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  card: { flexBasis: '30%', flexGrow: 1, minWidth: 96, minHeight: 82, paddingHorizontal: 8, paddingVertical: 10, gap: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: '#10213D', borderColor: '#365476', borderWidth: 1, borderRadius: 14 },
+  label: { color: '#F7FAFF', fontSize: 13, lineHeight: 17, fontWeight: '700', textAlign: 'center', flexShrink: 1 },
+  guide: { minHeight: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 10, backgroundColor: '#10213D', borderColor: '#365476', borderWidth: 1, borderRadius: 14 },
+  guideCopy: { flex: 1 },
   pressed: { backgroundColor: '#203958' },
 });

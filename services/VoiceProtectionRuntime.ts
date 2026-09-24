@@ -12,6 +12,7 @@ let recognitionFailure: { userId: string; category: 'permission' | 'readiness' |
 type SOSExecutionListener = (userId: string) => void;
 type SOSCompletionListener = (userId: string, result: SOSCompletionResult) => void;
 type SOSFailureListener = (userId: string, error: unknown) => void;
+type SOSClosedListener = (userId: string) => void;
 
 export const VOICE_SOS_COUNTDOWN_MS = 10_000;
 
@@ -21,6 +22,7 @@ const recognitionStartedListeners = new Set<RecognitionStartedListener>();
 const sosExecutionStartedListeners = new Set<SOSExecutionListener>();
 const sosCompletionListeners = new Set<SOSCompletionListener>();
 const sosFailureListeners = new Set<SOSFailureListener>();
+const sosClosedListeners = new Set<SOSClosedListener>();
 const backgroundWakeListeners = new Set<() => void>();
 let sosRequestLockedUntil = 0;
 let pendingSOSUserId: string | null = null;
@@ -233,6 +235,10 @@ export const VoiceProtectionRuntime = {
     sosFailureListeners.forEach((listener) => listener(userId, error));
   },
 
+  notifySOSClosed(userId: string) {
+    sosClosedListeners.forEach((listener) => listener(userId));
+  },
+
   onSOSExecutionStarted(listener: SOSExecutionListener) {
     sosExecutionStartedListeners.add(listener);
     return () => sosExecutionStartedListeners.delete(listener);
@@ -246,5 +252,10 @@ export const VoiceProtectionRuntime = {
   onSOSFailed(listener: SOSFailureListener) {
     sosFailureListeners.add(listener);
     return () => sosFailureListeners.delete(listener);
+  },
+
+  onSOSClosed(listener: SOSClosedListener) {
+    sosClosedListeners.add(listener);
+    return () => sosClosedListeners.delete(listener);
   },
 };

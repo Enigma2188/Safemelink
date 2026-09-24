@@ -24,7 +24,7 @@ const checks = [
   ['repository RPC contract', repository.includes("list_my_neighborhood_discussions") && repository.includes("create_neighborhood_message")],
   ['service validation', service.includes('Il titolo deve contenere da 3 a 100 caratteri') && service.includes('2000')],
   ['message rate limit', /Troppi messaggi/.test(sql) && /interval '1 minute'/.test(sql)],
-  ['screen discussion UI', screen.includes('Discussioni della rete') && screen.includes('INVIA MESSAGGIO') && screen.includes('updated_at')],
+  ['screen discussion UI', screen.includes('title="Discussioni"') && screen.includes('INVIA MESSAGGIO') && screen.includes('updated_at')],
   ['no geographic discovery UI', !screen.includes('find_nearby_users')],
 ];
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);

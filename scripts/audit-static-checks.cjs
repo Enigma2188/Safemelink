@@ -926,7 +926,9 @@ check('Active SOS live location is owner-scoped, bounded and hidden after termin
   assert.match(sosDeliveryLiveMigration, /target\.status in \('open', 'accepted'\)/);
   assert.match(sosDeliveryLiveMigration, /and \(access\.trusted or access\.nearby\)/);
   assert.match(sosDeliveryLiveMigration, /target\.status in \('open', 'accepted'\)/);
-  assert.match(sosLiveLocationService, /SOS_LIVE_MIN_INTERVAL_MS = 60_000/);
+  assert.match(sosLiveLocationService, /SOS_LIVE_MOVING_INTERVAL_MS = 20_000/);
+  assert.match(sosLiveLocationService, /SOS_LIVE_STILL_INTERVAL_MS = 90_000/);
+  assert.match(sosLiveLocationService, /SOS_LIVE_MOVING_SPEED_MPS = 1/);
   assert.match(sosLiveLocationService, /SOS_LIVE_MIN_DISTANCE_METERS = 25/);
   assert.match(sosLiveLocationService, /Location\.watchPositionAsync/);
   assert.match(sosLiveLocationService, /Location\.startLocationUpdatesAsync/);

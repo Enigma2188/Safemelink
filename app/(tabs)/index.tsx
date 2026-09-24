@@ -2114,6 +2114,7 @@ export default function HomeScreen() {
       setPushDeliveryNotice(null);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
+      VoiceProtectionRuntime.notifySOSClosed(actionUserId);
       console.info('[SafeMeLink SOS] Chiusura completata.', {
         durationMs: Date.now() - startedAt,
         terminalStatus,
@@ -2339,6 +2340,8 @@ export default function HomeScreen() {
             <Image source={logoImage} style={styles.logo} resizeMode="contain" />
           </View>
 
+          {status === 'idle' ? <HomeQuickActions onPanel={openPanel} onNavigate={(route) => router.push(route as Href)} /> : null}
+
           <View style={styles.contactsSummary}>
             <View>
               <Text style={styles.summaryLabel}>Contatti fidati</Text>
@@ -2475,10 +2478,6 @@ export default function HomeScreen() {
             <Text style={styles.statusModeText}>{activeSafetyMode}</Text>
           </View>
         </View>
-      )}
-
-      {activePanel === 'home' && status === 'idle' && (
-        <HomeQuickActions onPanel={openPanel} onNavigate={(route) => router.push(route as Href)} />
       )}
 
       {activePanel === 'checkpoint' && (
