@@ -251,11 +251,14 @@ export function NetworkScreen() {
         <Pressable accessibilityLabel="Torna indietro" hitSlop={12} onPress={() => (
           router.canGoBack() ? router.back() : router.replace('/(tabs)')
         )} style={styles.iconButton}>
-          <Ionicons color="#F7FAFF" name="arrow-back" size={24} />
+          <Ionicons color="#3656A3" name="arrow-back" size={24} />
         </Pressable>
-        <Text style={styles.headerTitle}>NETWORK</Text>
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerTitle}>NETWORK</Text>
+          <Text style={styles.headerSubtitle}>Segnalazioni di sicurezza vicino a te</Text>
+        </View>
         <Pressable accessibilityLabel="Aggiorna NETWORK" disabled={busy || loading} hitSlop={12} onPress={() => void load()} style={styles.iconButton}>
-          <Ionicons color="#72C8FF" name="refresh" size={22} />
+          <Ionicons color="#3656A3" name="refresh" size={22} />
         </Pressable>
       </View>
 
@@ -268,14 +271,14 @@ export function NetworkScreen() {
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} tintColor="#45B7FF" />}>
           <View style={styles.hero}>
             <Ionicons color="#45B7FF" name="shield-checkmark-outline" size={42} />
-            <Text style={styles.title}>Sicurezza condivisa, con privacy</Text>
-            <Text style={styles.body}>Segnalazioni di sicurezza vicine. La posizione mostrata è sempre approssimativa.</Text>
+            <Text style={styles.title}>Bacheca di sicurezza territoriale</Text>
+            <Text style={styles.body}>Condividi e consulta segnalazioni utili. La posizione mostrata è sempre approssimativa.</Text>
           </View>
 
           {message ? (
             <View accessibilityLiveRegion="polite" style={styles.message}>
               <Text style={styles.messageText}>{message}</Text>
-              <Pressable accessibilityLabel="Chiudi messaggio" onPress={() => setMessage(null)}><Ionicons color="#D2DDEE" name="close" size={20} /></Pressable>
+              <Pressable accessibilityLabel="Chiudi messaggio" onPress={() => setMessage(null)}><Ionicons color="#52627A" name="close" size={20} /></Pressable>
             </View>
           ) : null}
 
@@ -320,7 +323,7 @@ export function NetworkScreen() {
                 <Text style={styles.sectionTitle}>Segnalazioni vicine</Text>
                 <PrimaryButton
                   disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'PUBLISH_BLOCKED'}
-                  label={composerOpen ? 'CHIUDI' : 'SEGNALA'}
+                  label={composerOpen ? 'CHIUDI' : 'NUOVA SEGNALAZIONE'}
                   onPress={() => {
                     setPublishMessage(null);
                     setComposerOpen((value) => !value);
@@ -347,7 +350,7 @@ export function NetworkScreen() {
                 <View accessibilityLiveRegion="polite" style={styles.message}>
                   <Text style={styles.messageText}>{publishMessage}</Text>
                   <Pressable accessibilityLabel="Chiudi messaggio pubblicazione" onPress={() => setPublishMessage(null)}>
-                    <Ionicons color="#D2DDEE" name="close" size={20} />
+                    <Ionicons color="#52627A" name="close" size={20} />
                   </Pressable>
                 </View>
               ) : null}
@@ -379,14 +382,21 @@ export function NetworkScreen() {
               ) : null}
 
               {!loading && reports.length === 0 ? (
-                <View style={styles.card}><Text style={styles.cardTitle}>Nessuna segnalazione vicina</Text><Text style={styles.body}>La zona non presenta segnalazioni attive in questo momento.</Text></View>
+                <View style={styles.emptyCard}>
+                  <Ionicons color="#3656A3" name="shield-checkmark-outline" size={30} />
+                  <Text style={styles.cardTitle}>Nessuna segnalazione attiva in questa zona</Text>
+                  <Text style={styles.body}>NETWORK mostra le segnalazioni condivise dalla community vicino a te.</Text>
+                </View>
               ) : null}
 
               {reports.map((report) => (
                 <View key={report.id} style={styles.card}>
                   <View style={styles.reportHeader}>
-                    <Text style={styles.category}>{getNetworkCategoryLabel(report.category)}</Text>
-                    <Text style={styles.status}>{report.status === 'ACTIVE' ? 'ATTIVA' : 'CONCLUSA'}</Text>
+                    <View style={styles.categoryCopy}>
+                      <Ionicons color="#3656A3" name="shield-outline" size={18} />
+                      <Text style={styles.category}>{getNetworkCategoryLabel(report.category)}</Text>
+                    </View>
+                    <Text style={[styles.status, report.status !== 'ACTIVE' && styles.statusResolved]}>{report.status === 'ACTIVE' ? 'ATTIVA' : 'CONCLUSA'}</Text>
                   </View>
                   <Text style={styles.description}>{report.description}</Text>
                   <Text style={styles.meta}>Zona approssimativa</Text>
@@ -427,18 +437,18 @@ function SecondaryButton({ disabled, label, onPress, selected }: { disabled: boo
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#071020' }, flex: { flex: 1 },
-  header: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#21314B' },
-  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, headerTitle: { color: '#F7FAFF', fontSize: 19, fontWeight: '800', letterSpacing: 1.2 },
-  content: { padding: 18, paddingBottom: 96, gap: 14 }, hero: { alignItems: 'center', gap: 8, paddingVertical: 12 }, title: { color: '#F7FAFF', fontSize: 23, fontWeight: '800', textAlign: 'center' },
-  body: { color: '#AEBBD0', fontSize: 15, lineHeight: 21 }, card: { backgroundColor: '#0D1A2F', borderWidth: 1, borderColor: '#1B3354', borderRadius: 18, padding: 16, gap: 11 },
-  cardTitle: { color: '#F7FAFF', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 13, backgroundColor: '#142846' }, messageText: { flex: 1, color: '#E8F2FF', lineHeight: 20 },
-  requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#D8E2F2', fontSize: 15 }, hint: { color: '#8F9DB2', fontSize: 13, lineHeight: 18 },
-  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, sectionTitle: { color: '#F7FAFF', fontSize: 19, fontWeight: '700' },
-  primaryButton: { minHeight: 48, borderRadius: 13, backgroundColor: '#078DEB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 }, compactButton: { minHeight: 42 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' }, disabled: { opacity: 0.45 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { borderWidth: 1, borderColor: '#344967', borderRadius: 16, paddingHorizontal: 11, paddingVertical: 8 }, chipSelected: { backgroundColor: '#113F69', borderColor: '#45B7FF' }, chipText: { color: '#B6C3D6', fontSize: 13 }, chipTextSelected: { color: '#E8F7FF' },
-  input: { minHeight: 112, borderWidth: 1, borderColor: '#31445F', borderRadius: 13, padding: 12, color: '#F7FAFF', textAlignVertical: 'top', fontSize: 15 }, counter: { color: '#8492A8', textAlign: 'right', fontSize: 12 },
-  shortInput: { minHeight: 48, borderWidth: 1, borderColor: '#31445F', borderRadius: 13, paddingHorizontal: 12, color: '#F7FAFF', fontSize: 15 },
-  reportHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, category: { flex: 1, color: '#72C8FF', fontWeight: '700', fontSize: 15 }, status: { color: '#39D98A', fontSize: 11, fontWeight: '800' }, description: { color: '#F0F5FC', fontSize: 16, lineHeight: 23 }, meta: { color: '#91A1B8', fontSize: 13 }, reportActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
-  secondaryButton: { minHeight: 42, justifyContent: 'center', borderWidth: 1, borderColor: '#335071', borderRadius: 12, paddingHorizontal: 12 }, secondarySelected: { backgroundColor: '#173B5C', borderColor: '#45B7FF' }, secondaryText: { color: '#D7E7F8', fontSize: 12, fontWeight: '700' },
+  screen: { flex: 1, backgroundColor: '#F7F9FC' }, flex: { flex: 1 },
+  header: { minHeight: 66, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, backgroundColor: '#FFFFFF', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E3E8F0' },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, headerCopy: { flex: 1, paddingHorizontal: 8 }, headerTitle: { color: '#18243D', fontSize: 19, fontWeight: '800', letterSpacing: 1.2 }, headerSubtitle: { color: '#61708A', fontSize: 12, marginTop: 2 },
+  content: { padding: 16, paddingBottom: 96, gap: 14 }, hero: { alignItems: 'center', gap: 8, paddingVertical: 12 }, title: { color: '#18243D', fontSize: 23, fontWeight: '800', textAlign: 'center' },
+  body: { color: '#5E6D84', fontSize: 15, lineHeight: 21 }, card: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E1E6EF', borderRadius: 16, padding: 16, gap: 11 }, emptyCard: { alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCE5F2', borderRadius: 16, padding: 18, gap: 9 },
+  cardTitle: { color: '#18243D', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 13, backgroundColor: '#EEF3FF' }, messageText: { flex: 1, color: '#273A5A', lineHeight: 20 },
+  requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#34445F', fontSize: 15 }, hint: { color: '#6B7890', fontSize: 13, lineHeight: 18 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, sectionTitle: { color: '#18243D', fontSize: 19, fontWeight: '700', flexShrink: 1 },
+  primaryButton: { minHeight: 48, borderRadius: 13, backgroundColor: '#3656A3', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 }, compactButton: { minHeight: 44, flexShrink: 1 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', textAlign: 'center' }, disabled: { opacity: 0.45 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 16, paddingHorizontal: 11, paddingVertical: 8 }, chipSelected: { backgroundColor: '#E8EEFF', borderColor: '#6B83C5' }, chipText: { color: '#52627A', fontSize: 13 }, chipTextSelected: { color: '#263E78', fontWeight: '700' },
+  input: { minHeight: 112, borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 13, padding: 12, color: '#18243D', backgroundColor: '#FFFFFF', textAlignVertical: 'top', fontSize: 15 }, counter: { color: '#71809B', textAlign: 'right', fontSize: 12 },
+  shortInput: { minHeight: 48, borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 13, paddingHorizontal: 12, color: '#18243D', backgroundColor: '#FFFFFF', fontSize: 15 },
+  reportHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, categoryCopy: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 }, category: { flexShrink: 1, color: '#3656A3', fontWeight: '700', fontSize: 15 }, status: { color: '#1B8A5A', fontSize: 11, fontWeight: '800' }, statusResolved: { color: '#71809B' }, description: { color: '#263650', fontSize: 16, lineHeight: 23 }, meta: { color: '#71809B', fontSize: 13 }, reportActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
+  secondaryButton: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#AEBBD0', borderRadius: 12, paddingHorizontal: 12 }, secondarySelected: { backgroundColor: '#E8EEFF', borderColor: '#6B83C5' }, secondaryText: { color: '#344B75', fontSize: 12, fontWeight: '700' },
 });

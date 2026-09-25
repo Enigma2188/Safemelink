@@ -75,12 +75,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/safemelink-eye-earth.png",
+          "imageWidth": 180,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#050816",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#050816"
           }
         }
       ]

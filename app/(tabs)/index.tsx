@@ -50,6 +50,7 @@ import {
   type HomeLocation,
 } from '@/storage/GoHomeStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
+import { InterfaceModeStorage, type InterfaceMode } from '@/storage/InterfaceModeStorage';
 
 const SAFETY_TIMER_SECONDS = VOICE_SOS_COUNTDOWN_MS / 1_000;
 const CHECKPOINT_CONFIRM_SECONDS = 30;
@@ -312,6 +313,7 @@ export default function HomeScreen() {
   const [goHomeError, setGoHomeError] = useState('');
   const [goHomeErrorAction, setGoHomeErrorAction] = useState<GoHomeErrorAction>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [interfaceMode, setInterfaceMode] = useState<InterfaceMode>('complete');
   const [activePanel, setActivePanel] = useState<HomePanel>('home');
   const homeScrollRef = useRef<ScrollView>(null);
   const goHomeEstimateGenerationRef = useRef(0);
@@ -350,6 +352,20 @@ export default function HomeScreen() {
   statusRef.current = status;
   checkpointStatusRef.current = checkpointStatus;
   goHomeStatusRef.current = goHomeStatus;
+
+  useEffect(() => {
+    let cancelled = false;
+    void InterfaceModeStorage.get().then((storedMode) => {
+      if (!cancelled && storedMode) setInterfaceMode(storedMode);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  const chooseInterfaceMode = (mode: InterfaceMode) => {
+    setInterfaceMode(mode);
+    void InterfaceModeStorage.set(mode).catch(() => undefined);
+    setDrawerVisible(false);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -2346,7 +2362,7 @@ export default function HomeScreen() {
             <Image source={logoImage} style={styles.logo} resizeMode="contain" />
           </View>
 
-          {status === 'idle' ? <HomeQuickActions onPanel={openPanel} onNavigate={(route) => router.push(route as Href)} /> : null}
+          {status === 'idle' ? <HomeQuickActions mode={interfaceMode} onPanel={openPanel} onNavigate={(route) => router.push(route as Href)} /> : null}
 
           <View style={styles.contactsSummary}>
             <View>
@@ -2875,13 +2891,20 @@ export default function HomeScreen() {
                 <Text style={styles.drawerItemText}>Disconnessione</Text>
               </Pressable>
             )}
-            <View style={styles.drawerItemDisabled}>
+            <Pressable
+              accessibilityRole="button"
+              style={styles.drawerItem}
+              onPress={() => Alert.alert('Modalità interfaccia', 'Come preferisci usare SafeMeLink?', [
+                { text: 'Essenziale', onPress: () => chooseInterfaceMode('essential') },
+                { text: 'Completa', onPress: () => chooseInterfaceMode('complete') },
+                { text: 'Annulla', style: 'cancel' },
+              ])}>
+              <Ionicons color="#72C8FF" name="options-outline" size={20} />
               <View style={styles.drawerDisabledCopy}>
-                <Ionicons color="#687898" name="settings-outline" size={20} />
-                <Text style={styles.drawerItemDisabledText}>Impostazioni</Text>
+                <Text style={styles.drawerItemText}>Modalità interfaccia</Text>
+                <Text style={styles.drawerItemHint}>{interfaceMode === 'essential' ? 'Essenziale' : 'Completa'}</Text>
               </View>
-              <Text style={styles.drawerBadge}>In arrivo</Text>
-            </View>
+            </Pressable>
             </ScrollView>
           </SafeAreaView>
         </View>
@@ -3752,6 +3775,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 11,
+  },
+  drawerItemHint: {
+    color: '#91D8FF',
+    fontSize: 12,
+    marginLeft: 4,
   },
   drawerSeparator: {
     backgroundColor: 'rgba(167, 139, 250, 0.14)',

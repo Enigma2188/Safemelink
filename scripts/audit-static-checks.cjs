@@ -57,6 +57,9 @@ const lifecycleMigration = read(
 );
 const accountStorage = read('storage/AccountScopedStorage.ts');
 const homeScreen = read('app/(tabs)/index.tsx');
+const homeQuickActions = read('components/HomeQuickActions.tsx');
+const protectionSignalScreen = read('app/protection-signal.tsx');
+const sosLaunchRuntime = read('services/SOSLaunchRuntime.ts');
 const checkpointStorage = read('storage/CheckpointStorage.ts');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
 const voiceProtectionScreen = read('app/voice-protection.tsx');
@@ -148,6 +151,29 @@ const networkRepository = read('backend/repositories/NetworkRepository.ts');
 check('Radar client uses 1 km and 25 results', () => {
   assert.match(radarService, /RADAR_SEARCH_RADIUS_METERS = 1_000/);
   assert.match(radarService, /RADAR_RESULT_LIMIT = 25/);
+});
+
+check('SafeMeLink splash uses the branded dark, responsive asset', () => {
+  const parsedConfig = JSON.parse(appConfig);
+  const splashPlugin = parsedConfig.expo.plugins.find(
+    (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-splash-screen',
+  );
+  assert.ok(splashPlugin, 'expo-splash-screen plugin must be configured');
+  const splashOptions = splashPlugin[1];
+  assert.equal(splashOptions.image, './assets/images/safemelink-eye-earth.png');
+  assert.equal(splashOptions.resizeMode, 'contain');
+  assert.equal(splashOptions.backgroundColor, '#050816');
+  assert.equal(splashOptions.dark?.backgroundColor, '#050816');
+  assert.ok(fs.existsSync(path.join(root, splashOptions.image)));
+  assert.doesNotMatch(appConfig, /splash-icon\.png/);
+});
+
+check('Essential Home keeps secondary actions separate from primary actions', () => {
+  assert.match(homeQuickActions, /const secondaryActions = \[actions\[0\], actions\[3\], actions\[4\], actions\[5\]\]/);
+  assert.match(homeQuickActions, /const visibleActions = mode === 'essential'/);
+  assert.match(homeQuickActions, /visibleActions\.map/);
+  assert.match(homeQuickActions, /label: 'Proteggimi'/);
+  assert.match(homeQuickActions, /label: 'Qualcosa non va'/);
 });
 
 check('SafeMeLink network UI uses persistent SOS-network consent without visual Radar', () => {
@@ -1116,7 +1142,11 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(voiceProtectionRuntime, /sosRequestListeners\.size === 0/);
   assert.match(voiceProtectionRuntime, /pendingSOSUserId/);
   assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
-  assert.match(homeScreen, /startSOSCountdown\(\)/);
+  assert.match(homeScreen, /SOSLaunchRuntime\.subscribe/);
+  assert.match(homeScreen, /if \(statusRef\.current === 'idle'\) startSOSCountdown\('manual'\)/);
+  assert.match(protectionSignalScreen, /SOSLaunchRuntime\.request\(session\.user\.id\)/);
+  assert.doesNotMatch(protectionSignalScreen, /startSOSCountdown|SOSService\./);
+  assert.match(sosLaunchRuntime, /pendingUserId/);
   assert.match(homeScreen, /router\.dismissTo\('\/\(tabs\)'\)/);
   assert.match(homeScreen, /VOICE_LISTENER_RECEIVED/);
   assert.match(homeScreen, /VOICE_COUNTDOWN_STARTED/);
@@ -1415,7 +1445,7 @@ check('Home exposes the existing SOS network preference without duplicating it',
 });
 
 check('Home keeps the SOS control single-tap and visually compact', () => {
-  assert.match(homeScreen, /onPress=\{\(\) => startSOSCountdown\(\)\}/);
+  assert.match(homeScreen, /onPress=\{\(\) => \{ const userId = activeUserIdRef\.current; if \(userId\) SOSLaunchRuntime\.request\(userId\); \}\}/);
   assert.doesNotMatch(homeScreen, /onLongPress|delayLongPress/);
   assert.match(homeScreen, /sosStage:[\s\S]*height: 188[\s\S]*width: 188/);
   assert.match(homeScreen, /sosButton:[\s\S]*height: 128[\s\S]*width: 128/);
