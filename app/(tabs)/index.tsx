@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
@@ -51,11 +51,14 @@ import {
 } from '@/storage/GoHomeStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
 import { InterfaceModeStorage, type InterfaceMode } from '@/storage/InterfaceModeStorage';
+import { SafetyNotificationPreferenceStorage } from '@/storage/SafetyNotificationPreferenceStorage';
 
 const SAFETY_TIMER_SECONDS = VOICE_SOS_COUNTDOWN_MS / 1_000;
 const CHECKPOINT_CONFIRM_SECONDS = 30;
 const CHECKPOINT_MAX_HOURS = 12;
 const CHECKPOINT_MAX_DURATION_MINUTES = CHECKPOINT_MAX_HOURS * 60 + 59;
+const CHECKPOINT_MAX_REPETITIONS = 10;
+const CHECKPOINT_DEFAULT_REPEAT_INTERVAL_MINUTES = 20;
 const CHECKPOINT_QUICK_DURATIONS = [15, 30, 60] as const;
 const GO_HOME_CONFIRM_SECONDS = 30;
 const GO_HOME_SAFETY_MARGIN = 1.3;
@@ -244,6 +247,34 @@ const getCheckpointDurationMinutes = (hours: number, minutes: number) => {
     : null;
 };
 
+type CheckpointRepeatConfig = {
+  enabled: boolean;
+  intervalMinutes: number;
+  total: number;
+  completed: number;
+};
+
+const normalizeCheckpointRepeatConfig = (
+  enabled: boolean,
+  intervalMinutes: number,
+  total: number,
+  completed = 0,
+): CheckpointRepeatConfig | null => {
+  if (!enabled) return { enabled: false, intervalMinutes: 0, total: 0, completed: 0 };
+  if (
+    !Number.isInteger(intervalMinutes) ||
+    intervalMinutes < 1 ||
+    intervalMinutes > CHECKPOINT_MAX_DURATION_MINUTES ||
+    !Number.isInteger(total) ||
+    total < 1 ||
+    total > CHECKPOINT_MAX_REPETITIONS ||
+    !Number.isInteger(completed) ||
+    completed < 0 ||
+    completed >= total
+  ) return null;
+  return { enabled: true, intervalMinutes, total, completed };
+};
+
 const formatCheckpointDuration = (hours: number, minutes: number) => {
   const parts: string[] = [];
   if (hours > 0) {
@@ -297,6 +328,11 @@ export default function HomeScreen() {
   );
   const [checkpointHoursDraft, setCheckpointHoursDraft] = useState(0);
   const [checkpointMinutesDraft, setCheckpointMinutesDraft] = useState(15);
+  const [checkpointRepeatEnabled, setCheckpointRepeatEnabled] = useState(false);
+  const [checkpointRepeatHoursDraft, setCheckpointRepeatHoursDraft] = useState(0);
+  const [checkpointRepeatMinutesDraft, setCheckpointRepeatMinutesDraft] = useState(CHECKPOINT_DEFAULT_REPEAT_INTERVAL_MINUTES);
+  const [checkpointRepeatTotalDraft, setCheckpointRepeatTotalDraft] = useState(3);
+  const [checkpointRepeatCompleted, setCheckpointRepeatCompleted] = useState(0);
   const [checkpointRemainingSeconds, setCheckpointRemainingSeconds] = useState(0);
   const [checkpointConfirmSeconds, setCheckpointConfirmSeconds] = useState(CHECKPOINT_CONFIRM_SECONDS);
   const [checkpointExpiresAt, setCheckpointExpiresAt] = useState<string | null>(null);
@@ -341,6 +377,7 @@ export default function HomeScreen() {
   const checkpointOwnerUserIdRef = useRef<string | null>(userId);
   const checkpointStatusRef = useRef<CheckpointStatus>('idle');
   const checkpointStorageQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const checkpointRepeatConfigRef = useRef<CheckpointRepeatConfig>({ enabled: false, intervalMinutes: 0, total: 0, completed: 0 });
   const drawerNavigationInFlightRef = useRef(false);
   const pendingDrawerRouteRef = useRef<Href | null>(null);
   const drawerNavigationStartedAtRef = useRef(0);
@@ -498,11 +535,14 @@ export default function HomeScreen() {
     }
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
+    checkpointRepeatConfigRef.current = { enabled: false, intervalMinutes: 0, total: 0, completed: 0 };
     checkpointStatusRef.current = 'idle';
     setCheckpointExpiresAt(null);
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    setCheckpointRepeatEnabled(false);
+    setCheckpointRepeatCompleted(0);
     goHomeEstimateGenerationRef.current += 1;
     goHomeEstimateInFlightRef.current = false;
     goHomeOperationGenerationRef.current += 1;
@@ -779,6 +819,15 @@ export default function HomeScreen() {
         if (activeUserIdRef.current !== loadUserId || loadGenerationRef.current !== loadGeneration ||
           restoredSchedule.phase === 'executing' || restoredSchedule.phase === 'failed') return;
         checkpointExpirationHandledRef.current = null;
+        const restoredRepeat = normalizeCheckpointRepeatConfig(
+          storedCheckpoint.repeatEnabled === true,
+          storedCheckpoint.repeatIntervalMinutes ?? 0,
+          storedCheckpoint.repeatTotal ?? 0,
+          storedCheckpoint.repeatCompleted ?? 0,
+        ) ?? normalizeCheckpointRepeatConfig(false, 0, 0)!;
+        checkpointRepeatConfigRef.current = restoredRepeat;
+        setCheckpointRepeatEnabled(restoredRepeat.enabled);
+        setCheckpointRepeatCompleted(restoredRepeat.completed);
         setCheckpointMinutes(storedCheckpoint.durationMinutes);
         setCheckpointExpiresAt(storedCheckpoint.expiresAt);
         if (remainingSeconds > 0) {
@@ -969,7 +1018,10 @@ export default function HomeScreen() {
     setStatus('idle');
   };
 
-  const startCheckpoint = async (minutes: number) => {
+  const startCheckpoint = async (
+    minutes: number,
+    repeatConfig = checkpointRepeatConfigRef.current,
+  ) => {
     if (
       !Number.isInteger(minutes) ||
       minutes < 1 ||
@@ -988,6 +1040,13 @@ export default function HomeScreen() {
     }
     if (!userId) {
       Alert.alert('Checkpoint', 'Accedi prima di avviare un Checkpoint.');
+      return false;
+    }
+    if (!(await SafetyNotificationPreferenceStorage.get(userId))) {
+      Alert.alert('Checkpoint', 'Per usare questa funzione devi attivare gli avvisi di sicurezza.', [
+        { text: 'Annulla', style: 'cancel' },
+        { text: 'Apri impostazioni', onPress: () => router.push('/settings' as unknown as Href) },
+      ]);
       return false;
     }
 
@@ -1018,6 +1077,12 @@ export default function HomeScreen() {
         durationMinutes: minutes,
         expiresAt,
         startedAt,
+        ...(repeatConfig.enabled ? {
+          repeatEnabled: true,
+          repeatIntervalMinutes: repeatConfig.intervalMinutes,
+          repeatTotal: repeatConfig.total,
+          repeatCompleted: repeatConfig.completed,
+        } : {}),
       }));
       checkpointStorageQueueRef.current = saveOperation.catch(() => reportSafetyError('checkpoint_storage'));
       await withSafetyTimeout(saveOperation, 'checkpoint_storage');
@@ -1051,6 +1116,9 @@ export default function HomeScreen() {
     }
 
     checkpointOwnerUserIdRef.current = userId;
+    checkpointRepeatConfigRef.current = repeatConfig;
+    setCheckpointRepeatEnabled(repeatConfig.enabled);
+    setCheckpointRepeatCompleted(repeatConfig.completed);
     checkpointExpirationHandledRef.current = null;
     checkpointStatusRef.current = 'running';
     setCheckpointMinutes(minutes);
@@ -1075,6 +1143,24 @@ export default function HomeScreen() {
     setCheckpointDurationDraft(currentDuration + deltaMinutes);
   };
 
+  const setCheckpointRepeatIntervalDraft = (totalMinutes: number) => {
+    const boundedMinutes = Math.min(
+      CHECKPOINT_MAX_DURATION_MINUTES,
+      Math.max(1, Math.trunc(totalMinutes)),
+    );
+    setCheckpointRepeatHoursDraft(Math.floor(boundedMinutes / 60));
+    setCheckpointRepeatMinutesDraft(boundedMinutes % 60);
+  };
+
+  const adjustCheckpointRepeatInterval = (deltaMinutes: number) => {
+    const current = checkpointRepeatHoursDraft * 60 + checkpointRepeatMinutesDraft;
+    setCheckpointRepeatIntervalDraft(current + deltaMinutes);
+  };
+
+  const setCheckpointRepeatTotal = (value: number) => {
+    setCheckpointRepeatTotalDraft(Math.min(CHECKPOINT_MAX_REPETITIONS, Math.max(1, Math.trunc(value))));
+  };
+
   const startSelectedCheckpoint = async () => {
     if (checkpointStartInFlightRef.current) {
       return;
@@ -1084,26 +1170,47 @@ export default function HomeScreen() {
       checkpointHoursDraft,
       checkpointMinutesDraft,
     );
-    if (selectedDuration === null || !(await startCheckpoint(selectedDuration))) {
+    const repeatIntervalMinutes = getCheckpointDurationMinutes(
+      checkpointRepeatHoursDraft,
+      checkpointRepeatMinutesDraft,
+    );
+    const repeatConfig = normalizeCheckpointRepeatConfig(
+      checkpointRepeatEnabled,
+      repeatIntervalMinutes ?? 0,
+      checkpointRepeatTotalDraft,
+    );
+    if (selectedDuration === null || !repeatConfig || !(await startCheckpoint(selectedDuration, repeatConfig))) {
+      if (checkpointRepeatEnabled && !repeatConfig) {
+        Alert.alert('Checkpoint', 'Inserisci un intervallo e un numero di ripetizioni validi.');
+      }
       checkpointStartInFlightRef.current = false;
     }
   };
 
-  const cancelCheckpoint = useCallback(() => {
+  const cancelCheckpoint = useCallback((preserveRepeat = false) => {
     checkpointOperationGenerationRef.current += 1;
     checkpointStartInFlightRef.current = false;
     const ownerUserId = checkpointOwnerUserIdRef.current;
-    void clearPersistedCheckpoint(ownerUserId);
-    if (ownerUserId) {
-      void SafetyExpirationService.cancel(ownerUserId, 'checkpoint').catch(() => { reportSafetyError('checkpoint_cancel'); setSafetyError('Annullamento non confermato. Riprova.'); });
-    }
+    const storageCleanup = clearPersistedCheckpoint(ownerUserId);
+    const runtimeCleanup = ownerUserId
+      ? SafetyExpirationService.cancel(ownerUserId, 'checkpoint').catch(() => {
+          reportSafetyError('checkpoint_cancel');
+          setSafetyError('Annullamento non confermato. Riprova.');
+          return false;
+        })
+      : Promise.resolve(false);
     checkpointOwnerUserIdRef.current = null;
     checkpointExpirationHandledRef.current = null;
+    if (!preserveRepeat) {
+      checkpointRepeatConfigRef.current = { enabled: false, intervalMinutes: 0, total: 0, completed: 0 };
+      setCheckpointRepeatCompleted(0);
+    }
     checkpointStatusRef.current = 'idle';
     setCheckpointExpiresAt(null);
     setCheckpointStatus('idle');
     setCheckpointRemainingSeconds(0);
     setCheckpointConfirmSeconds(CHECKPOINT_CONFIRM_SECONDS);
+    return Promise.all([storageCleanup, runtimeCleanup]).then(([, runtimeCancelled]) => runtimeCancelled !== false);
   }, [clearPersistedCheckpoint]);
 
   const confirmCheckpoint = async () => {
@@ -1113,7 +1220,29 @@ export default function HomeScreen() {
       return;
     }
 
-    cancelCheckpoint();
+    const repeatConfig = checkpointRepeatConfigRef.current;
+    const nextCompleted = repeatConfig.completed + 1;
+    if (repeatConfig.enabled && nextCompleted < repeatConfig.total) {
+      const cancelled = await cancelCheckpoint(true);
+      if (!cancelled) {
+        Alert.alert('Checkpoint', 'Il controllo di sicurezza è ancora in chiusura. Riprova tra poco.');
+        return;
+      }
+      const nextConfig = { ...repeatConfig, completed: nextCompleted };
+      setCheckpointRepeatCompleted(nextCompleted);
+      try {
+        await startCheckpoint(repeatConfig.intervalMinutes, nextConfig);
+      } catch (error) {
+        Alert.alert('Checkpoint', getSafetyErrorMessage(error));
+      }
+      return;
+    }
+
+    const cancelled = await cancelCheckpoint();
+    if (!cancelled) {
+      Alert.alert('Checkpoint', 'Il controllo di sicurezza è ancora in chiusura. Riprova tra poco.');
+      return;
+    }
     try {
       await withSafetyTimeout(CheckpointStorage.saveCompleted(userId, checkpointMinutes), 'checkpoint_history');
     } catch {
@@ -1262,6 +1391,13 @@ export default function HomeScreen() {
 
     if (!userId) {
       Alert.alert('Torno a casa', 'Accedi prima di avviare Torno a casa.');
+      return;
+    }
+    if (!(await SafetyNotificationPreferenceStorage.get(userId))) {
+      Alert.alert('Torno a casa', 'Per usare questa funzione devi attivare gli avvisi di sicurezza.', [
+        { text: 'Annulla', style: 'cancel' },
+        { text: 'Apri impostazioni', onPress: () => router.push('/settings' as unknown as Href) },
+      ]);
       return;
     }
 
@@ -2509,7 +2645,8 @@ export default function HomeScreen() {
         {checkpointStatus === 'running' ? (
           <View>
             <Text style={styles.checkpointTimer}>{formatTimer(checkpointRemainingSeconds)}</Text>
-            <Pressable style={styles.secondaryActionButton} onPress={cancelCheckpoint}>
+            {checkpointRepeatConfigRef.current.enabled ? <Text style={styles.checkpointRepeatHint}>Controllo {checkpointRepeatCompleted + 1} di {checkpointRepeatConfigRef.current.total}</Text> : null}
+            <Pressable style={styles.secondaryActionButton} onPress={() => void cancelCheckpoint()}>
               <Text style={styles.secondaryActionText}>Annulla checkpoint</Text>
             </Pressable>
           </View>
@@ -2602,6 +2739,46 @@ export default function HomeScreen() {
                   </Text>
                 </Pressable>
               ))}
+            </View>
+            <View style={styles.checkpointRepeatCard}>
+              <View style={styles.checkpointRepeatHeader}>
+                <View style={styles.checkpointRepeatCopy}>
+                  <Text style={styles.checkpointRepeatTitle}>RIPETI</Text>
+                  <Text style={styles.checkpointRepeatHint}>Un solo prossimo controllo alla volta.</Text>
+                </View>
+                <Switch
+                  accessibilityLabel="Ripeti checkpoint"
+                  value={checkpointRepeatEnabled}
+                  onValueChange={(enabled) => {
+                    setCheckpointRepeatEnabled(enabled);
+                    if (!enabled) setCheckpointRepeatCompleted(0);
+                  }}
+                />
+              </View>
+              {checkpointRepeatEnabled ? (
+                <View style={styles.checkpointRepeatBody}>
+                  <View style={styles.checkpointRepeatLine}>
+                    <Text style={styles.checkpointRepeatLabel}>OGNI</Text>
+                    <Pressable accessibilityLabel="Riduci intervallo ripetizione" accessibilityRole="button" onPress={() => adjustCheckpointRepeatInterval(-5)} style={styles.checkpointCompactButton}>
+                      <Text style={styles.checkpointCompactButtonText}>− 5 min</Text>
+                    </Pressable>
+                    <Text style={styles.checkpointRepeatValue}>{formatCheckpointDuration(checkpointRepeatHoursDraft, checkpointRepeatMinutesDraft).replace('Checkpoint tra ', '')}</Text>
+                    <Pressable accessibilityLabel="Aumenta intervallo ripetizione" accessibilityRole="button" onPress={() => adjustCheckpointRepeatInterval(5)} style={styles.checkpointCompactButton}>
+                      <Text style={styles.checkpointCompactButtonText}>+ 5 min</Text>
+                    </Pressable>
+                  </View>
+                  <View style={styles.checkpointRepeatLine}>
+                    <Text style={styles.checkpointRepeatLabel}>PER</Text>
+                    <Pressable accessibilityLabel="Riduci numero ripetizioni" accessibilityRole="button" onPress={() => setCheckpointRepeatTotal(checkpointRepeatTotalDraft - 1)} style={styles.checkpointCompactButton}>
+                      <Text style={styles.checkpointCompactButtonText}>−</Text>
+                    </Pressable>
+                    <Text style={styles.checkpointRepeatValue}>{checkpointRepeatTotalDraft} volte</Text>
+                    <Pressable accessibilityLabel="Aumenta numero ripetizioni" accessibilityRole="button" onPress={() => setCheckpointRepeatTotal(checkpointRepeatTotalDraft + 1)} style={styles.checkpointCompactButton}>
+                      <Text style={styles.checkpointCompactButtonText}>+</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
             </View>
             <Pressable
               accessibilityRole="button"
@@ -2866,6 +3043,12 @@ export default function HomeScreen() {
 
             <View style={styles.drawerSeparator} />
             <Text style={styles.drawerSectionLabel}>ACCOUNT</Text>
+            <Pressable
+              style={styles.drawerItem}
+              onPress={() => navigateFromDrawer('/settings' as unknown as Href)}>
+              <Ionicons color="#3656A3" name="settings-outline" size={20} />
+              <Text style={styles.drawerItemText}>Impostazioni</Text>
+            </Pressable>
             <Pressable
               style={styles.drawerItem}
               onPress={() => navigateFromDrawer('/emergency-profile' as unknown as Href)}>
@@ -3519,6 +3702,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
   },
+  checkpointRepeatCard: {
+    borderWidth: 1,
+    borderColor: 'rgba(169, 215, 255, 0.28)',
+    borderRadius: 14,
+    padding: 12,
+    gap: 10,
+  },
+  checkpointRepeatHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  checkpointRepeatCopy: { flex: 1, gap: 2 },
+  checkpointRepeatTitle: { color: '#e9f4ff', fontWeight: '800', letterSpacing: 1 },
+  checkpointRepeatHint: { color: '#a7bbd1', fontSize: 12, lineHeight: 17 },
+  checkpointRepeatBody: { gap: 8 },
+  checkpointRepeatLine: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  checkpointRepeatLabel: { color: '#a9d7ff', fontWeight: '800', width: 42 },
+  checkpointRepeatValue: { color: '#f4f8ff', fontWeight: '700', minWidth: 90, textAlign: 'center' },
   checkpointStartButton: {
     alignItems: 'center',
     backgroundColor: '#426ef0',

@@ -63,6 +63,7 @@ const sosLaunchRuntime = read('services/SOSLaunchRuntime.ts');
 const checkpointStorage = read('storage/CheckpointStorage.ts');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
 const voiceProtectionScreen = read('app/voice-protection.tsx');
+const settingsScreen = read('app/settings.tsx');
 const voiceProtectionService = read('services/VoiceProtectionService.ts');
 const voiceProtectionLifecycle = read('components/VoiceProtectionLifecycle.tsx');
 const voiceProtectionRuntime = read('services/VoiceProtectionRuntime.ts');
@@ -166,6 +167,16 @@ check('SafeMeLink splash uses the branded dark, responsive asset', () => {
   assert.equal(splashOptions.dark?.backgroundColor, '#050816');
   assert.ok(fs.existsSync(path.join(root, splashOptions.image)));
   assert.doesNotMatch(appConfig, /splash-icon\.png/);
+});
+
+check('Voice passphrase visibility and settings expose real device state', () => {
+  assert.match(voiceProtectionScreen, /secureTextEntry=\{!passphraseVisible\}/);
+  assert.match(voiceProtectionScreen, /Mostra parola d’ordine/);
+  assert.match(voiceProtectionScreen, /Nascondi parola d’ordine/);
+  assert.match(settingsScreen, /getPermissionsAsync/);
+  assert.match(settingsScreen, /SAFETY_NOTIFICATION_CHANNEL_ID/);
+  assert.match(settingsScreen, /openOperationalChannelSettings/);
+  assert.match(settingsScreen, /InterfaceModeStorage/);
 });
 
 check('Essential Home keeps secondary actions separate from primary actions', () => {
@@ -1289,7 +1300,7 @@ check('Checkpoint duration selector is custom, bounded and uses the existing lif
   assert.match(homeScreen, /hours \* 60 \+ minutes/);
   assert.match(homeScreen, /durationMinutes >= 1/);
   assert.match(homeScreen, /minutes > 59/);
-  assert.match(homeScreen, /startCheckpoint\(selectedDuration\)/);
+  assert.match(homeScreen, /startCheckpoint\(selectedDuration, repeatConfig\)/);
   assert.match(homeScreen, /checkpointStartInFlightRef/);
   assert.match(homeScreen, /Concludi o annulla Torno a casa/);
   assert.doesNotMatch(homeScreen, /CHECKPOINT_OPTIONS_MINUTES/);
@@ -1304,6 +1315,17 @@ check('Checkpoint duration selector is custom, bounded and uses the existing lif
   assert.equal(toDuration(1, 30), 90);
   assert.equal(toDuration(2, 15), 135);
   assert.equal(toDuration(12, 59), 779);
+});
+
+check('Checkpoint ripetuto usa una sola sessione e un solo prossimo alarm', () => {
+  assert.match(homeScreen, /checkpointRepeatConfigRef/);
+  assert.match(homeScreen, /repeatIntervalMinutes/);
+  assert.match(homeScreen, /repeatTotal/);
+  assert.match(homeScreen, /repeatCompleted/);
+  assert.match(homeScreen, /await cancelCheckpoint\(true\)/);
+  assert.match(homeScreen, /startCheckpoint\(repeatConfig\.intervalMinutes, nextConfig\)/);
+  assert.match(homeScreen, /CHECKPOINT_MAX_REPETITIONS/);
+  assert.match(checkpointStorage, /repeatEnabled\?: boolean/);
 });
 
 check('Checkpoint expiry is absolute, persisted, account-scoped and single-fire', () => {

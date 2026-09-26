@@ -590,7 +590,7 @@ export function NeighborhoodNetworkScreen() {
                           })}
                           {discussion.status === 'open' ? (
                             <>
-                              <TextInput accessibilityLabel="Nuovo messaggio" editable={!busy} maxLength={2000} multiline onChangeText={setMessageDraft} placeholder="Scrivi un messaggio" placeholderTextColor="#71809D" style={styles.input} value={messageDraft} />
+                              <TextInput accessibilityLabel="Nuovo messaggio" editable={!busy} maxLength={2000} multiline onChangeText={setMessageDraft} placeholder="Messaggio" placeholderTextColor="#71809D" style={styles.input} value={messageDraft} />
                               <PrimaryButton disabled={busy || !messageDraft.trim()} label="INVIA MESSAGGIO" onPress={() => void sendDiscussionMessage()} />
                             </>
                           ) : <Text style={styles.hint}>Discussione chiusa.</Text>}

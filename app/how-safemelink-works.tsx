@@ -27,7 +27,7 @@ const sections: readonly GuideSection[] = [
     icon: 'people-circle-outline',
     purpose: 'Renderti disponibile a ricevere richieste SOS realmente vicine.',
     activation: 'Aderisci dalla Home o dalla schermata Rete SafeMeLink e concedi i permessi richiesti.',
-    after: 'Con i permessi necessari, l’app aggiorna la tua disponibilità. Se la posizione diventa troppo vecchia potresti non ricevere SOS vicini. Puoi lasciare la rete in qualunque momento; non esiste una lista pubblica delle persone vicine.',
+    after: 'Per usare la rete devi attivarla. Quando è attiva, puoi ricevere SOS dagli utenti vicini e, se sei tu ad avere bisogno di aiuto, il tuo SOS può raggiungere la rete SafeMeLink nella tua zona.',
     data: 'Posizione usata per stabilire la vicinanza agli SOS, con controlli di consenso e durata.',
   },
   {

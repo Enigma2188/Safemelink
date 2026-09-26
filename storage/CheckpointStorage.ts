@@ -20,6 +20,10 @@ export type ActiveCheckpointSession = {
   durationMinutes: number;
   expiresAt: string;
   startedAt: string;
+  repeatEnabled?: boolean;
+  repeatIntervalMinutes?: number;
+  repeatTotal?: number;
+  repeatCompleted?: number;
 };
 
 const isActiveCheckpointSession = (value: unknown): value is ActiveCheckpointSession => {
@@ -29,13 +33,28 @@ const isActiveCheckpointSession = (value: unknown): value is ActiveCheckpointSes
   const candidate = value as Partial<ActiveCheckpointSession>;
   const startedAtMs = Date.parse(candidate.startedAt ?? '');
   const expiresAtMs = Date.parse(candidate.expiresAt ?? '');
+  const repeatEnabled = candidate.repeatEnabled === true;
+  const repeatIntervalMinutes = candidate.repeatIntervalMinutes;
+  const repeatTotal = candidate.repeatTotal;
+  const repeatCompleted = candidate.repeatCompleted;
   return (
     candidate.active === true &&
     Number.isInteger(candidate.durationMinutes) &&
     (candidate.durationMinutes ?? 0) > 0 &&
     Number.isFinite(startedAtMs) &&
     Number.isFinite(expiresAtMs) &&
-    expiresAtMs > startedAtMs
+    expiresAtMs > startedAtMs &&
+    (!repeatEnabled || (
+      Number.isInteger(repeatIntervalMinutes) &&
+      (repeatIntervalMinutes ?? 0) >= 1 &&
+      (repeatIntervalMinutes ?? 0) <= 779 &&
+      Number.isInteger(repeatTotal) &&
+      (repeatTotal ?? 0) >= 1 &&
+      (repeatTotal ?? 0) <= 10 &&
+      Number.isInteger(repeatCompleted) &&
+      (repeatCompleted ?? -1) >= 0 &&
+      (repeatCompleted ?? 0) < (repeatTotal ?? 0)
+    ))
   );
 };
 

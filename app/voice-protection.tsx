@@ -113,6 +113,7 @@ export default function VoiceProtectionScreen() {
     DEFAULT_VOICE_PROTECTION_SETTINGS,
   );
   const [passphraseDraft, setPassphraseDraft] = useState('');
+  const [passphraseVisible, setPassphraseVisible] = useState(false);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>('off');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -878,19 +879,30 @@ export default function VoiceProtectionScreen() {
           <Text style={styles.cardDescription}>
             Rimane nello spazio locale dell’account e non viene inviata al cloud.
           </Text>
-          <TextInput
-            autoCapitalize="none"
-            editable={!settings.enabled && !isSaving}
-            onChangeText={(value) => {
-              setPassphraseDraft(value);
-              setPassphraseSaveFeedback(null);
-            }}
-            placeholder="Inserisci una parola o una breve frase"
-            placeholderTextColor="#667391"
-            secureTextEntry
-            style={styles.input}
-            value={passphraseDraft}
-          />
+          <View style={styles.passphraseInputRow}>
+            <TextInput
+              autoCapitalize="none"
+              editable={!settings.enabled && !isSaving}
+              onChangeText={(value) => {
+                setPassphraseDraft(value);
+                setPassphraseSaveFeedback(null);
+              }}
+              placeholder="Inserisci una parola o una breve frase"
+              placeholderTextColor="#667391"
+              secureTextEntry={!passphraseVisible}
+              style={styles.passphraseInput}
+              value={passphraseDraft}
+            />
+            <Pressable
+              accessibilityLabel={passphraseVisible ? 'Nascondi parola d’ordine' : 'Mostra parola d’ordine'}
+              accessibilityRole="button"
+              disabled={settings.enabled || isSaving || !userId}
+              hitSlop={8}
+              onPress={() => setPassphraseVisible((visible) => !visible)}
+              style={({ pressed }) => [styles.passphraseVisibilityButton, pressed && styles.buttonPressed, (settings.enabled || isSaving || !userId) && styles.disabled]}>
+              <Ionicons color="#A9B7D2" name={passphraseVisible ? 'eye-off-outline' : 'eye-outline'} size={23} />
+            </Pressable>
+          </View>
           <Pressable
             disabled={settings.enabled || isSaving || !userId}
             onPress={() => void savePassphrase()}
@@ -1108,6 +1120,27 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 14,
     paddingVertical: 13,
+  },
+  passphraseInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334260',
+    borderRadius: 14,
+    backgroundColor: '#0C1530',
+  },
+  passphraseInput: {
+    flex: 1,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    minHeight: 50,
+    paddingRight: 4,
+  },
+  passphraseVisibilityButton: {
+    width: 48,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   secondaryButton: {
     alignItems: 'center',

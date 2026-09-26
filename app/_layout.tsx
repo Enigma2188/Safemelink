@@ -1,7 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Redirect, type Href, Stack, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 import '@/services/SOSNetworkBackgroundTask';
 import '@/services/SOSLiveLocationBackgroundTask';
@@ -34,7 +34,16 @@ function RootNavigator() {
   const currentRootSegment = String(segments[0] ?? '');
 
   if (isLoading) {
-    return <View style={styles.loadingScreen} />;
+    return (
+      <View style={styles.loadingScreen}>
+        <Image
+          accessibilityLabel="SafeMeLink"
+          resizeMode="contain"
+          source={require('../assets/images/safemelink-eye-earth.png')}
+          style={styles.loadingLogo}
+        />
+      </View>
+    );
   }
 
   // Confirmation links must remain reachable even before first-run onboarding.
@@ -89,6 +98,7 @@ function RootNavigator() {
               />
               <Stack.Screen name="network" options={{ headerShown: false }} />
               <Stack.Screen name="protection-signal" options={{ headerShown: false }} />
+              <Stack.Screen name="settings" options={{ headerShown: false }} />
               <Stack.Screen
                 name="how-safemelink-works"
                 options={{ headerShown: false }}
@@ -110,6 +120,13 @@ const styles = StyleSheet.create({
   },
   loadingScreen: {
     backgroundColor: '#050816',
+    alignItems: 'center',
     flex: 1,
+    justifyContent: 'center',
+  },
+  loadingLogo: {
+    aspectRatio: 1,
+    maxWidth: 220,
+    width: '58%',
   },
 });
