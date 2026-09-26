@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 import { AuthService } from '@/backend/auth/AuthService';
 import { SOSLiveLocationRepository } from '@/backend/repositories/SOSLiveLocationRepository';
@@ -165,6 +166,7 @@ const startTracking = async (userId: string, sosId: string) => {
     let backgroundStarted = false;
     try {
       const canRunBackground =
+        Platform.OS === 'android' &&
         backgroundPermission.status === 'granted' && (await TaskManager.isAvailableAsync());
       backgroundStarted =
         canRunBackground &&

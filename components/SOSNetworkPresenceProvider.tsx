@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { BackendError } from '@/backend/errors/BackendError';
@@ -334,15 +334,22 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
           if (activeUserIdRef.current !== expectedUserId) {
             return;
           }
+          const foregroundOnly = Platform.OS !== 'android';
           setStatus(
-            !permissionState.backgroundGranted || !backgroundStarted
+            foregroundOnly
+              ? 'available'
+              : !permissionState.backgroundGranted || !backgroundStarted
               ? 'background_permission_required'
               : !notificationPermission.granted
                 ? 'notification_permission_required'
                 : 'available',
           );
           setMessage(
-            !permissionState.backgroundGranted
+            foregroundOnly
+              ? published
+                ? 'Presenza attiva mentre SafeMeLink è aperto su questo iPhone.'
+                : 'Rete SOS attiva. La posizione verrà aggiornata appena sarà più precisa.'
+              : !permissionState.backgroundGranted
               ? 'Presenza attiva mentre usi SafeMeLink. Consenti la posizione sempre per ricevere SOS anche in background.'
               : !backgroundStarted
                 ? 'Presenza foreground attiva. Aggiornamento background temporaneamente non disponibile.'

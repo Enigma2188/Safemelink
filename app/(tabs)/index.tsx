@@ -1022,6 +1022,10 @@ export default function HomeScreen() {
     minutes: number,
     repeatConfig = checkpointRepeatConfigRef.current,
   ) => {
+    if (Platform.OS === 'ios') {
+      Alert.alert('Checkpoint', 'Questa funzione sarà disponibile su iPhone in una fase successiva.');
+      return false;
+    }
     if (
       !Number.isInteger(minutes) ||
       minutes < 1 ||
@@ -1379,6 +1383,10 @@ export default function HomeScreen() {
   };
 
   const startGoHome = async () => {
+    if (Platform.OS === 'ios') {
+      Alert.alert('Torno a casa', 'Questa funzione sarà disponibile su iPhone in una fase successiva.');
+      return;
+    }
     if (goHomeEstimateInFlightRef.current) {
       console.info('[TornoACasa] richiesta ignorata: calcolo già in corso');
       return;

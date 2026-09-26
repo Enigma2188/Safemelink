@@ -158,7 +158,7 @@ export default function SettingsScreen() {
           <View style={styles.rowBetween}>
             <View style={styles.rowCopy}>
               <Text style={styles.cardTitle}>Avvisi di sicurezza</Text>
-              <Text style={styles.cardText}>Stato reale di permessi e canale degli avvisi.</Text>
+              <Text style={styles.cardText}>Stato reale di permessi{Platform.OS === 'android' ? ' e canale Android' : ''} degli avvisi.</Text>
             </View>
             <Switch value={notificationsEnabled} onValueChange={(value) => void toggleNotifications(value)} disabled={!session} trackColor={{ false: '#CBD5E4', true: '#A9C0F0' }} thumbColor={notificationsEnabled ? '#3656A3' : '#71809B'} />
           </View>

@@ -132,6 +132,12 @@ export const SOSNetworkPresenceService = {
       throw new SOSNetworkPermissionError('foreground');
     }
 
+    // Phase 2 iOS supports foreground participation only. Do not request
+    // Location Always or start a background location workflow on iPhone.
+    if (Platform.OS !== 'android') {
+      return { foregroundGranted: true, backgroundGranted: false };
+    }
+
     const background = await Location.requestBackgroundPermissionsAsync();
     console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PERMISSION_BACKGROUND', {
       granted: background.status === 'granted',
@@ -151,6 +157,7 @@ export const SOSNetworkPresenceService = {
   },
 
   async hasRequiredPermissions() {
+    if (Platform.OS !== 'android') return false;
     const [foreground, background] = await Promise.all([
       Location.getForegroundPermissionsAsync(),
       Location.getBackgroundPermissionsAsync(),
@@ -159,6 +166,9 @@ export const SOSNetworkPresenceService = {
   },
 
   async startBackgroundUpdates() {
+    if (Platform.OS !== 'android') {
+      throw new SOSNetworkBackgroundUnavailableError();
+    }
     if (!(await TaskManager.isAvailableAsync())) {
       throw new SOSNetworkBackgroundUnavailableError();
     }
