@@ -72,8 +72,8 @@ export default function ProtectionSignalScreen() {
     const result = await ProtectionSignalTrustedContactService.send(selectedContact);
     setSendingContact(false);
     Alert.alert(
-      result === 'sent' || result === 'composer' ? 'Segnale inviato' : 'Invio non completato',
-      result === 'composer' ? 'Il messaggio è pronto nel composer SMS. Premi Invia per completare.' : result === 'sent' ? 'Segnale inviato al tuo contatto fidato.' : 'Il segnale resta valido, ma non è stato possibile contattare il destinatario.',
+      result === 'sent' ? 'Segnale inviato' : result === 'composer' ? 'Messaggio preparato' : 'Invio non completato',
+      result === 'composer' ? 'Il messaggio è pronto. Controlla il destinatario e premi Invia per completare.' : result === 'sent' ? 'Segnale inviato al tuo contatto fidato.' : 'Il segnale resta valido, ma non è stato possibile contattare il destinatario.',
       result === 'sent' || result === 'composer' ? [{ text: 'Fine', onPress: () => router.back() }] : [{ text: 'OK' }],
     );
   };

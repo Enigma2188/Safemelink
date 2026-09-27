@@ -22,9 +22,8 @@ export const ProtectionSignalTrustedContactService = {
         await SafeMeLinkSms.sendSms(phone, MESSAGE);
         return 'sent';
       }
-      // iOS SMS composer/automation is intentionally out of scope for Phase 2.
-      // Keep the signal recorded in SafeMeLink and report that no local delivery
-      // path is available instead of implying a successful hand-off.
+      // iOS can only prepare a message for manual confirmation. Never report
+      // that the message was delivered by SafeMeLink itself.
       if (Platform.OS !== 'android') return 'unavailable';
       const url = `sms:${phone}?body=${encodeURIComponent(MESSAGE)}`;
       if (await Linking.canOpenURL(url)) {
