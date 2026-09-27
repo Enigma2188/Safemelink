@@ -13,6 +13,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "SafeMeLink usa la posizione per il Radar, gli SOS e le richieste di aiuto nelle vicinanze.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SafeMeLink usa la posizione in background solo mentre un SOS attivo richiede aggiornamenti live per i destinatari autorizzati.",
+        "NSLocationAlwaysUsageDescription": "SafeMeLink usa la posizione in background solo mentre un SOS attivo richiede aggiornamenti live per i destinatari autorizzati.",
         "NSMicrophoneUsageDescription": "SafeMeLink usa il microfono solo quando la modalita ascolto della parola d'ordine e attiva.",
         "NSSpeechRecognitionUsageDescription": "SafeMeLink usa il riconoscimento vocale per attivare la parola d'ordine configurata."
       }
@@ -54,6 +56,8 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "SafeMeLink usa la posizione per la Rete SafeMeLink, gli SOS e le richieste di aiuto nelle vicinanze.",
+          "locationAlwaysAndWhenInUsePermission": "SafeMeLink usa la posizione in background solo mentre un SOS attivo richiede aggiornamenti live per i destinatari autorizzati.",
+          "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }

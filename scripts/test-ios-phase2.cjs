@@ -27,7 +27,7 @@ expect(presenceProvider.includes("const foregroundOnly = Platform.OS !== 'androi
 expect(presenceProvider.includes('Presenza attiva mentre SafeMeLink è aperto su questo iPhone.'), 'iOS must not instruct users to grant Location Always in Phase 2.');
 expect(!presence.includes('requestBackgroundPermissionsAsync()') || presence.indexOf('requestBackgroundPermissionsAsync()') > presence.indexOf("if (Platform.OS !== 'android')"), 'Background permission request must remain Android-only.');
 expect(liveLocation.includes('getBackgroundPermissionsAsync'), 'Existing SOS live-location recovery path must remain explicit.');
-expect(liveLocation.includes("Platform.OS === 'android' &&"), 'SOS live location background task must remain Android-only in Phase 2.');
+expect(liveLocation.includes("Platform.OS === 'android' || Platform.OS === 'ios'"), 'SOS live location may use background updates on both supported platforms.');
 expect(sms.includes("Platform.OS === 'android'"), 'Automatic SMS must remain Android-gated.');
 expect(!network.includes('PermissionsAndroid') && !network.includes('SafeMeLinkSms'), 'NETWORK must not import Android-only APIs.');
 expect(!neighborhood.includes('PermissionsAndroid') && !neighborhood.includes('SafeMeLinkSms'), 'Neighborhood network must not import Android-only APIs.');

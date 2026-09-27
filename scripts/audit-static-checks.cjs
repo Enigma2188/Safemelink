@@ -250,7 +250,9 @@ check('SOS network background location is bounded, opportunistic and account-sco
   );
   assert.match(rootLayout, /SOSNetworkBackgroundTask/);
   assert.match(appConfig, /"isAndroidBackgroundLocationEnabled": true/);
-  assert.doesNotMatch(appConfig, /"isIosBackgroundLocationEnabled": true/);
+  assert.match(appConfig, /"isIosBackgroundLocationEnabled": true/);
+  assert.match(appConfig, /NSLocationAlwaysAndWhenInUseUsageDescription/);
+  assert.match(sosNetworkService, /if \(Platform\.OS !== 'android'\)/);
 });
 
 check('SOS nearby selection processes every eligible responder through 1/3/5 km bands', () => {

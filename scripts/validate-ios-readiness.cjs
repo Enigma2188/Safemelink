@@ -7,13 +7,15 @@ const voiceService = read('services/VoiceProtectionService.ts');
 const voiceLifecycle = read('components/VoiceProtectionLifecycle.tsx');
 const voiceScreen = read('app/voice-protection.tsx');
 const safetyNotifications = read('services/SafetyNotifications.ts');
+const liveLocation = read('services/SOSLiveLocationService.ts');
+const presence = read('services/SOSNetworkPresenceService.ts');
 const smsConfig = JSON.parse(read('modules/safemelink-sms/expo-module.config.json'));
 
 assert.equal(app.ios.bundleIdentifier, 'com.tiziano.safemelink');
 assert.equal(app.scheme, 'safemelink');
-assert.equal(app.ios.infoPlist.NSLocationAlwaysUsageDescription, undefined);
-assert.equal(app.ios.infoPlist.NSLocationAlwaysAndWhenInUseUsageDescription, undefined);
-assert.notEqual(app.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === 'expo-location')[1].isIosBackgroundLocationEnabled, true);
+assert.equal(typeof app.ios.infoPlist.NSLocationAlwaysUsageDescription, 'string');
+assert.equal(typeof app.ios.infoPlist.NSLocationAlwaysAndWhenInUseUsageDescription, 'string');
+assert.equal(app.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === 'expo-location')[1].isIosBackgroundLocationEnabled, true);
 assert.deepEqual(smsConfig.platforms, ['android'], 'native automatic SMS must remain Android-only');
 assert.match(voiceService, /isRunning\(\) \{\s*return Platform\.OS === 'android'/);
 assert.match(voiceService, /if \(Platform\.OS !== 'android'\) return;/);
@@ -21,5 +23,8 @@ assert.match(voiceLifecycle, /if \(Platform\.OS !== 'android'\) return;/);
 assert.match(voiceScreen, /iOS non consente/);
 assert.match(safetyNotifications, /SchedulableTriggerInputTypes\.DATE/);
 assert.match(safetyNotifications, /Platform\.OS === 'android' \? \{ channelId: CHANNEL_ID \} : (?:null|\{\})/);
+assert.match(liveLocation, /requestBackgroundPermissionsAsync/);
+assert.match(liveLocation, /SOS_LIVE_LOCATION_TASK/);
+assert.match(presence, /Platform\.OS !== 'android'/);
 
 console.log('PASS iOS bundle, location, local deadlines, Android-only SMS and voice capability guards');

@@ -162,30 +162,49 @@ const startTracking = async (userId: string, sosId: string) => {
     await publishInitialLocation(userId, sosId);
     if (generation !== lifecycleGeneration || activeOwner?.userId !== userId) return;
 
-    const backgroundPermission = await Location.getBackgroundPermissionsAsync();
+    let backgroundPermission = await Location.getBackgroundPermissionsAsync();
+    if (Platform.OS === 'ios' && backgroundPermission.status !== 'granted' && backgroundPermission.canAskAgain) {
+      try {
+        // Request Always only while an SOS is active. Rete SOS never reaches
+        // this service and therefore never prompts for background location.
+        backgroundPermission = await Location.requestBackgroundPermissionsAsync();
+      } catch (error: unknown) {
+        console.warn('[SafeMeLink SOS] LIVE_LOCATION_BACKGROUND_PERMISSION_UNAVAILABLE', {
+          category: error instanceof Error ? error.name : 'unknown',
+        });
+      }
+    }
     let backgroundStarted = false;
     try {
       const canRunBackground =
-        Platform.OS === 'android' &&
+        (Platform.OS === 'android' || Platform.OS === 'ios') &&
         backgroundPermission.status === 'granted' && (await TaskManager.isAvailableAsync());
       backgroundStarted =
         canRunBackground &&
         (await Location.hasStartedLocationUpdatesAsync(SOS_LIVE_LOCATION_TASK));
       if (canRunBackground && !backgroundStarted) {
-        await Location.startLocationUpdatesAsync(SOS_LIVE_LOCATION_TASK, {
+        const options: Location.LocationTaskOptions = {
           accuracy: Location.Accuracy.High,
           distanceInterval: SOS_LIVE_MIN_DISTANCE_METERS,
           timeInterval: SOS_LIVE_MOVING_INTERVAL_MS,
           deferredUpdatesDistance: SOS_LIVE_MIN_DISTANCE_METERS,
           deferredUpdatesInterval: SOS_LIVE_MOVING_INTERVAL_MS,
           pausesUpdatesAutomatically: false,
-          foregroundService: {
-            notificationTitle: 'SafeMeLink — SOS attivo',
-            notificationBody: 'Aggiornamento della posizione dell’emergenza in corso.',
-            notificationColor: '#FF3B5C',
-            killServiceOnDestroy: false,
-          },
-        });
+          ...(Platform.OS === 'ios'
+            ? { showsBackgroundLocationIndicator: true }
+            : {}),
+          ...(Platform.OS === 'android'
+            ? {
+                foregroundService: {
+                  notificationTitle: 'SafeMeLink — SOS attivo',
+                  notificationBody: 'Aggiornamento della posizione dell’emergenza in corso.',
+                  notificationColor: '#FF3B5C',
+                  killServiceOnDestroy: false,
+                },
+              }
+            : {}),
+        };
+        await Location.startLocationUpdatesAsync(SOS_LIVE_LOCATION_TASK, options);
         backgroundStarted = true;
       }
     } catch (error: unknown) {
