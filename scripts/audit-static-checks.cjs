@@ -1283,7 +1283,8 @@ check('SOS activation supersedes preventive safety timers', () => {
   const startCountdownStart = homeScreen.indexOf(
     'const startSOSCountdown = useCallback(',
   );
-  const startCountdownEnd = homeScreen.indexOf('\n\n  useEffect(', startCountdownStart);
+  const nextEffect = /\r?\n\r?\n  useEffect\(/.exec(homeScreen.slice(startCountdownStart));
+  const startCountdownEnd = nextEffect ? startCountdownStart + nextEffect.index : -1;
   assert.ok(
     startCountdownStart >= 0 && startCountdownEnd > startCountdownStart,
     'SOS countdown callback not found.',

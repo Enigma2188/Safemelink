@@ -578,6 +578,7 @@ export default function VoiceProtectionScreen() {
       }
 
       const recognitionStarted = VoiceProtectionRuntime.waitForRecognitionStart(userId, 8_000);
+      VoiceProtectionRuntime.allowRecognitionStart(userId);
       refreshGenerationRef.current += 1;
       setItalianModelDownloadRequired(false);
       VoiceProtectionRuntime.notifySettingsChanged(userId);

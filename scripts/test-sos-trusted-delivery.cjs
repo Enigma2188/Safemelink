@@ -15,6 +15,7 @@ const nativeCalls = [];
 const diagnostics = [];
 let activeAccount = 'user';
 let switchDuringMarker = false;
+let permissionGranted = true;
 const fixture = { exports: {} };
 const canonicalize = (phone) => (/^\+[1-9]\d{6,14}$/.test(phone ?? '') ? phone : null);
 
@@ -26,7 +27,7 @@ vm.runInNewContext(compiled, {
       Platform: { OS: 'android' },
       PermissionsAndroid: {
         PERMISSIONS: { SEND_SMS: 'SEND_SMS' }, RESULTS: { GRANTED: 'granted' },
-        check: async () => true, request: async () => 'granted',
+        check: async () => permissionGranted, request: async () => 'granted',
       },
     };
     if (specifier === 'safemelink-sms') return { SafeMeLinkSms: {
@@ -87,6 +88,18 @@ async function main() {
   const mismatched = await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, contacts);
   assert.equal(mismatched.reason, 'session_changed');
   assert.equal(attempted.size, 0, 'Wrong account must not claim recipients.');
+  activeAccount = 'user';
+  for (const permission of [false, true]) {
+    permissionGranted = permission; attempted.clear(); nativeCalls.length = 0;
+    const permissionResult = await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, contacts);
+    assert.equal(nativeCalls.length, permission ? 3 : 0);
+    assert.equal(permissionResult.status, permission ? 'sent' : 'permission_required');
+  }
+  for (const permission of [false, true]) {
+    permissionGranted = permission; nativeCalls.length = 0;
+    const empty = await fixture.exports.SOSAutomaticSmsService.sendForSOS('user', event, []);
+    assert.equal(empty.reason, 'no_eligible_contacts'); assert.equal(nativeCalls.length, 0);
+  }
   assert.match(fallbackSource, /Linking\.canOpenURL\(url\)/);
   assert.match(fallbackSource, /if \(!canOpen\)[\s\S]*return \{ opened: false/);
   assert.match(fallbackSource, /Linking\.openURL\(url\)/);

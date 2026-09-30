@@ -90,6 +90,10 @@ export const SOSAutomaticSmsService = {
     event: ActiveSOSEvent,
     contacts: TrustedContact[],
   ): Promise<SOSAutomaticSmsResult> {
+    console.info('[SafeMeLink SOS] SMS_CONTACTS_LOADED', { count: contacts.length, nativeAvailable: this.isSupported() });
+    if (contacts.length === 0) {
+      return { status: 'unavailable', reason: 'no_eligible_contacts', sentCount: 0, failedCount: 0, skippedCount: 0 };
+    }
     if (!this.isSupported()) {
       console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
         category: 'native_module_unavailable',
@@ -128,6 +132,7 @@ export const SOSAutomaticSmsService = {
     }
 
     const { phones, skippedCount } = getDeliveryTargets(contacts);
+    console.info('[SafeMeLink SOS] SMS_ELIGIBILITY', { permission: 'granted', eligibleCount: phones.length, skippedCount });
     if (phones.length === 0) {
       console.info('[SafeMeLink SOS] SMS_AUTOMATIC_FALLBACK_REQUIRED', {
         category: 'no_eligible_contacts',
@@ -158,10 +163,13 @@ export const SOSAutomaticSmsService = {
       // Marker persistence may overlap logout/account switch. Do not hand off A's SMS as B.
       if (!(await sessionMatches())) return stoppedForAccountChange();
       try {
+        console.info('[SafeMeLink SOS] SMS_NATIVE_ATTEMPT');
         await SafeMeLinkSms!.sendSms(phone, message);
+        console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: 'handed_to_system' });
         sentCount += 1;
         await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'handed_to_system').catch(() => undefined);
       } catch {
+        console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: 'unknown' });
         failedCount += 1;
         await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'unknown').catch(() => undefined);
       }
@@ -172,6 +180,7 @@ export const SOSAutomaticSmsService = {
       sentCount,
       failedCount,
       skippedCount,
+      attemptedCount: sentCount + failedCount,
     });
     return {
       status: sentCount > 0 ? 'sent' : failedCount > 0 ? 'failed' : 'unavailable',

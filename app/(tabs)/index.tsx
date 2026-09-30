@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { HomeQuickActions } from '@/components/HomeQuickActions';
@@ -313,6 +314,15 @@ export default function HomeScreen() {
   const isHomeFocused = useIsFocused();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && Platform.OS === 'android' && SafeMeLinkSafety) {
+        // Recheck after returning from settings; never auto-arm a safety session.
+        try { SafeMeLinkSafety.canScheduleExactAlarms(); } catch { /* Rechecked again at explicit activation. */ }
+      }
+    });
+    return () => subscription.remove();
+  }, []);
   const [safetyError, setSafetyError] = useState('');
   const safetyOwnerRef = useRef<string | null>(null);
   const manualArmRef = useRef<Promise<unknown> | null>(null);
@@ -1317,6 +1327,7 @@ export default function HomeScreen() {
           text: homeLocation ? 'Modifica' : 'Imposta',
           onPress: () => void captureCurrentLocationAsHome(),
         },
+        { text: 'Inserisci indirizzo', onPress: () => router.push('/destination-address' as Href) },
       ],
     );
   };
@@ -2593,9 +2604,17 @@ export default function HomeScreen() {
               </Pressable>
             </View>
           ) : null}
-          <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
-            <Text style={styles.shareButtonText}>Invia di nuovo via SMS</Text>
-          </Pressable>
+          {contacts.length > 0 ? (
+            <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
+              <Text style={styles.shareButtonText}>Invia di nuovo via SMS</Text>
+            </Pressable>
+          ) : (
+            <Link href={"/(tabs)/contacts" as any} asChild>
+              <Pressable style={styles.shareButton}>
+                <Text style={styles.shareButtonText}>AGGIUNGI CONTATTI FIDATI</Text>
+              </Pressable>
+            </Link>
+          )}
           <Pressable
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}
             onPress={deactivateSOS}>

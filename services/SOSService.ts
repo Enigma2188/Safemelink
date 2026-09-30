@@ -131,8 +131,12 @@ export const SOSService = {
           : ContactsService.listCached(expectedUserId),
       );
     } catch {
-      console.warn('[SafeMeLink SOS] Contatti locali non disponibili.', {
-        category: 'local_contacts_unavailable',
+      // A remote timeout must not discard account-scoped contacts already on device.
+      contacts = await runLocalOperationWithTimeout(
+        ContactsService.listCached(expectedUserId),
+      ).catch(() => []);
+      console.warn('[SafeMeLink SOS] Aggiornamento contatti non disponibile; recupero locale tentato.', {
+        category: 'contacts_refresh_unavailable',
       });
     }
 
@@ -257,6 +261,7 @@ export const SOSService = {
         });
         return { status: 'technical_error' as const, channel: null };
       });
+      console.info('[SafeMeLink SOS] SMS_FALLBACK_RESULT', { status: localDeliveryResult.status });
     }
 
     const result: SOSCompletionResult = {

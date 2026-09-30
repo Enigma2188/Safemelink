@@ -75,7 +75,8 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   const cleanups = effects.map((effect) => effect()).filter(Boolean);
   return {
     advance, runtime, events,
-    enable() { running = true; settings.enabled = true; runtime.notifySettingsChanged('account-A'); },
+    enable() { running = true; settings.enabled = true; runtime.allowRecognitionStart('account-A'); runtime.notifySettingsChanged('account-A'); },
+    stopWithStaleSettings() { runtime.requestRecognitionStop('account-A'); runtime.notifySettingsChanged('account-A'); appState?.('active'); },
     disable() { runtime.requestRecognitionStop('account-A'); settings.enabled = false; running = false; runtime.notifySettingsChanged('account-A'); },
     appState: (state) => appState?.(state),
     loseEngine: () => { nativeState = 'inactive'; },
@@ -119,6 +120,34 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   await f.advance(10_000);
   assert.equal(f.starts, 3);
   assert.equal(f.pendingTimers, 0);
+
+  const manualOff = fixture();
+  await manualOff.advance(250); manualOff.enable(); await manualOff.advance(300);
+  manualOff.events.error({ error: 'network' });
+  manualOff.stopWithStaleSettings();
+  manualOff.runtime.notifySOSClosed('account-A');
+  manualOff.runtime.notifySOSFailed('account-A', new Error('test'));
+  manualOff.events.start(); manualOff.events.end();
+  await manualOff.advance(40_000);
+  assert.equal(manualOff.status, 'off', 'manual OFF wins over stale settings and native/SOS callbacks');
+  assert.equal(manualOff.starts, 1, 'manual OFF cancels all pending restarts');
+  assert.equal(manualOff.pendingTimers, 0);
+  manualOff.enable(); await manualOff.advance(300);
+  assert.equal(manualOff.status, 'listening', 'explicit ON clears the stop veto');
+  manualOff.unmount(); await manualOff.advance(300);
+
+  const sosCycle = fixture();
+  await sosCycle.advance(250); sosCycle.enable(); await sosCycle.advance(300);
+  sosCycle.runtime.notifySOSExecutionStarted('account-A');
+  await sosCycle.advance(300); sosCycle.appState('active'); await sosCycle.advance(2_000);
+  assert.equal(sosCycle.starts, 1, 'foreground cannot resume recognition during active SOS');
+  sosCycle.runtime.notifySOSClosed('account-A'); await sosCycle.advance(2_000);
+  assert.equal(sosCycle.starts, 2, 'real close resumes once when ON');
+  sosCycle.runtime.notifySOSClosed('account-A'); sosCycle.disable();
+  await sosCycle.advance(3_000); assert.equal(sosCycle.status, 'off');
+  assert.equal(sosCycle.starts, 2, 'OFF wins over close timer');
+  sosCycle.unmount(); await sosCycle.advance(300);
+  assert.equal(sosCycle.pendingTimers, 0);
 
   const timeout = fixture({ confirmStart: false });
   await timeout.advance(250); timeout.enable();

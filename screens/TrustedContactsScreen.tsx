@@ -1,4 +1,4 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
+import { ContactPickerButton } from '@/components/ContactPickerButton';
+import { parseTrustedContactToken, trustedContactUrl } from '@/services/TrustedContactLink';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
@@ -35,6 +37,7 @@ const emptyForm: ContactForm = {
 };
 
 export function TrustedContactsScreen() {
+  const { token } = useLocalSearchParams<{ token?: string }>();
   const { session, isInitializing, isOffline } = useAuth();
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
@@ -43,6 +46,10 @@ export function TrustedContactsScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [publicCode, setPublicCode] = useState<string | null>(null);
   const [linkCode, setLinkCode] = useState('');
+  useEffect(() => {
+    const valid = parseTrustedContactToken(token);
+    if (token !== undefined) setLinkCode(valid ?? '');
+  }, [token]);
   const [requests, setRequests] = useState<TrustedLinkRequest[]>([]);
   const [showQr, setShowQr] = useState(false);
   const [linkActionPending, setLinkActionPending] = useState(false);
@@ -443,8 +450,8 @@ export function TrustedContactsScreen() {
       return;
     }
 
-    if (!linkCode.trim()) {
-      Alert.alert('Collegamento SafeMeLink', 'Inserisci un codice SafeMeLink.');
+    if (!parseTrustedContactToken(linkCode)) {
+      Alert.alert('Collegamento SafeMeLink', 'Inserisci un codice SafeMeLink valido.');
       return;
     }
 
@@ -655,7 +662,7 @@ export function TrustedContactsScreen() {
             </Pressable>
             {showQr && (
               <View style={styles.qrContainer}>
-                <QRCode value={publicCode} size={190} />
+                <QRCode value={trustedContactUrl(publicCode) || publicCode} size={190} />
               </View>
             )}
           </>
@@ -667,6 +674,9 @@ export function TrustedContactsScreen() {
       {publicCode && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Aggiungi tramite codice</Text>
+          {token ? <Text style={styles.sectionHelp}>{parseTrustedContactToken(token)
+            ? 'Codice ricevuto dal QR. Controllalo e premi Invia richiesta per confermare. Il collegamento richiede anche l’accettazione dell’altra persona.'
+            : 'Il QR non contiene un codice SafeMeLink valido. Non è stata inviata alcuna richiesta.'}</Text> : null}
           <Text style={styles.sectionHelp}>
             Una richiesta accettata crea un contatto fidato personale e prioritario per gli SOS.
           </Text>
@@ -763,6 +773,8 @@ export function TrustedContactsScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
+        <ContactPickerButton key={userId ?? 'signed-out'} disabled={!userId || contactActionPending}
+          onPick={(name, phone) => setForm((current) => ({ ...current, name, phone }))} />
         <Text style={styles.sectionHelp}>
           Usa il numero completo di prefisso internazionale (per esempio +39). Il numero viene
           sincronizzato per il canale SMS, ma non collega un account SafeMeLink.

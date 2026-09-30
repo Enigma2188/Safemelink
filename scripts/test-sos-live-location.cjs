@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 
-const service = fs.readFileSync('services/SOSLiveLocationService.ts', 'utf8');
+const service = fs.readFileSync('services/SOSLiveLocationService.ts', 'utf8').replace(/\r\n/g, '\n');
 const background = fs.readFileSync('services/SOSLiveLocationBackgroundTask.ts', 'utf8');
 const auth = fs.readFileSync('backend/auth/AuthProvider.tsx', 'utf8');
 const migration = fs.readFileSync(

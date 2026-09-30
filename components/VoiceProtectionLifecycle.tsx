@@ -41,6 +41,7 @@ export function VoiceProtectionLifecycle() {
   const nativeStopRef = useRef<Promise<boolean> | null>(null);
   const postSOSRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recognitionConfirmedRef = useRef(false);
+  const sosSuspendedRef = useRef(false);
   activeUserIdRef.current = userId;
 
   const clearRestartTimer = useCallback(() => {
@@ -110,6 +111,12 @@ export function VoiceProtectionLifecycle() {
 
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
     if (Platform.OS !== 'android') return;
+    if (sosSuspendedRef.current) return;
+    if (VoiceProtectionRuntime.isRecognitionStopped(targetUserId)) {
+      shouldListenRef.current = false;
+      stopRecognition();
+      return;
+    }
     if (recognitionStartedRef.current) return;
     const recognitionGeneration = recognitionGenerationRef.current + 1;
     recognitionGenerationRef.current = recognitionGeneration;
@@ -268,6 +275,11 @@ export function VoiceProtectionLifecycle() {
   useSpeechRecognitionEvent('start', () => {
     recognitionStartedAtRef.current = Date.now();
     const currentUserId = activeUserIdRef.current;
+    if (currentUserId && VoiceProtectionRuntime.isRecognitionStopped(currentUserId)) {
+      shouldListenRef.current = false;
+      stopRecognition();
+      return;
+    }
     if (currentUserId && shouldListenRef.current && recognitionStartedRef.current && !nativeStopRef.current) {
       if (startTimerRef.current) clearTimeout(startTimerRef.current);
       startTimerRef.current = null;
@@ -393,6 +405,7 @@ export function VoiceProtectionLifecycle() {
     cachedSettingsRef.current = null;
     recognitionReadyRef.current = false;
     consecutiveFailuresRef.current = 0;
+    sosSuspendedRef.current = false;
     let disposed = false;
     void accountCleanupPromiseRef.current.then(() => {
       if (!disposed && activeUserIdRef.current === userId) {
@@ -405,6 +418,11 @@ export function VoiceProtectionLifecycle() {
     const removeSettingsListener = VoiceProtectionRuntime.onSettingsChanged(
       (changedUserId) => {
         if (changedUserId === activeUserIdRef.current) {
+          if (VoiceProtectionRuntime.isRecognitionStopped(changedUserId)) {
+            shouldListenRef.current = false;
+            stopRecognition();
+            return;
+          }
           if (VoiceProtectionRuntime.getRecognitionState(changedUserId) !== 'error') {
             VoiceProtectionRuntime.setRecognitionState(changedUserId, 'starting');
           }
@@ -423,10 +441,12 @@ export function VoiceProtectionLifecycle() {
     });
     const removeSOSExecutionListener = VoiceProtectionRuntime.onSOSExecutionStarted((executionUserId) => {
       if (executionUserId !== activeUserIdRef.current || !shouldListenRef.current) return;
+      sosSuspendedRef.current = true;
       // Release the recognizer while the SOS pipeline uses the microphone/location.
       stopRecognition();
     });
     const recoverAfterSOS = (executionUserId: string) => {
+      if (executionUserId === activeUserIdRef.current) sosSuspendedRef.current = false;
       if (executionUserId !== activeUserIdRef.current || !shouldListenRef.current || disposed) return;
       clearPostSOSRecoveryTimer();
       VoiceProtectionRuntime.setRecognitionState(executionUserId, 'retrying');

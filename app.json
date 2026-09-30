@@ -23,6 +23,7 @@
       "allowBackup": false,
       "softwareKeyboardLayoutMode": "resize",
       "blockedPermissions": [
+        "android.permission.WRITE_CONTACTS",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.SYSTEM_ALERT_WINDOW"
@@ -50,6 +51,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      ["expo-contacts", { "contactsPermission": "Scegli un contatto fidato dalla rubrica solo quando lo richiedi." }],
       "expo-router",
       "expo-notifications",
       [

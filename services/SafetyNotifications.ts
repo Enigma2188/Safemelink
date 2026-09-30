@@ -1,5 +1,5 @@
 import * as Notifications from 'expo-notifications';
-import { Alert, Linking, Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { reportSafetyError, SafetyOperationError, withSafetyTimeout } from '@/services/SafetyOperation';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
 import { ensureOperationalChannel, SAFETY_NOTIFICATION_CHANNEL_ID, warnSilentOperationalChannel } from '@/services/OperationalNotificationChannels';
@@ -21,12 +21,8 @@ export const SafetyNotifications = {
       const exactAllowed = nativeSafety.canScheduleExactAlarms();
       console.info('[SafetyNotification] EXACT_ALARM_CAPABILITY', { exactAllowed, nowMs: Date.now() });
       if (!exactAllowed) {
-        Alert.alert('Autorizzazione necessaria',
-          'Per avvisi puntuali abilita “Sveglie e promemoria” per SafeMeLink, poi avvia di nuovo il controllo.',
-          [{ text: 'Annulla', style: 'cancel' }, { text: 'Apri impostazioni', onPress: () => {
-            void nativeSafety.openExactAlarmSettings()
-              .catch(() => Linking.openSettings()).catch(() => reportSafetyError('exact_alarm_settings'));
-          } }]);
+        void nativeSafety.openExactAlarmSettings()
+          .catch(() => Linking.openSettings()).catch(() => reportSafetyError('exact_alarm_settings'));
         throw new SafetyOperationError('exact_alarm_permission');
       }
     }

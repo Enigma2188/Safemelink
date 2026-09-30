@@ -7,6 +7,7 @@ export type VoiceRecognitionState = 'off' | 'starting' | 'listening' | 'retrying
 type RecognitionStateListener = (userId: string, state: VoiceRecognitionState) => void;
 const recognitionStateListeners = new Set<RecognitionStateListener>();
 const recognitionStopListeners = new Set<SettingsChangedListener>();
+const recognitionStoppedAccounts = new Set<string>();
 let recognitionStatus: { userId: string; state: VoiceRecognitionState } | null = null;
 let recognitionFailure: { userId: string; category: 'permission' | 'readiness' | 'start' | 'circuit_breaker' } | null = null;
 type SOSExecutionListener = (userId: string) => void;
@@ -39,6 +40,7 @@ export const VoiceProtectionRuntime = {
   },
 
   setRecognitionState(userId: string, state: VoiceRecognitionState) {
+    if (recognitionStoppedAccounts.has(userId) && state !== 'off') return;
     if (state === 'off' || state === 'listening') recognitionFailure = null;
     if (recognitionStatus?.state !== state || recognitionStatus?.userId !== userId) {
       console.info('[VoiceProtection] listener', { state });
@@ -67,8 +69,17 @@ export const VoiceProtectionRuntime = {
   },
 
   requestRecognitionStop(userId: string) {
+    recognitionStoppedAccounts.add(userId);
     recognitionStopListeners.forEach((listener) => listener(userId));
     VoiceProtectionRuntime.setRecognitionState(userId, 'off');
+  },
+
+  allowRecognitionStart(userId: string) {
+    recognitionStoppedAccounts.delete(userId);
+  },
+
+  isRecognitionStopped(userId: string) {
+    return recognitionStoppedAccounts.has(userId);
   },
 
   onRecognitionStopRequested(listener: SettingsChangedListener) {
@@ -77,6 +88,7 @@ export const VoiceProtectionRuntime = {
   },
 
   notifyRecognitionStarted(userId: string) {
+    if (recognitionStoppedAccounts.has(userId)) return;
     VoiceProtectionRuntime.setRecognitionState(userId, 'listening');
     recognitionStartedListeners.forEach((listener) => listener(userId));
   },
