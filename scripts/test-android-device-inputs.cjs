@@ -13,7 +13,7 @@ assert.equal(link.trustedContactUrl('SML-0123ABCD'), 'safemelink://connect?token
 for (const bad of [null, [], 'SML-ZZZZZZZZ', 'SML-123', 'https://evil', 'SML-0123ABCD&x=1']) assert.equal(link.parseTrustedContactToken(bad),null);
 const screen = fs.readFileSync('screens/TrustedContactsScreen.tsx','utf8');
 assert.match(screen,/setLinkCode\(valid \?\? ''\)/); assert.match(screen,/onPress=\{\(\) => void sendLinkRequest\(\)\}/);
-assert.doesNotMatch(screen.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[token\]\)/)[0],/sendRequest|sendLinkRequest/);
+assert.doesNotMatch(screen.match(/useEffect\(\(\) => \{\s*const valid = parseTrustedContactToken[\s\S]*?\}, \[token, userId\]\)/)[0],/sendRequest|sendLinkRequest/);
 const picker = fs.readFileSync('components/ContactPickerButton.tsx','utf8');
 for (const required of ['canAskAgain','requestPermissionsAsync','presentContactPickerAsync','phoneNumbers','active.current','Annulla','onPick']) assert.ok(picker.includes(required));
 assert.doesNotMatch(picker,/console\.|getContactsAsync|setItem/);

@@ -64,10 +64,11 @@ export const SOSAutomaticSmsService = {
 
   async requestAuthorization(userId: string) {
     if (!this.isSupported()) {
-      return { consent: false, permission: false, supported: false };
+      return { consent: false, permission: false, supported: false, permanentlyDenied: false };
     }
     await SOSAutomaticSmsStorage.setConsent(userId, true);
-    const permission = await PermissionsAndroid.request(
+    const permission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS)
+      ? PermissionsAndroid.RESULTS.GRANTED : await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.SEND_SMS,
       {
         title: 'SMS di emergenza',
@@ -78,7 +79,8 @@ export const SOSAutomaticSmsService = {
       },
     );
     const granted = permission === PermissionsAndroid.RESULTS.GRANTED;
-    return { consent: true, permission: granted, supported: true };
+    return { consent: true, permission: granted, supported: true,
+      permanentlyDenied: permission === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN };
   },
 
   async revokeAuthorization(userId: string) {

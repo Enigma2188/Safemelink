@@ -467,6 +467,7 @@ export function NeighborhoodNetworkScreen() {
                 <Text style={styles.itemMeta}>
                   {isAdmin ? 'Amministratore' : 'Membro'} · {data.network.member_count} membri
                 </Text>
+                {isAdmin ? <PrimaryButton disabled={busy} label="INVITA UN VICINO" onPress={() => setActiveTab('invites')} /> : null}
               </View>
 
               {activeTab !== 'chat' ? <Pressable accessibilityRole="button" onPress={() => setActiveTab('chat')} style={styles.backToChat}><Ionicons color="#3656A3" name="arrow-back" size={18} /><Text style={styles.backToChatText}>Torna alle discussioni</Text></Pressable> : null}

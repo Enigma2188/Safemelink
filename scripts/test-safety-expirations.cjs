@@ -280,7 +280,7 @@ async function main() {
       '@/modules/safemelink-safety': { SafeMeLinkSafety: { canScheduleExactAlarms: () => allowed,
         armDeadlines: async () => { armed += 1; return true; } } },
       '@/services/SafetyOperation': { SafetyOperationError: class extends Error {}, reportSafetyError() {}, withSafetyTimeout: async (p) => p },
-      '@/services/OperationalNotificationChannels': { ensureOperationalChannel: async () => {}, SAFETY_NOTIFICATION_CHANNEL_ID: 'safety-checks', warnSilentOperationalChannel() {} },
+      '@/services/OperationalNotificationChannels': { ensureOperationalChannel: async () => ({ importance: 4, sound: 'default' }), SAFETY_NOTIFICATION_CHANNEL_ID: 'safety-checks', openOperationalChannelSettings: async () => {} },
     };
     vm.runInNewContext(code, { exports, require: (name) => modules[name], Date, console });
     await assert.rejects(exports.SafetyNotifications.scheduleConfirmation('session', 'checkpoint', new Date(1_060_000).toISOString()));

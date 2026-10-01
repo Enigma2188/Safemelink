@@ -122,6 +122,20 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   assert.equal(f.pendingTimers, 0);
 
   const manualOff = fixture();
+  const repeated = fixture();
+  await repeated.advance(250);
+  for (let cycle = 0; cycle < 20; cycle++) {
+    repeated.enable(); await repeated.advance(300);
+    assert.equal(repeated.status, 'listening');
+    repeated.disable(); repeated.events.start(); repeated.events.end();
+    repeated.appState('background'); repeated.appState('active');
+    repeated.runtime.notifySOSClosed('account-A');
+    await repeated.advance(2_000);
+    assert.equal(repeated.status, 'off');
+    assert.equal(repeated.starts, cycle + 1);
+    assert.equal(repeated.pendingTimers, 0);
+  }
+  repeated.unmount(); await repeated.advance(300);
   await manualOff.advance(250); manualOff.enable(); await manualOff.advance(300);
   manualOff.events.error({ error: 'network' });
   manualOff.stopWithStaleSettings();

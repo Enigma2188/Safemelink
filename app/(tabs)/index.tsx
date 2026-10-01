@@ -8,6 +8,7 @@ import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, 
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
+import { SafetyNotifications } from '@/services/SafetyNotifications';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { HomeQuickActions } from '@/components/HomeQuickActions';
@@ -315,14 +316,18 @@ export default function HomeScreen() {
   const userId = session?.user.id ?? null;
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   useEffect(() => {
+    let disposed = false;
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && Platform.OS === 'android' && SafeMeLinkSafety) {
+      if (state === 'active' && Platform.OS === 'android' && SafeMeLinkSafety && userId) {
         // Recheck after returning from settings; never auto-arm a safety session.
-        try { SafeMeLinkSafety.canScheduleExactAlarms(); } catch { /* Rechecked again at explicit activation. */ }
+        void Promise.all([SafetyNotificationPreferenceStorage.get(userId), SafetyNotifications.configure(false)])
+          .then(([enabled, ready]) => {
+            if (!disposed) setSafetyError(enabled && ready ? '' : 'Checkpoint/Torno a casa: avvisi non pronti. Premi Avvia per completare le autorizzazioni.');
+          }).catch(() => { if (!disposed) setSafetyError('Verifica degli avvisi non riuscita. Riprova prima di avviare un controllo.'); });
       }
     });
-    return () => subscription.remove();
-  }, []);
+    return () => { disposed = true; subscription.remove(); };
+  }, [userId]);
   const [safetyError, setSafetyError] = useState('');
   const safetyOwnerRef = useRef<string | null>(null);
   const manualArmRef = useRef<Promise<unknown> | null>(null);
@@ -1067,9 +1072,8 @@ export default function HomeScreen() {
       return false;
     }
     preventiveStartInFlightRef.current = true;
-    const startedAtMs = Date.now();
-    const startedAt = new Date(startedAtMs).toISOString();
-    const expiresAt = new Date(startedAtMs + minutes * 60_000).toISOString();
+    let startedAt = '';
+    let expiresAt = '';
 
     try {
       await withSafetyTimeout(checkpointStorageQueueRef.current, 'checkpoint_storage_queue');
@@ -1081,7 +1085,13 @@ export default function HomeScreen() {
       }
       const notificationsReady = await SafetyExpirationService.configureNotifications();
       if (checkpointOperationGenerationRef.current !== operationGeneration || activeUserIdRef.current !== userId) return false;
-      if (!notificationsReady) setSafetyError('Avvisi sonori non disponibili. Controlla le notifiche nelle impostazioni Android.');
+      if (!notificationsReady) {
+        setSafetyError('Checkpoint non avviato: completa le autorizzazioni e verifica il suono del canale, poi riprova.');
+        return false;
+      }
+      const startedAtMs = Date.now();
+      startedAt = new Date(startedAtMs).toISOString();
+      expiresAt = new Date(startedAtMs + minutes * 60_000).toISOString();
       const saveOperation = checkpointStorageQueueRef.current.then(() => CheckpointStorage.saveActive(userId, {
         active: true,
         durationMinutes: minutes,
@@ -1520,6 +1530,13 @@ export default function HomeScreen() {
                 }
                 operationGeneration = goHomeOperationGenerationRef.current + 1;
                 goHomeOperationGenerationRef.current = operationGeneration;
+                const notificationsReady = await SafetyExpirationService.configureNotifications();
+                if (activeUserIdRef.current !== actionUserId || goHomeOperationGenerationRef.current !== operationGeneration ||
+                    goHomeEstimateGenerationRef.current !== requestGeneration) return;
+                if (!notificationsReady) {
+                  setSafetyError('Torno a casa non avviato: completa le autorizzazioni e verifica il suono del canale, poi riprova.');
+                  return;
+                }
                 const startedAtMs = Date.now();
                 const startedAt = new Date(startedAtMs).toISOString();
                 const expiresAt = new Date(
@@ -1554,8 +1571,6 @@ export default function HomeScreen() {
                 goHomeStorageQueueRef.current = saveOperation
                   .then(() => undefined)
                   .catch(() => {});
-                const notificationsReady = await SafetyExpirationService.configureNotifications();
-                if (!notificationsReady) setSafetyError('Avvisi sonori non disponibili. Controlla le notifiche nelle impostazioni Android.');
                 await withSafetyTimeout(saveOperation, 'go_home_storage');
                 await SafetyExpirationService.schedule(
                   actionUserId,
@@ -2896,6 +2911,10 @@ export default function HomeScreen() {
               <Text style={styles.secondaryActionText}>
                 {homeLocation ? 'Modifica casa' : 'Imposta casa'}
               </Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" style={styles.secondaryActionButton}
+              onPress={() => router.push('/destination-address' as Href)}>
+              <Text style={styles.secondaryActionText}>INSERISCI INDIRIZZO</Text>
             </Pressable>
             <Pressable
               disabled={goHomeStatus === 'estimating'}

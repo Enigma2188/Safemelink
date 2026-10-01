@@ -133,6 +133,8 @@ export default function VoiceProtectionScreen() {
   const refreshGenerationRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const activationInFlightRef = useRef(false);
+  const activationCancellationRef = useRef(0);
+  const deactivationInFlightRef = useRef(false);
   const settingsRefreshPendingRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -211,7 +213,7 @@ export default function VoiceProtectionScreen() {
         storedSettings.expiresAt !== null &&
         new Date(storedSettings.expiresAt).getTime() <= Date.now();
       const shouldReconcileStoppedState =
-        storedSettings.enabled && (hasExpired || !VoiceProtectionService.isRunning());
+        storedSettings.enabled && (hasExpired || !VoiceProtectionService.isRunning() || VoiceProtectionRuntime.isRecognitionStopped(userId));
       const reconciledSettings: VoiceProtectionSettings = shouldReconcileStoppedState
         ? {
             ...storedSettings,
@@ -440,7 +442,7 @@ export default function VoiceProtectionScreen() {
   };
 
   const activateProtection = async () => {
-    if (activationInFlightRef.current) {
+    if (activationInFlightRef.current || deactivationInFlightRef.current) {
       return;
     }
     if (!userId) {
@@ -467,9 +469,14 @@ export default function VoiceProtectionScreen() {
     setIsSaving(true);
     setMessage('');
     setActivationFeedback('Avvio della protezione in corso…');
+    const activationGeneration = activationCancellationRef.current;
+    const assertActivationCurrent = () => {
+      if (activationCancellationRef.current !== activationGeneration) throw new Error('Attivazione annullata.');
+    };
 
     try {
       const recognitionReadiness = await VoiceProtectionService.getRecognitionReadiness('it-IT');
+      assertActivationCurrent();
       if (recognitionReadiness !== 'ready' && recognitionReadiness !== 'model_status_unknown') {
         const feedback = voiceReadinessMessage(recognitionReadiness);
         setItalianModelDownloadRequired(recognitionReadiness === 'italian_model_missing');
@@ -479,6 +486,7 @@ export default function VoiceProtectionScreen() {
       }
 
       const permissions = await VoiceProtectionService.requestPermissions();
+      assertActivationCurrent();
       if (!permissions.microphoneGranted) {
         const feedback =
           'Permesso microfono non concesso. La protezione non è stata attivata.';
@@ -505,6 +513,7 @@ export default function VoiceProtectionScreen() {
         return;
       }
       const locationPermission = await Location.requestForegroundPermissionsAsync();
+      assertActivationCurrent();
       if (locationPermission.status !== 'granted') {
         const feedback =
           'Autorizza la posizione per consentire alla protezione di completare un SOS.';
@@ -518,6 +527,7 @@ export default function VoiceProtectionScreen() {
         userId,
         settings.durationMinutes,
       );
+      assertActivationCurrent();
       if (!VoiceProtectionService.isRunning()) {
         await VoiceProtectionService.stop().catch(() => {});
         const feedback =
@@ -578,11 +588,14 @@ export default function VoiceProtectionScreen() {
       }
 
       const recognitionStarted = VoiceProtectionRuntime.waitForRecognitionStart(userId, 8_000);
+      assertActivationCurrent();
       VoiceProtectionRuntime.allowRecognitionStart(userId);
       refreshGenerationRef.current += 1;
       setItalianModelDownloadRequired(false);
       VoiceProtectionRuntime.notifySettingsChanged(userId);
-      if (!(await recognitionStarted) || !VoiceProtectionService.isRunning() ||
+      const didStart = await recognitionStarted;
+      assertActivationCurrent();
+      if (!didStart || !VoiceProtectionService.isRunning() ||
         VoiceProtectionRuntime.getRecognitionState(userId) !== 'listening') {
         const inactiveSettings: VoiceProtectionSettings = {
           ...activeSettings,
@@ -611,6 +624,11 @@ export default function VoiceProtectionScreen() {
     } catch {
       VoiceProtectionRuntime.requestRecognitionStop(userId);
       await VoiceProtectionService.stop().catch(() => {});
+      if (activationCancellationRef.current !== activationGeneration) {
+        await VoiceProtectionStorage.save(userId, { ...settingsRef.current, enabled: false, enabledAt: null, expiresAt: null }).catch(() => {});
+        setMicrophoneState('off');
+        return;
+      }
       const feedback =
         'Il servizio di protezione non si è avviato. Controlla i permessi e riprova.';
       setMicrophoneState('error');
@@ -627,28 +645,34 @@ export default function VoiceProtectionScreen() {
   };
 
   const deactivateProtection = async () => {
-    if (!userId || activationInFlightRef.current) {
+    if (!userId) {
       return;
     }
 
+    activationCancellationRef.current += 1;
+    VoiceProtectionRuntime.requestRecognitionStop(userId);
+    if (deactivationInFlightRef.current) return;
+    deactivationInFlightRef.current = true;
+    const wasActivating = activationInFlightRef.current;
     activationInFlightRef.current = true;
     refreshGenerationRef.current += 1;
     setIsSaving(true);
     setActivationFeedback('Arresto della protezione in corso…');
+    const inactiveSettings: VoiceProtectionSettings = {
+      ...settingsRef.current, enabled: false, enabledAt: null, expiresAt: null,
+    };
+    // OFF is authoritative before native teardown or persistence can settle.
+    settingsRef.current = inactiveSettings;
+    setSettings(inactiveSettings);
+    setMicrophoneState('off');
     try {
-      VoiceProtectionRuntime.requestRecognitionStop(userId);
-      await VoiceProtectionService.stop();
-      const inactiveSettings: VoiceProtectionSettings = {
-        ...settings,
-        enabled: false,
-        enabledAt: null,
-        expiresAt: null,
-      };
-      await runWithTimeout(
+      const results = await Promise.allSettled([VoiceProtectionService.stop(), runWithTimeout(
         VoiceProtectionStorage.save(userId, inactiveSettings),
         VOICE_SETTINGS_SAVE_TIMEOUT_MS,
         'Il salvataggio locale non risponde. Riprova.',
-      );
+      )]);
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
       refreshGenerationRef.current += 1;
       setSettings(inactiveSettings);
       setMicrophoneState('off');
@@ -656,7 +680,7 @@ export default function VoiceProtectionScreen() {
       setActivationFeedback('Protezione disattivata. Puoi riattivarla quando vuoi.');
       setMessage('Protezione disattivata.');
     } catch (error) {
-      setMicrophoneState('error');
+      setMicrophoneState('off');
       setActivationFeedback('Disattivazione non completata. Riprova: l’ascolto è stato interrotto.');
       setMessage(
         error instanceof Error
@@ -664,8 +688,11 @@ export default function VoiceProtectionScreen() {
           : 'Impossibile disattivare Protezione Vocale.',
       );
     } finally {
-      activationInFlightRef.current = false;
-      setIsSaving(false);
+      if (!wasActivating) {
+        activationInFlightRef.current = false;
+        setIsSaving(false);
+      }
+      deactivationInFlightRef.current = false;
       if (settingsRefreshPendingRef.current) {
         settingsRefreshPendingRef.current = false;
         void refreshState(false);
@@ -809,6 +836,10 @@ export default function VoiceProtectionScreen() {
               value={settings.enabled}
             />
           </View>
+          {isSaving && activationInFlightRef.current ? <Pressable accessibilityRole="button"
+            onPress={() => void deactivateProtection()} style={{ padding: 14, minHeight: 48 }}>
+            <Text style={styles.cardDescription}>DISATTIVA ORA</Text>
+          </Pressable> : null}
 
           {toggleUnavailableFeedback || activationFeedback || recognitionState === 'error' || settings.enabled ? (
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>

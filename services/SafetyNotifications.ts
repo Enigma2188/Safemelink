@@ -2,7 +2,7 @@ import * as Notifications from 'expo-notifications';
 import { Linking, Platform } from 'react-native';
 import { reportSafetyError, SafetyOperationError, withSafetyTimeout } from '@/services/SafetyOperation';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
-import { ensureOperationalChannel, SAFETY_NOTIFICATION_CHANNEL_ID, warnSilentOperationalChannel } from '@/services/OperationalNotificationChannels';
+import { ensureOperationalChannel, SAFETY_NOTIFICATION_CHANNEL_ID, openOperationalChannelSettings } from '@/services/OperationalNotificationChannels';
 
 const CHANNEL_ID = SAFETY_NOTIFICATION_CHANNEL_ID;
 const identifierFor = (sessionId: string) => `safety-${sessionId}-confirm`;
@@ -31,8 +31,11 @@ export const SafetyNotifications = {
     const startedAt = Date.now();
     this.checkExactAlarmPermission();
     try {
-      await ensureOperationalChannel(CHANNEL_ID, 'Verifiche di sicurezza', Notifications.AndroidImportance.HIGH);
+      const channel = await ensureOperationalChannel(CHANNEL_ID, 'Verifiche di sicurezza', Notifications.AndroidImportance.HIGH);
       if (Platform.OS === 'android') {
+        if (!channel || channel.importance < Notifications.AndroidImportance.HIGH || !channel.sound) {
+          throw new SafetyOperationError('notification_channel_silent');
+        }
         if (!nativeGeneration || !SafeMeLinkSafety) throw new SafetyOperationError('native_deadline_missing');
         const permission = await withSafetyTimeout(Notifications.getPermissionsAsync(), 'notification_permission');
         if (!permission.granted) throw new SafetyOperationError('notification_permission');
@@ -69,15 +72,32 @@ export const SafetyNotifications = {
     } catch { reportSafetyError('local_notification_cancel'); }
   },
 
-  async configure() {
+  async configure(interactive = true) {
     if (Platform.OS === 'android') {
       const channel = await ensureOperationalChannel(CHANNEL_ID, 'Verifiche di sicurezza', Notifications.AndroidImportance.HIGH);
-      warnSilentOperationalChannel(CHANNEL_ID, channel);
+      if (!channel || channel.importance < Notifications.AndroidImportance.HIGH || !channel.sound) {
+        if (interactive) await openOperationalChannelSettings(CHANNEL_ID);
+        return false;
+      }
     }
-    const permission = await withSafetyTimeout(Notifications.getPermissionsAsync(), 'notification_permission');
-    if (permission.granted) return true;
-    const requested = await withSafetyTimeout(Notifications.requestPermissionsAsync(), 'notification_permission');
-    return requested.granted;
+    let permission = await withSafetyTimeout(Notifications.getPermissionsAsync(), 'notification_permission');
+    if (!permission.granted && interactive) {
+      if (permission.canAskAgain) {
+        await withSafetyTimeout(Notifications.requestPermissionsAsync(), 'notification_permission');
+        permission = await withSafetyTimeout(Notifications.getPermissionsAsync(), 'notification_permission');
+      } else {
+        await Linking.openSettings();
+      }
+    }
+    if (!permission.granted) return false;
+    if (Platform.OS === 'android') {
+      if (!SafeMeLinkSafety) return false;
+      if (!SafeMeLinkSafety.canScheduleExactAlarms()) {
+        if (interactive) this.checkExactAlarmPermission();
+        return false;
+      }
+    }
+    return true;
   },
 
   async show(sessionId: string, kind: string, failed = false) {

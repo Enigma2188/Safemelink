@@ -2,6 +2,8 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
+  Linking,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -46,10 +48,6 @@ export function TrustedContactsScreen() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [publicCode, setPublicCode] = useState<string | null>(null);
   const [linkCode, setLinkCode] = useState('');
-  useEffect(() => {
-    const valid = parseTrustedContactToken(token);
-    if (token !== undefined) setLinkCode(valid ?? '');
-  }, [token]);
   const [requests, setRequests] = useState<TrustedLinkRequest[]>([]);
   const [showQr, setShowQr] = useState(false);
   const [linkActionPending, setLinkActionPending] = useState(false);
@@ -175,6 +173,11 @@ export function TrustedContactsScreen() {
     setSmsAuthorizationPending(false);
   }, [userId]);
 
+  useEffect(() => {
+    const valid = parseTrustedContactToken(token);
+    if (token !== undefined) setLinkCode(valid ?? '');
+  }, [token, userId]);
+
   useFocusEffect(
     useCallback(() => {
       isFocusedRef.current = true;
@@ -213,6 +216,8 @@ export function TrustedContactsScreen() {
         Alert.alert(
           'SMS automatici non attivi',
           'Il permesso SMS non è stato concesso. SafeMeLink userà il composer SMS come fallback.',
+          state.permanentlyDenied ? [{ text: 'Non ora', style: 'cancel' },
+            { text: 'Apri impostazioni', onPress: () => { void Linking.openSettings().catch(() => {}); } }] : [{ text: 'OK' }],
         );
       }
     } catch {
@@ -225,6 +230,13 @@ export function TrustedContactsScreen() {
       }
     }
   };
+
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active' && isFocusedRef.current) void loadSmsAuthorization();
+    });
+    return () => listener.remove();
+  }, [loadSmsAuthorization]);
 
   const resetForm = () => {
     setForm(emptyForm);
@@ -260,6 +272,15 @@ export function TrustedContactsScreen() {
       ) {
         setContacts(nextContacts);
         resetForm();
+        if (!editingId && contacts.length === 0 && nextContacts.length > 0 && !smsConsent && smsSupported) {
+          Alert.alert('Invio automatico SOS',
+            'SafeMeLink può inviare automaticamente un SMS ai contatti fidati quando attivi un SOS. Possono applicarsi i costi del tuo operatore.', [
+              { text: 'NON ORA', style: 'cancel' },
+              { text: 'ATTIVA INVIO AUTOMATICO', onPress: () => {
+                if (activeUserIdRef.current === actionUserId && isFocusedRef.current) void setAutomaticSmsEnabled(true);
+              } },
+            ]);
+        }
       }
     } catch (error) {
       if (
@@ -660,9 +681,9 @@ export function TrustedContactsScreen() {
                 {showQr ? 'Nascondi QR' : 'Mostra QR'}
               </Text>
             </Pressable>
-            {showQr && (
+            {showQr && trustedContactUrl(publicCode) && (
               <View style={styles.qrContainer}>
-                <QRCode value={trustedContactUrl(publicCode) || publicCode} size={190} />
+                <QRCode value={trustedContactUrl(publicCode)} size={190} />
               </View>
             )}
           </>
@@ -752,7 +773,7 @@ export function TrustedContactsScreen() {
           <View style={styles.smsConsentCopy}>
             <Text style={styles.sectionTitle}>SMS automatici di emergenza</Text>
             <Text style={styles.sectionHelp}>
-              {smsAuthorizationPending ? 'Verifica in corso…' : smsConsent && smsPermission ? 'Stato: attivi' : 'Stato: non attivi'}
+              {smsAuthorizationPending ? 'Verifica in corso…' : smsConsent && smsPermission ? 'SMS automatici attivi' : 'SMS automatici NON ATTIVI'}
             </Text>
             <Text style={styles.sectionHelp}>
               Con il tuo consenso, SafeMeLink invia direttamente un SMS ai numeri fidati quando parte un SOS.
@@ -766,9 +787,12 @@ export function TrustedContactsScreen() {
           <Switch
             disabled={!userId || smsAuthorizationPending || !smsSupported}
             onValueChange={(value) => void setAutomaticSmsEnabled(value)}
-            value={smsConsent}
+            value={smsConsent && smsPermission}
           />
         </View>
+        {smsSupported && !(smsConsent && smsPermission) ? <Pressable accessibilityRole="button"
+          disabled={!userId || smsAuthorizationPending} style={styles.primaryButton}
+          onPress={() => void setAutomaticSmsEnabled(true)}><Text style={styles.primaryButtonText}>ATTIVA INVIO AUTOMATICO</Text></Pressable> : null}
       </View>
 
       <View style={styles.section}>
