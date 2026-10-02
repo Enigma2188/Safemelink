@@ -1211,7 +1211,51 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
     sosAutomaticSmsService,
     /SOSAutomaticSmsStorage\.setConsent\(userId, true\)[\s\S]*PermissionsAndroid\.request/,
   );
-  assert.match(contactsScreen, /value=\{smsConsent\}/);
+  // Check the boolean contract, independently of JSX whitespace or operand order.
+  const ts = require('typescript');
+  const source = ts.createSourceFile('TrustedContactsScreen.tsx', contactsScreen,
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const switchValues = [];
+  const visit = (node) => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'Switch') {
+      const value = node.attributes.properties.find(attribute =>
+        ts.isJsxAttribute(attribute) && attribute.name.getText(source) === 'value');
+      if (value?.initializer && ts.isJsxExpression(value.initializer)) {
+        switchValues.push(value.initializer.expression);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  const smsValue = switchValues.filter(expression => expression &&
+    /\bsmsConsent\b/.test(expression.getText(source)));
+  assert.equal(smsValue.length, 1, 'Expected one automatic SMS status control.');
+  const evaluate = (node, values) => {
+    if (ts.isParenthesizedExpression(node)) return evaluate(node.expression, values);
+    if (ts.isIdentifier(node) && Object.hasOwn(values, node.text)) return values[node.text];
+    if (ts.isBinaryExpression(node)) {
+      const left = evaluate(node.left, values);
+      const right = evaluate(node.right, values);
+      if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return left && right;
+      if (node.operatorToken.kind === ts.SyntaxKind.BarBarToken) return left || right;
+    }
+    throw new Error('Review changed automatic SMS status expression.');
+  };
+  for (const smsConsent of [false, true]) {
+    for (const smsPermission of [false, true]) {
+      assert.equal(evaluate(smsValue[0], { smsConsent, smsPermission }), smsConsent && smsPermission,
+        'SMS must appear active only with explicit consent AND OS permission.');
+    }
+  }
+  assert.match(contactsScreen, /onValueChange=\{\(value\) => void setAutomaticSmsEnabled\(value\)\}/);
+  assert.match(contactsScreen, /onPress=\{\(\) => void setAutomaticSmsEnabled\(true\)\}[^\n]*ATTIVA INVIO AUTOMATICO/);
+  assert.match(contactsScreen, /smsSupported && !\(smsConsent && smsPermission\)/);
+  assert.match(contactsScreen, /Con il tuo consenso/);
+  assert.match(contactsScreen, /smsConsent && smsPermission \? 'SMS automatici attivi' : 'SMS automatici NON ATTIVI'/);
+  assert.match(contactsScreen, /await SOSAutomaticSmsService\.requestAuthorization\(expectedUserId\)/);
+  assert.match(contactsScreen, /setSmsConsent\(state\.consent\)/);
+  assert.match(contactsScreen, /setSmsPermission\(state\.permission\)/);
+  assert.doesNotMatch(contactsScreen, /setSmsConsent\(true\)|setSmsPermission\(true\)/);
   assert.match(sosAutomaticSmsService, /getDeliveryTargets/);
   assert.match(
     sosAutomaticSmsService,
