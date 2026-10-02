@@ -666,6 +666,49 @@ export function TrustedContactsScreen() {
           La tua cerchia personale, separata dalla rete generale SafeMeLink.
         </Text>
       </View>
+      <ContactPickerButton key={userId ?? 'signed-out'} disabled={!userId || contactActionPending}
+        onPick={(name, phone) => setForm((current) => ({ ...current, name, phone }))} />
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
+        <Text style={styles.sectionHelp}>
+          Usa il numero completo di prefisso internazionale (per esempio +39). Il numero viene
+          sincronizzato per il canale SMS, ma non collega un account SafeMeLink.
+        </Text>
+        <TextInput
+          editable={!contactActionPending}
+          style={styles.input}
+          placeholder="Nome"
+          placeholderTextColor="#687076"
+          value={form.name}
+          onChangeText={(name) => setForm((current) => ({ ...current, name }))}
+        />
+        <Text style={styles.channelLabel}>Canale locale: SMS</Text>
+        <TextInput
+          editable={!contactActionPending}
+          style={styles.input}
+          placeholder="Numero internazionale (es. +39...)"
+          placeholderTextColor="#687076"
+          keyboardType="phone-pad"
+          value={form.phone}
+          onChangeText={(phone) => setForm((current) => ({ ...current, phone }))}
+        />
+        <Pressable
+          disabled={contactActionPending}
+          style={[styles.primaryButton, contactActionPending && styles.disabledButton]}
+          onPress={saveContact}>
+          <Text style={styles.primaryButtonText}>
+            {editingId ? 'Salva modifiche' : 'Aggiungi contatto'}
+          </Text>
+        </Pressable>
+        {editingId && (
+          <Pressable
+            disabled={contactActionPending}
+            style={styles.secondaryButton}
+            onPress={resetForm}>
+            <Text style={styles.secondaryButtonText}>Annulla modifica</Text>
+          </Pressable>
+        )}
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Il mio codice SafeMeLink</Text>
@@ -795,49 +838,6 @@ export function TrustedContactsScreen() {
           onPress={() => void setAutomaticSmsEnabled(true)}><Text style={styles.primaryButtonText}>ATTIVA INVIO AUTOMATICO</Text></Pressable> : null}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
-        <ContactPickerButton key={userId ?? 'signed-out'} disabled={!userId || contactActionPending}
-          onPick={(name, phone) => setForm((current) => ({ ...current, name, phone }))} />
-        <Text style={styles.sectionHelp}>
-          Usa il numero completo di prefisso internazionale (per esempio +39). Il numero viene
-          sincronizzato per il canale SMS, ma non collega un account SafeMeLink.
-        </Text>
-        <TextInput
-          editable={!contactActionPending}
-          style={styles.input}
-          placeholder="Nome"
-          placeholderTextColor="#687076"
-          value={form.name}
-          onChangeText={(name) => setForm((current) => ({ ...current, name }))}
-        />
-        <Text style={styles.channelLabel}>Canale locale: SMS</Text>
-        <TextInput
-          editable={!contactActionPending}
-          style={styles.input}
-          placeholder="Numero internazionale (es. +39...)"
-          placeholderTextColor="#687076"
-          keyboardType="phone-pad"
-          value={form.phone}
-          onChangeText={(phone) => setForm((current) => ({ ...current, phone }))}
-        />
-        <Pressable
-          disabled={contactActionPending}
-          style={[styles.primaryButton, contactActionPending && styles.disabledButton]}
-          onPress={saveContact}>
-          <Text style={styles.primaryButtonText}>
-            {editingId ? 'Salva modifiche' : 'Aggiungi contatto'}
-          </Text>
-        </Pressable>
-        {editingId && (
-          <Pressable
-            disabled={contactActionPending}
-            style={styles.secondaryButton}
-            onPress={resetForm}>
-            <Text style={styles.secondaryButtonText}>Annulla modifica</Text>
-          </Pressable>
-        )}
-      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Contatti salvati ({contacts.length})</Text>

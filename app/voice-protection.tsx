@@ -11,7 +11,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native';
@@ -826,19 +825,16 @@ export default function VoiceProtectionScreen() {
                   : 'NON ATTIVA'}
               </Text>
             </View>
-            <Switch
-              disabled={Platform.OS !== 'android' || isSaving || !userId || (!settings.enabled && !settings.passphrase)}
-              onValueChange={(enabled) =>
-                void (enabled ? activateProtection() : deactivateProtection())
-              }
-              thumbColor="#F7FAFF"
-              trackColor={{ false: '#33405F', true: '#7868FF' }}
-              value={settings.enabled}
-            />
+            <Pressable accessibilityRole="button" accessibilityLabel="Disattiva protezione vocale"
+              disabled={!userId || Platform.OS !== 'android'}
+              onPress={() => void deactivateProtection()} style={{ padding: 16, minHeight: 48, backgroundColor: '#33405F', borderRadius: 12 }}>
+              <Text style={styles.cardDescription}>OFF · DISATTIVA</Text>
+            </Pressable>
           </View>
-          {isSaving && activationInFlightRef.current ? <Pressable accessibilityRole="button"
-            onPress={() => void deactivateProtection()} style={{ padding: 14, minHeight: 48 }}>
-            <Text style={styles.cardDescription}>DISATTIVA ORA</Text>
+          {!settings.enabled ? <Pressable accessibilityRole="button"
+            disabled={isSaving || !userId || !settings.passphrase || Platform.OS !== 'android'}
+            onPress={() => void activateProtection()} style={{ padding: 16, minHeight: 48 }}>
+            <Text style={styles.cardDescription}>ON · ATTIVA PROTEZIONE</Text>
           </Pressable> : null}
 
           {toggleUnavailableFeedback || activationFeedback || recognitionState === 'error' || settings.enabled ? (

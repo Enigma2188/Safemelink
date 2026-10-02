@@ -9,6 +9,7 @@ import { Alert, Animated, AppState, BackHandler, Easing, Image, Linking, Modal, 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
 import { SafetyNotifications } from '@/services/SafetyNotifications';
+import { GoHomeDestination } from '@/services/GoHomeDestination';
 import type { SOSDeliveryResult } from '@/backend/functions/SOSPushService';
 import { SafeNetworkBackground } from '@/components/SafeNetworkBackground';
 import { HomeQuickActions } from '@/components/HomeQuickActions';
@@ -352,6 +353,11 @@ export default function HomeScreen() {
   const [checkpointConfirmSeconds, setCheckpointConfirmSeconds] = useState(CHECKPOINT_CONFIRM_SECONDS);
   const [checkpointExpiresAt, setCheckpointExpiresAt] = useState<string | null>(null);
   const [homeLocation, setHomeLocation] = useState<HomeLocation | null>(null);
+  const [destinationLabel, setDestinationLabel] = useState('');
+  useEffect(() => { GoHomeDestination.clear(); setDestinationLabel(''); }, [userId]);
+  useFocusEffect(useCallback(() => {
+    setDestinationLabel(userId ? GoHomeDestination.get(userId)?.label ?? '' : '');
+  }, [userId]));
   const [goHomeTransportMode, setGoHomeTransportMode] =
     useState<GoHomeTransportMode>('walking');
   const [goHomeStatus, setGoHomeStatus] = useState<GoHomeStatus>('idle');
@@ -1445,7 +1451,7 @@ export default function HomeScreen() {
     try {
       const actionUserId = userId;
       console.info('[TornoACasa] lettura casa salvata avviata');
-      const savedHomeLocation = await runGoHomeStepWithTimeout(
+      const savedHomeLocation = GoHomeDestination.get(actionUserId) ?? await runGoHomeStepWithTimeout(
         GoHomeStorage.getHomeLocation(actionUserId),
         GO_HOME_STORAGE_TIMEOUT_MS,
         'La lettura della posizione Casa non risponde. Riprova.',
@@ -1462,9 +1468,9 @@ export default function HomeScreen() {
       }
 
       if (!savedHomeLocation) {
-        setGoHomeError('Salva prima la posizione Casa.');
+        setGoHomeError('Scegli una destinazione: inserisci un indirizzo oppure usa Casa.');
         setGoHomeErrorAction(null);
-        Alert.alert('Torno a casa', 'Salva prima la posizione Casa.');
+        Alert.alert('Torno a casa', 'Scegli una destinazione con INSERISCI INDIRIZZO, oppure imposta Casa.');
         return;
       }
 
@@ -1605,6 +1611,9 @@ export default function HomeScreen() {
                 );
                 setGoHomeConfirmSeconds(GO_HOME_CONFIRM_SECONDS);
                 setGoHomeStatus('running');
+                // The temporary destination belongs to this trip only.
+                GoHomeDestination.clear();
+                setDestinationLabel('');
               } catch (error) {
                 if (pendingSession) {
                   await SafetyExpirationService.cancel(
@@ -2841,7 +2850,17 @@ export default function HomeScreen() {
       {activePanel === 'goHome' && (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Torno a casa</Text>
-        <Text style={styles.sectionDescription}>Sessione legata al tragitto verso la posizione Casa.</Text>
+        <Text style={styles.sectionDescription}>DESTINAZIONE</Text>
+        {destinationLabel ? <Text style={styles.goHomeHomeText}>{destinationLabel}</Text> : null}
+        {goHomeStatus === 'idle' ? <>
+          <Pressable accessibilityRole="button" style={styles.goHomeStartButton}
+            onPress={() => router.push('/destination-address' as Href)}>
+            <Text style={styles.goHomeStartText}>INSERISCI INDIRIZZO</Text>
+          </Pressable>
+          {homeLocation ? <Pressable style={styles.secondaryActionButton} onPress={() => { GoHomeDestination.clear(); setDestinationLabel('Casa salvata'); }}>
+            <Text style={styles.secondaryActionText}>USA CASA SALVATA</Text>
+          </Pressable> : null}
+        </> : null}
         {homeLocation ? (
           <Text style={styles.goHomeHomeText}>Casa salvata il {new Date(homeLocation.savedAt).toLocaleString()}</Text>
         ) : (
@@ -2911,10 +2930,6 @@ export default function HomeScreen() {
               <Text style={styles.secondaryActionText}>
                 {homeLocation ? 'Modifica casa' : 'Imposta casa'}
               </Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" style={styles.secondaryActionButton}
-              onPress={() => router.push('/destination-address' as Href)}>
-              <Text style={styles.secondaryActionText}>INSERISCI INDIRIZZO</Text>
             </Pressable>
             <Pressable
               disabled={goHomeStatus === 'estimating'}

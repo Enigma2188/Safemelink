@@ -124,12 +124,19 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   const manualOff = fixture();
   const repeated = fixture();
   await repeated.advance(250);
-  for (let cycle = 0; cycle < 20; cycle++) {
+  let seed = 42;
+  for (let cycle = 0; cycle < 100; cycle++) {
     repeated.enable(); await repeated.advance(300);
     assert.equal(repeated.status, 'listening');
-    repeated.disable(); repeated.events.start(); repeated.events.end();
-    repeated.appState('background'); repeated.appState('active');
-    repeated.runtime.notifySOSClosed('account-A');
+    repeated.disable();
+    const late = [() => repeated.events.start(), () => repeated.events.end(),
+      () => repeated.events.error({ error: 'network' }), () => repeated.appState('background'),
+      () => repeated.appState('active'), () => repeated.runtime.notifySOSClosed('account-A')];
+    for (let i = late.length - 1; i > 0; i--) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const j = seed % (i + 1); [late[i], late[j]] = [late[j], late[i]];
+    }
+    late.forEach(callback => callback());
     await repeated.advance(2_000);
     assert.equal(repeated.status, 'off');
     assert.equal(repeated.starts, cycle + 1);
