@@ -22,22 +22,21 @@ const candidateValidatorPath = path.join(
 
 assert.doesNotMatch(workflow, /\t/, 'Il workflow YAML contiene tab non valide.');
 assert.match(workflow, /^name:\s+.+$/m);
-assert.match(workflow, /^on:\s*\r?\n\s{2}workflow_dispatch:\s*\r?\n\s{4}inputs:\s*$/m);
-assert.match(workflow, /^\s{6}source_ref:\s*$/m);
-assert.match(workflow, /^\s{8}description:\s+Branch or commit SHA to build\s*$/m);
-assert.match(workflow, /^\s{8}required:\s+true\s*$/m);
-assert.match(workflow, /^\s{8}default:\s+main\s*$/m);
-assert.match(workflow, /^\s{8}type:\s+string\s*$/m);
-assert.match(workflow, /name:\s+Validate selected source ref/);
-assert.match(workflow, /source_ref is required and cannot be empty/);
+assert.match(workflow, /^on:\s*\r?\n\s{2}workflow_dispatch:\s*$/m);
+assert.doesNotMatch(workflow, /source_ref|inputs\.|default:\s*main/);
 assert.match(workflow, /name:\s+Checkout selected SafeMeLink source/);
-assert.match(workflow, /^\s{10}ref:\s+\$\{\{ inputs\.source_ref \}\}\s*$/m);
+assert.match(workflow, /^\s{10}ref:\s+\$\{\{ github\.sha \}\}\s*$/m);
 assert.match(workflow, /persist-credentials:\s+false/);
-assert.match(workflow, /name:\s+Verify checked out source/);
+assert.match(workflow, /name:\s+VERIFY CHECKED OUT SOURCE/);
 assert.match(workflow, /git rev-parse HEAD/);
-assert.match(workflow, /git rev-parse --verify "\$\{SOURCE_REF\}\^\{commit\}"/);
-assert.match(workflow, /refs\/remotes\/origin\/\$\{SOURCE_REF\}\^\{commit\}/);
-assert.match(workflow, /\[ "\$checked_out_sha" != "\$requested_sha" \]/);
+assert.match(workflow, /\[ "\$checked_out_sha" != "\$DISPATCH_SHA" \]; then\s+echo [^\n]+\s+exit 1/);
+for (const context of ['ref', 'ref_name', 'sha']) {
+  assert.ok(workflow.includes(`github.${context} }}`));
+}
+assert.match(workflow, /build_sha="\$\(git rev-parse --short HEAD\)"/);
+assert.match(workflow, /EXPO_PUBLIC_BUILD_SHA=\$build_sha" >> "\$GITHUB_ENV"/);
+assert.match(workflow, /EXPO_PUBLIC_BUILD_RUN=\$GITHUB_RUN_NUMBER/);
+assert.match(workflow, /EXPO_PUBLIC_BUILD_DATE=\$build_date/);
 assert.doesNotMatch(workflow, /test\/android-apk/);
 assert.match(workflow, /node scripts\/verify-android-test-candidate\.cjs/);
 assert.match(workflow, /^jobs:\s*$/m);
@@ -47,7 +46,7 @@ assert.equal(
   (workflow.match(/\}\}/g) ?? []).length,
   'Espressioni GitHub Actions non bilanciate.',
 );
-pass('struttura YAML e checkout del source_ref selezionato');
+pass('checkout univoco del dispatch, verifica SHA e fingerprint dal checkout reale');
 
 assert.doesNotMatch(workflow, /^\s{2}(push|pull_request|schedule):/m);
 assert.doesNotMatch(
@@ -66,7 +65,7 @@ assert.match(workflow, /ndk;27\.1\.12297006/);
 assert.match(workflow, /npm ci/);
 assert.match(workflow, /npx expo prebuild --platform android --clean --no-install/);
 assert.match(workflow, /node scripts\/validate-generated-android\.cjs/);
-assert.match(workflow, /\.\/gradlew :app:assembleRelease/);
+assert.match(workflow, /\.\/gradlew :app:createBundleReleaseJsAndAssets :app:assembleRelease --console=plain/);
 assert.doesNotMatch(workflow, /\beas\b/i);
 pass('toolchain e strategia prebuild/Gradle');
 

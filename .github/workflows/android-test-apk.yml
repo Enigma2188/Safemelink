@@ -2,12 +2,6 @@ name: Build SafeMeLink Android test APK
 
 on:
   workflow_dispatch:
-    inputs:
-      source_ref:
-        description: Branch or commit SHA to build
-        required: true
-        default: main
-        type: string
 
 permissions:
   contents: read
@@ -25,26 +19,22 @@ jobs:
       CI: "true"
 
     steps:
-      - name: Validate selected source ref
-        env:
-          SOURCE_REF: ${{ inputs.source_ref }}
-        run: |
-          if [ -z "${SOURCE_REF//[[:space:]]/}" ]; then
-            echo "::error::source_ref is required and cannot be empty."
-            exit 1
-          fi
-
       - name: Checkout selected SafeMeLink source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify checked out source
+      - name: VERIFY CHECKED OUT SOURCE
         env:
-          SOURCE_REF: ${{ inputs.source_ref }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
+          echo "github.ref=$DISPATCH_REF"
+          echo "github.ref_name=$DISPATCH_REF_NAME"
+          echo "github.sha=$DISPATCH_SHA"
           git rev-parse HEAD
           git branch --show-current
           git log -1 --oneline
@@ -52,19 +42,17 @@ jobs:
 
           checked_out_sha="$(git rev-parse HEAD)"
 
-          if requested_sha="$(git rev-parse --verify "${SOURCE_REF}^{commit}" 2>/dev/null)"; then
-            :
-          elif requested_sha="$(git rev-parse --verify "refs/remotes/origin/${SOURCE_REF}^{commit}" 2>/dev/null)"; then
-            :
-          else
-            echo "::error::Unable to resolve checked out source_ref: ${SOURCE_REF}."
+          if [ "$checked_out_sha" != "$DISPATCH_SHA" ]; then
+            echo "::error::Checked out commit differs from workflow dispatch SHA."
             exit 1
           fi
 
-          if [ "$checked_out_sha" != "$requested_sha" ]; then
-            echo "::error::Wrong Git revision checked out for source_ref: ${SOURCE_REF}."
-            exit 1
-          fi
+          build_sha="$(git rev-parse --short HEAD)"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "EXPO_PUBLIC_BUILD_SHA=$build_sha" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_BUILD_RUN=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_BUILD_DATE=$build_date" >> "$GITHUB_ENV"
+          echo "Build fingerprint: $build_sha / run $GITHUB_RUN_NUMBER / $build_date"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -166,7 +154,8 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee ../gradle-build.log
+          echo "Generate current release JS bundle, then assemble APK"
+          ./gradlew :app:createBundleReleaseJsAndAssets :app:assembleRelease --console=plain --no-daemon --stacktrace --warning-mode all 2>&1 | tee ../gradle-build.log
 
       - name: Prepare named APK artifact
         run: |

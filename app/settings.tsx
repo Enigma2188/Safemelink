@@ -173,6 +173,11 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <Pressable accessibilityRole="button" onPress={() => router.push('/how-safemelink-works' as Href)} style={styles.linkRow}><Text style={styles.linkText}>Come funziona SafeMeLink</Text><Text style={styles.chevron}>›</Text></Pressable>
           <Text style={styles.cardText}>{session ? 'Account connesso e impostazioni salvate sul dispositivo.' : 'Accedi per usare tutte le funzioni di sicurezza.'}</Text>
+          {Platform.OS === 'android' ? <View>
+            <Text selectable style={styles.cardText}>Build: {process.env.EXPO_PUBLIC_BUILD_SHA || 'non disponibile'}</Text>
+            {process.env.EXPO_PUBLIC_BUILD_RUN ? <Text style={styles.cardText}>Run: {process.env.EXPO_PUBLIC_BUILD_RUN}</Text> : null}
+            {process.env.EXPO_PUBLIC_BUILD_DATE ? <Text style={styles.cardText}>Data UTC: {process.env.EXPO_PUBLIC_BUILD_DATE}</Text> : null}
+          </View> : null}
         </View>
       </ScrollView>
     </SafeAreaView>
