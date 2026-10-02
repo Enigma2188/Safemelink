@@ -778,6 +778,8 @@ export default function VoiceProtectionScreen() {
   const showPermissionSettings =
     activationFeedback.startsWith('Permesso microfono non concesso') ||
     activationFeedback.startsWith('Autorizza le notifiche');
+  // Keep the working OFF handler reachable while native activation is pending.
+  const voiceCommandIsStop = settings.enabled || activationInFlightRef.current || deactivationInFlightRef.current;
 
   if (isInitializing || isLoading) {
     return (
@@ -825,15 +827,19 @@ export default function VoiceProtectionScreen() {
                   : 'NON ATTIVA'}
               </Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Disattiva protezione vocale"
-              disabled={!userId || Platform.OS !== 'android'}
-              onPress={() => void deactivateProtection()} style={{ padding: 16, minHeight: 48, backgroundColor: '#33405F', borderRadius: 12 }}>
+            {Platform.OS === 'android' ? <Pressable accessibilityRole="button" accessibilityLabel={voiceCommandIsStop ? 'Disattiva protezione vocale' : 'Attiva protezione vocale'}
+              disabled={!userId || Platform.OS !== 'android' || (!voiceCommandIsStop && (isSaving || !settings.passphrase))}
+              onPress={() => void (voiceCommandIsStop ? deactivateProtection() : activateProtection())}
+              style={{ padding: 16, minHeight: 48, flexShrink: 1, backgroundColor: '#33405F', borderRadius: 12 }}>
+              <Text style={[styles.cardDescription, { color: '#F7FAFF', textAlign: 'center' }]}>{voiceCommandIsStop ? 'DISATTIVA PROTEZIONE' : 'ATTIVA PROTEZIONE'}</Text>
+            </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Disattiva protezione vocale"
+              disabled onPress={() => void deactivateProtection()}
+              style={{ padding: 16, minHeight: 48, backgroundColor: '#33405F', borderRadius: 12 }}>
               <Text style={styles.cardDescription}>OFF · DISATTIVA</Text>
-            </Pressable>
+            </Pressable>}
           </View>
-          {!settings.enabled ? <Pressable accessibilityRole="button"
-            disabled={isSaving || !userId || !settings.passphrase || Platform.OS !== 'android'}
-            onPress={() => void activateProtection()} style={{ padding: 16, minHeight: 48 }}>
+          {Platform.OS !== 'android' && !settings.enabled ? <Pressable accessibilityRole="button"
+            disabled onPress={() => void activateProtection()} style={{ padding: 16, minHeight: 48 }}>
             <Text style={styles.cardDescription}>ON · ATTIVA PROTEZIONE</Text>
           </Pressable> : null}
 
@@ -916,7 +922,8 @@ export default function VoiceProtectionScreen() {
                 setPassphraseSaveFeedback(null);
               }}
               placeholder="Inserisci una parola o una breve frase"
-              placeholderTextColor="#667391"
+              placeholderTextColor={Platform.OS === 'android' ? '#A8B5D1' : '#667391'}
+              selectionColor={Platform.OS === 'android' ? '#45B7FF' : undefined}
               secureTextEntry={!passphraseVisible}
               style={styles.passphraseInput}
               value={passphraseDraft}
@@ -1159,6 +1166,12 @@ const styles = StyleSheet.create({
   },
   passphraseInput: {
     flex: 1,
+    ...(Platform.OS === 'android' ? {
+      color: '#F7FAFF',
+      fontSize: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+    } : {}),
     borderWidth: 0,
     backgroundColor: 'transparent',
     minHeight: 50,

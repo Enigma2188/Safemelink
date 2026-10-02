@@ -668,6 +668,16 @@ export function TrustedContactsScreen() {
       </View>
       <ContactPickerButton key={userId ?? 'signed-out'} disabled={!userId || contactActionPending}
         onPick={(name, phone) => setForm((current) => ({ ...current, name, phone }))} />
+      {Platform.OS === 'android' && contacts.length > 0 && !(smsConsent && smsPermission) ? (
+        <View style={styles.section}>
+          <Text accessibilityRole="header" style={styles.sectionTitle}>SMS AUTOMATICI NON ATTIVI</Text>
+          <Text style={styles.sectionHelp}>I tuoi contatti sono salvati. Per l’invio automatico servono il tuo consenso e il permesso SMS Android.</Text>
+          {smsSupported ? <Pressable accessibilityRole="button" disabled={!userId || smsAuthorizationPending}
+            style={styles.primaryButton} onPress={() => void setAutomaticSmsEnabled(true)}>
+            <Text style={styles.primaryButtonText}>{smsAuthorizationPending ? 'VERIFICA IN CORSO…' : 'ATTIVA SMS AUTOMATICI'}</Text>
+          </Pressable> : <Text style={styles.sectionHelp}>Invio automatico non disponibile su questo dispositivo. Il composer manuale resta disponibile.</Text>}
+        </View>
+      ) : null}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{editingId ? 'Modifica contatto' : 'Nuovo contatto'}</Text>
         <Text style={styles.sectionHelp}>
@@ -833,9 +843,9 @@ export function TrustedContactsScreen() {
             value={smsConsent && smsPermission}
           />
         </View>
-        {smsSupported && !(smsConsent && smsPermission) ? <Pressable accessibilityRole="button"
+        {smsSupported && contacts.length === 0 && !(smsConsent && smsPermission) ? <Pressable accessibilityRole="button"
           disabled={!userId || smsAuthorizationPending} style={styles.primaryButton}
-          onPress={() => void setAutomaticSmsEnabled(true)}><Text style={styles.primaryButtonText}>ATTIVA INVIO AUTOMATICO</Text></Pressable> : null}
+          onPress={() => void setAutomaticSmsEnabled(true)}><Text style={styles.primaryButtonText}>ATTIVA SMS AUTOMATICI</Text></Pressable> : null}
       </View>
 
 

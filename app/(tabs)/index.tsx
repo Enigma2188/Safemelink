@@ -16,7 +16,7 @@ import { HomeQuickActions } from '@/components/HomeQuickActions';
 import { useSOSNetworkPresence } from '@/components/SOSNetworkPresenceProvider';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { SOSLocalDeliveryResult } from '@/services/SOSAlertService';
-import type { SOSAutomaticSmsResult } from '@/services/SOSAutomaticSmsService';
+import { SOSAutomaticSmsService, type SOSAutomaticSmsResult } from '@/services/SOSAutomaticSmsService';
 import {
   INTERACTIVE_LOCATION_TIMEOUT_MS,
   LocationPermissionError,
@@ -116,7 +116,9 @@ const getSOSDeliveryNotice = (
         : automaticSmsResult.status === 'permission_required'
           ? 'Il permesso SMS non è disponibile; puoi inviarli manualmente dalla schermata SOS.'
           : automaticSmsResult.status === 'unavailable'
-            ? 'Nessun numero fidato valido è disponibile per l’invio automatico.'
+            ? Platform.OS !== 'android' || automaticSmsResult.reason === 'no_eligible_contacts'
+              ? 'Nessun numero fidato valido è disponibile per l’invio automatico.'
+              : 'Invio automatico SMS non disponibile su questo dispositivo.'
             : localResult.status === 'no_channel'
               ? 'Nessun canale SMS utilizzabile. Verifica i contatti fidati e le app disponibili.'
               : 'L’invio SMS non è disponibile per un problema tecnico.';
@@ -129,7 +131,9 @@ const getSOSDeliveryNotice = (
     result.reason === 'no_eligible_recipients' ||
     result.reason === 'no_linked_recipients'
   ) {
-    return `SOS attivo. Nessun contatto fidato o utente vicino della rete SafeMeLink risulta disponibile. ${fallbackNotice}`;
+    return Platform.OS === 'android'
+      ? `SOS attivo. Nessun destinatario risulta disponibile per le notifiche push SafeMeLink. Questo non indica l’assenza di contatti salvati per gli SMS. ${fallbackNotice}`
+      : `SOS attivo. Nessun contatto fidato o utente vicino della rete SafeMeLink risulta disponibile. ${fallbackNotice}`;
   }
 
   if (result.reason === 'recipients_without_active_tokens') {
@@ -335,6 +339,25 @@ export default function HomeScreen() {
   const [lastEvents, setLastEvents] = useState<SOSEvent[]>([]);
   const [activeEvent, setActiveEvent] = useState<ActiveSOSEvent | null>(null);
   const [pushDeliveryNotice, setPushDeliveryNotice] = useState<string | null>(null);
+  const [smsReadiness, setSmsReadiness] = useState<{ owner: string; ready: boolean } | null>(null);
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'android' || !userId) return;
+    let active = true;
+    let generation = 0;
+    const refresh = async () => {
+      const current = ++generation;
+      try {
+        const state = await SOSAutomaticSmsService.getAuthorizationState(userId);
+        if (active && current === generation) setSmsReadiness({ owner: userId, ready: state.supported && state.consent && state.permission });
+      } catch {
+        if (active && current === generation) setSmsReadiness(null);
+      }
+    };
+    setSmsReadiness(null);
+    void refresh();
+    const listener = AppState.addEventListener('change', state => { if (state === 'active') void refresh(); });
+    return () => { active = false; generation++; listener.remove(); };
+  }, [userId]));
   const [isEndingSOS, setIsEndingSOS] = useState(false);
   const [status, setStatus] = useState<SOSStatus>('idle');
   const [remainingSeconds, setRemainingSeconds] = useState(SAFETY_TIMER_SECONDS);
@@ -2629,15 +2652,32 @@ export default function HomeScreen() {
             </View>
           ) : null}
           {contacts.length > 0 ? (
+            <View>
+              {Platform.OS === 'android' ? <>
+                <Text style={styles.emergencyText}>
+                  {smsReadiness?.owner !== userId
+                    ? `Hai ${contacts.length} contatti fidati. Disponibilità degli SMS automatici da verificare.`
+                    : smsReadiness.ready
+                      ? `Hai ${contacts.length} contatti fidati. SMS automatici autorizzati; l’esito dell’invio è indicato separatamente.`
+                      : `Hai ${contacts.length} contatti fidati, ma gli SMS automatici non sono attivi. Puoi attivarli dai Contatti fidati.`}
+                </Text>
+                {smsReadiness?.owner === userId && !smsReadiness.ready ? <Link href={"/(tabs)/contacts" as any} asChild>
+                  <Pressable style={styles.shareButton}><Text style={styles.shareButtonText}>ATTIVA SMS AUTOMATICI</Text></Pressable>
+                </Link> : null}
+              </> : null}
             <Pressable style={styles.shareButton} onPress={shareActiveSOS}>
-              <Text style={styles.shareButtonText}>Invia di nuovo via SMS</Text>
+              <Text style={styles.shareButtonText}>{Platform.OS === 'android' ? 'Invia manualmente via SMS' : 'Invia di nuovo via SMS'}</Text>
             </Pressable>
+            </View>
           ) : (
+            <View>
+            {Platform.OS === 'android' ? <Text style={styles.emergencyText}>Nessun contatto fidato configurato</Text> : null}
             <Link href={"/(tabs)/contacts" as any} asChild>
               <Pressable style={styles.shareButton}>
                 <Text style={styles.shareButtonText}>AGGIUNGI CONTATTI FIDATI</Text>
               </Pressable>
             </Link>
+            </View>
           )}
           <Pressable
             style={[styles.stopButton, isEndingSOS && styles.disabledButton]}

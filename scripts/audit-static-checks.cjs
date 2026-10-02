@@ -1248,8 +1248,8 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
     }
   }
   assert.match(contactsScreen, /onValueChange=\{\(value\) => void setAutomaticSmsEnabled\(value\)\}/);
-  assert.match(contactsScreen, /onPress=\{\(\) => void setAutomaticSmsEnabled\(true\)\}[^\n]*ATTIVA INVIO AUTOMATICO/);
-  assert.match(contactsScreen, /smsSupported && !\(smsConsent && smsPermission\)/);
+  assert.match(contactsScreen, /onPress=\{\(\) => void setAutomaticSmsEnabled\(true\)\}[^\n]*ATTIVA SMS AUTOMATICI/);
+  assert.match(contactsScreen, /contacts\.length > 0 && !\(smsConsent && smsPermission\)/);
   assert.match(contactsScreen, /Con il tuo consenso/);
   assert.match(contactsScreen, /smsConsent && smsPermission \? 'SMS automatici attivi' : 'SMS automatici NON ATTIVI'/);
   assert.match(contactsScreen, /await SOSAutomaticSmsService\.requestAuthorization\(expectedUserId\)/);

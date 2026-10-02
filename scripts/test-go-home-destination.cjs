@@ -45,8 +45,8 @@ async function scenario(saveHome) {
   assert.match(home,/GoHomeDestination.get\(actionUserId\) \?\? await runGoHomeStepWithTimeout/);
   assert.match(home,/LocationService.getCurrentLocation/);
   const voice=fs.readFileSync('app/voice-protection.tsx','utf8');
-  const off=voice.slice(voice.indexOf('accessibilityLabel="Disattiva protezione vocale"'),voice.indexOf('OFF · DISATTIVA'));
-  assert.match(off,/deactivateProtection/);assert.doesNotMatch(off,/isSaving/);
+  assert.match(voice,/voiceCommandIsStop \? deactivateProtection\(\) : activateProtection\(\)/);
+  assert.match(voice,/!voiceCommandIsStop && \(isSaving \|\| !settings.passphrase\)/);
   const neighborhood=fs.readFileSync('screens/NeighborhoodNetworkScreen.tsx','utf8');
   assert.match(neighborhood,/isAdmin \? <PrimaryButton[^\n]*INVITA UN VICINO[^\n]*setActiveTab\('invites'\)/);
   console.log('PASS actual address handlers: search, temporary confirmation/back, optional Casa; owner isolation, visible CTA, separate GPS, OFF accessible, admin invite');
