@@ -12,12 +12,12 @@ class SafetyDeadlineReceiver : BroadcastReceiver() {
       val generation = intent.getStringExtra("generation") ?: return
       val stage = intent.getIntExtra("stage", 0)
       val record = SafetyDeadlineStore.fired(context, generation, stage) ?: return
-      if (stage == 1) SafetyDeadlineStore.show(context, record) else {
+      if (stage == 1) SafetyDeadlineStore.publishConfirmation(context, record) else {
         val service = Intent(context, SafetyEscalationService::class.java).putExtra("generation", generation)
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(service) else context.startService(service)
       }
-    } catch (_: Exception) {
-      Log.w("SafetyDeadline", "ALARM_HANDLING_FAILED nowMs=${System.currentTimeMillis()}")
+    } catch (error: Exception) {
+      Log.w("SafetyDeadline", "ALARM_HANDLING_FAILED category=${error.javaClass.simpleName} nowMs=${System.currentTimeMillis()}")
       SafetyDeadlineStore.read(context)?.let { runCatching { SafetyDeadlineStore.show(context, it, true) } }
     }
   }

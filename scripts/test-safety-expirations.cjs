@@ -116,7 +116,7 @@ async function main() {
     const modules = {
       'react-native': { AppRegistry: { registerHeadlessTask(name) { assert.equal(name, 'SafeMeLinkSafetyEscalation'); } } },
       '@/modules/safemelink-safety': { SafeMeLinkSafety: { isCurrentDeadline: () => current,
-        cancelDeadlines() { current = false; } } },
+        finishDeadlines() { current = false; } } },
       '@/services/SOSSessionTimeout': { getSOSSessionWithTimeout: async () => ({ user: { id: sessionUser } }) },
       '@/services/SafetyExpirationRuntime': { SafetyExpirationRuntime: { processDue: async () => { processed += 1; }, waitForExecution: () => delivery } },
       '@/services/SafetyOperation': { reportSafetyError() {} },

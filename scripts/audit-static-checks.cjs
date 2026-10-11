@@ -1427,7 +1427,8 @@ check('Checkpoint and Go Home use private native T1/T2 alarms and one SOS runtim
   assert.match(service, /removeTaskEventListener/);
   assert.match(service, /START_NOT_STICKY/);
   const task = read('services/SafetyHeadlessTask.ts');
-  assert.match(task, /session\?\.user\.id !== data\.userId/);
+  assert.match(task, /if \(!session\) \{[\s\S]*?native_escalation_auth_unavailable[\s\S]*?return;/);
+  assert.match(task, /if \(session\.user\.id !== data\.userId\) \{\s*SafeMeLinkSafety\.finishDeadlines\(data\.userId, data\.sessionId, data\.generation\)/);
   assert.match(task, /SafetyExpirationRuntime\.processDue\(data\.userId\)/);
   assert.match(task, /waitForExecution\(data\.userId\)/);
   assert.doesNotMatch(task, /completeSOS\(/);

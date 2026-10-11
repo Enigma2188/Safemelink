@@ -32,6 +32,10 @@ class SafeMeLinkSafetyModule : Module() {
     AsyncFunction("armDeadlines") { generation: String, channelId: String ->
       SafetyDeadlineStore.arm(appContext.reactContext ?: throw Exceptions.ReactContextLost(), generation, channelId)
     }
+    Function("recoverDeadlines") { userId: String, kind: String, sessionId: String, expiresAt: Double, escalationAt: Double, generation: String? ->
+      SafetyDeadlineStore.recover(appContext.reactContext ?: throw Exceptions.ReactContextLost(),
+        userId, kind, sessionId, expiresAt.toLong(), escalationAt.toLong(), generation)
+    }
     Function("cancelDeadlines") { userId: String, kind: String?, sessionId: String? ->
       SafetyDeadlineStore.cancel(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId, kind, sessionId)
     }
@@ -43,14 +47,14 @@ class SafeMeLinkSafetyModule : Module() {
     }
     Function("finishDeadlines") { userId: String, sessionId: String, generation: String ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
-      if (SafetyDeadlineStore.matches(context, userId, sessionId, generation)) {
-        SafetyDeadlineStore.cancel(context, userId, null, sessionId)
-      }
+      SafetyDeadlineStore.finish(context, userId, sessionId, generation)
     }
     Function("operationId") { userId: String, sessionId: String, generation: String ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
-      check(SafetyDeadlineStore.matches(context, userId, sessionId, generation))
-      SafetyDeadlineStore.read(context)!!.getString("operationId")
+      SafetyDeadlineStore.operationId(context, userId, sessionId, generation)
+    }
+    Function("rollbackDeadlines") { userId: String, sessionId: String, generation: String ->
+      SafetyDeadlineStore.rollback(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId, sessionId, generation)
     }
     Function("releaseEscalation") { userId: String, sessionId: String, generation: String ->
       SafetyDeadlineStore.release(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId, sessionId, generation)

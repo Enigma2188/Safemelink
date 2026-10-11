@@ -324,10 +324,11 @@ export default function HomeScreen() {
     let disposed = false;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active' && Platform.OS === 'android' && SafeMeLinkSafety && userId) {
-        // Recheck after returning from settings; never auto-arm a safety session.
+        // Recheck settings and recover existing alarms; never start a new session.
         void Promise.all([SafetyNotificationPreferenceStorage.get(userId), SafetyNotifications.configure(false)])
-          .then(([enabled, ready]) => {
+          .then(async ([enabled, ready]) => {
             if (!disposed) setSafetyError(enabled && ready ? '' : 'Checkpoint/Torno a casa: avvisi non pronti. Premi Avvia per completare le autorizzazioni.');
+            if (!disposed && enabled && ready) await SafetyExpirationService.reconcile(userId);
           }).catch(() => { if (!disposed) setSafetyError('Verifica degli avvisi non riuscita. Riprova prima di avviare un controllo.'); });
       }
     });
@@ -723,11 +724,19 @@ export default function HomeScreen() {
       return;
     }
 
+    // Recover Casa independently of unrelated SOS/contact hydration failures.
+    const homeLocationRevision = GoHomeStorage.getHomeLocationRevision(loadUserId);
+    void GoHomeStorage.getHomeLocation(loadUserId).then((savedHome) => {
+      if (activeUserIdRef.current === loadUserId && loadGenerationRef.current === loadGeneration &&
+          GoHomeStorage.getHomeLocationRevision(loadUserId) === homeLocationRevision) {
+        setHomeLocation(savedHome);
+      }
+    }).catch(() => reportSafetyError('home_location_load'));
+
     try {
       const [
         storedContacts,
         storedEvents,
-        storedHomeLocation,
         storedTransportMode,
         storedCheckpoint,
         storedGoHome,
@@ -735,7 +744,6 @@ export default function HomeScreen() {
         await Promise.all([
           isOffline ? ContactsService.listCached(loadUserId) : ContactsService.list(),
           SOSStorage.listEvents(loadUserId),
-          GoHomeStorage.getHomeLocation(loadUserId),
           GoHomeStorage.getTransportMode(loadUserId),
           CheckpointStorage.getActive(loadUserId),
           GoHomeStorage.getActive(loadUserId),
@@ -828,7 +836,6 @@ export default function HomeScreen() {
 
       setContacts(storedContacts);
       setLastEvents(nextEvents);
-      setHomeLocation(storedHomeLocation);
       setGoHomeTransportMode(storedTransportMode);
       if (statusRef.current === 'idle') {
         setActiveEvent(restoredActiveEvent);
@@ -1263,6 +1270,10 @@ export default function HomeScreen() {
   }, [clearPersistedCheckpoint]);
 
   const confirmCheckpoint = async () => {
+    if (userId && checkpointExpiresAt && Date.now() >= Date.parse(checkpointExpiresAt) + CHECKPOINT_CONFIRM_SECONDS * 1_000) {
+      void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('late_checkpoint_confirmation'));
+      return;
+    }
     if (!userId) {
       Alert.alert('Checkpoint', 'Accedi prima di salvare un Checkpoint.');
       cancelCheckpoint();
@@ -1733,6 +1744,10 @@ export default function HomeScreen() {
   };
 
   const confirmGoHomeArrival = async () => {
+    if (userId && goHomeExpiresAt && Date.now() >= Date.parse(goHomeExpiresAt) + GO_HOME_CONFIRM_SECONDS * 1_000) {
+      void SafetyExpirationService.processDue(userId).catch(() => reportSafetyError('late_go_home_confirmation'));
+      return;
+    }
     if (!goHomeSession) {
       cancelGoHome();
       return;
@@ -3189,11 +3204,12 @@ export default function HomeScreen() {
       <Modal visible={checkpointStatus === 'confirming'} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.checkpointModal}>
-            <Text style={styles.modalTitle}>Stai bene?</Text>
-            <Text style={styles.modalCountdown}>{checkpointConfirmSeconds}</Text>
-            <Pressable style={styles.safeButton} onPress={confirmCheckpoint}>
+            <Text style={styles.modalTitle}>{checkpointConfirmSeconds > 0 ? 'Stai bene?' : 'Tempo di conferma scaduto'}</Text>
+            {checkpointConfirmSeconds > 0 ? <Text style={styles.modalCountdown}>{checkpointConfirmSeconds}</Text> :
+              <Text style={styles.modalDescription}>Verifica lo stato dell’SOS. La finestra di conferma non viene riaperta.</Text>}
+            {checkpointConfirmSeconds > 0 && <Pressable style={styles.safeButton} onPress={confirmCheckpoint}>
               <Text style={styles.safeButtonText}>Sto bene</Text>
-            </Pressable>
+            </Pressable>}
           </View>
         </View>
       </Modal>
@@ -3201,11 +3217,12 @@ export default function HomeScreen() {
       <Modal visible={goHomeStatus === 'confirming'} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.checkpointModal}>
-            <Text style={styles.modalTitle}>Sei arrivato/a?</Text>
-            <Text style={styles.modalCountdown}>{goHomeConfirmSeconds}</Text>
-            <Pressable style={styles.safeButton} onPress={confirmGoHomeArrival}>
+            <Text style={styles.modalTitle}>{goHomeConfirmSeconds > 0 ? 'Sei arrivato/a?' : 'Tempo di conferma scaduto'}</Text>
+            {goHomeConfirmSeconds > 0 ? <Text style={styles.modalCountdown}>{goHomeConfirmSeconds}</Text> :
+              <Text style={styles.modalDescription}>Verifica lo stato dell’SOS. La finestra di conferma non viene riaperta.</Text>}
+            {goHomeConfirmSeconds > 0 && <Pressable style={styles.safeButton} onPress={confirmGoHomeArrival}>
               <Text style={styles.safeButtonText}>Sì, sono arrivato/a</Text>
-            </Pressable>
+            </Pressable>}
           </View>
         </View>
       </Modal>
@@ -4095,6 +4112,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  modalDescription: {
+    color: '#CBD5E1',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
   },
   modalCountdown: {
     color: '#c62828',

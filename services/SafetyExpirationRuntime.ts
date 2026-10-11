@@ -11,6 +11,7 @@ import { SafetyExpirationStorage, type SafetyExpirationKind, type SafetyExpirati
 const MAX_BACKGROUND_WAIT_MS = 24 * 60 * 60 * 1_000;
 let operationQueue: Promise<void> = Promise.resolve();
 const revisions = new Map<string, number>();
+const startIdentities = new Map<string, { kind: SafetyExpirationKind; sessionId: string }>();
 const executing = new Set<string>();
 const executionPromises = new Map<string, Promise<void>>();
 const cancelled = new Set<string>();
@@ -36,6 +37,8 @@ const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
   return result;
 };
 const revision = (userId: string) => revisions.get(userId) ?? 0;
+const sameIdentity = (a: SafetyExpirationSchedule | null, b: SafetyExpirationSchedule) =>
+  a?.kind === b.kind && a.sessionId === b.sessionId && a.nativeDeadlineGeneration === b.nativeDeadlineGeneration;
 const notifyPhase = (userId: string, schedule: SafetyExpirationSchedule | null) => {
   for (const listener of phaseListeners) {
     try { listener(userId, schedule); } catch { reportSafetyError('phase_listener'); }
@@ -53,8 +56,12 @@ const sourceSessionExists = async (userId: string, schedule: SafetyExpirationSch
   const session = await withSafetyTimeout(GoHomeStorage.getActive(userId), 'source_read');
   return session?.id === schedule.sessionId;
 };
-const clearSourceSession = async (userId: string, kind: SafetyExpirationKind) => {
+const clearSourceSession = async (userId: string, kind: SafetyExpirationKind, sessionId: string, expectedRevision = revision(userId)) => {
   if (kind === 'manual_sos') return;
+  const sourceId = kind === 'checkpoint'
+    ? (await withSafetyTimeout(CheckpointStorage.getActive(userId), 'source_read'))?.startedAt
+    : (await withSafetyTimeout(GoHomeStorage.getActive(userId), 'source_read'))?.id;
+  if (sourceId !== sessionId || revision(userId) !== expectedRevision) return;
   await withSafetyTimeout(kind === 'checkpoint' ? CheckpointStorage.clearActive(userId) : GoHomeStorage.clearActive(userId), 'source_clear');
 };
 
@@ -72,19 +79,24 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
     });
     // Persist completion before cleanup. The SOS operation journal already contains
     // the result: a crash on either side of this write reuses the SAME operation.
-    await save(userId, { ...schedule, phase: 'completed' });
-    completed = true;
-    try {
-      await clearSourceSession(userId, schedule.kind);
-      await clear(userId);
-    } catch { reportSafetyError('completed_cleanup'); }
+    await enqueue(async () => {
+      if (!sameIdentity(await read(userId), schedule)) return;
+      await save(userId, { ...schedule, phase: 'completed' });
+      completed = true;
+      try {
+        await clearSourceSession(userId, schedule.kind, schedule.sessionId);
+        await clear(userId);
+      } catch { reportSafetyError('completed_cleanup'); }
+    });
     VoiceProtectionRuntime.notifySOSCompleted(userId, result);
     notifyPhase(userId, null);
     trace('SOS_EXECUTION_COMPLETED', schedule);
   } catch (error: unknown) {
     reportSafetyError('sos_execution');
     const failed = { ...schedule, phase: (schedule.operationId ? 'recoverable' : 'failed') as 'recoverable' | 'failed' };
-    await save(userId, failed).catch(() => reportSafetyError('failure_persistence'));
+    await enqueue(async () => {
+      if (sameIdentity(await read(userId), schedule)) await save(userId, failed);
+    }).catch(() => reportSafetyError('failure_persistence'));
     notifyPhase(userId, failed);
     void SafetyNotifications.show(schedule.sessionId, schedule.kind, true);
     VoiceProtectionRuntime.notifySOSFailed(userId, error);
@@ -103,15 +115,18 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
 export const SafetyExpirationRuntime = {
   schedule(userId: string, kind: SafetyExpirationKind, sessionId: string, expiresAt: string, confirmationSeconds: number) {
     if (executing.has(userId)) throw new Error('SOS già in esecuzione.');
-    const expectedRevision = revision(userId);
-    let nativeDeadlineGeneration: string | undefined;
-    if (Platform.OS === 'android' && kind !== 'manual_sos') {
-      SafetyNotifications.checkExactAlarmPermission();
-      nativeDeadlineGeneration = SafeMeLinkSafety!.prepareDeadlines(userId, kind, sessionId,
-        Date.parse(expiresAt), Date.parse(expiresAt) + confirmationSeconds * 1_000);
-    }
+    const expectedRevision = revision(userId) + 1;
+    revisions.set(userId, expectedRevision);
+    startIdentities.set(userId, { kind, sessionId });
     return enqueue(async () => {
+      if (revision(userId) !== expectedRevision) throw new Error('Avvio superato o annullato.');
       if (executing.has(userId)) throw new Error('SOS già in esecuzione.');
+      let nativeDeadlineGeneration: string | undefined;
+      if (Platform.OS === 'android' && kind !== 'manual_sos') {
+        SafetyNotifications.checkExactAlarmPermission();
+        nativeDeadlineGeneration = SafeMeLinkSafety!.prepareDeadlines(userId, kind, sessionId,
+          Date.parse(expiresAt), Date.parse(expiresAt) + confirmationSeconds * 1_000);
+      }
       const schedule: SafetyExpirationSchedule = {
         kind, sessionId, expiresAt,
         confirmationExpiresAt: new Date(Date.parse(expiresAt) + confirmationSeconds * 1_000).toISOString(),
@@ -119,9 +134,14 @@ export const SafetyExpirationRuntime = {
         confirmationNotificationScheduled: false,
         ...(nativeDeadlineGeneration ? { nativeDeadlineGeneration, operationId: SafeMeLinkSafety!.operationId(userId, sessionId, nativeDeadlineGeneration) } : {}),
       };
-      await save(userId, schedule);
+      try { await save(userId, schedule); }
+      catch (error) {
+        if (nativeDeadlineGeneration) SafeMeLinkSafety?.finishDeadlines(userId, sessionId, nativeDeadlineGeneration);
+        throw error;
+      }
       trace('DEADLINE_PERSISTED', schedule);
       if (revision(userId) !== expectedRevision) {
+        if (nativeDeadlineGeneration) SafeMeLinkSafety?.finishDeadlines(userId, sessionId, nativeDeadlineGeneration);
         await clear(userId);
         throw new Error('Avvio annullato.');
       }
@@ -130,18 +150,52 @@ export const SafetyExpirationRuntime = {
       return schedule;
     });
   },
-  async ensure(userId: string, kind: SafetyExpirationKind, sessionId: string, expiresAt: string, confirmationSeconds: number) {
-    if (cancelled.has(userId)) throw new Error('Controllo annullato: avvia una nuova sessione.');
-    const existing = await read(userId);
-    if (existing?.kind === kind && existing.sessionId === sessionId) {
-      if (existing.phase === 'failed' || existing.phase === 'executing' || existing.phase === 'recoverable' || existing.phase === 'completed' || Platform.OS !== 'android' || kind === 'manual_sos') return existing;
-      if (existing.nativeDeadlineGeneration && SafeMeLinkSafety?.isCurrentDeadline(userId, sessionId, existing.nativeDeadlineGeneration)) return existing;
-    }
-    return this.schedule(userId, kind, sessionId, expiresAt, confirmationSeconds);
+  ensure(userId: string, kind: SafetyExpirationKind, sessionId: string, expiresAt: string, confirmationSeconds: number,
+    expectedRevision = revision(userId)) {
+    return enqueue(async () => {
+      const checkCurrent = () => {
+        if (revision(userId) !== expectedRevision || cancelled.has(userId)) throw new Error('Recupero obsoleto o annullato.');
+      };
+      checkCurrent();
+      const existing = await read(userId);
+      checkCurrent();
+      // Recovery is not a new start. Never replace another session or generation.
+      if (existing && (existing.kind !== kind || existing.sessionId !== sessionId)) throw new Error('Sessione di recupero superata.');
+      if (existing && (existing.phase === 'failed' || existing.phase === 'executing' || existing.phase === 'recoverable' || existing.phase === 'completed')) return existing;
+      let schedule: SafetyExpirationSchedule = existing ?? {
+        kind, sessionId, expiresAt, confirmationExpiresAt: new Date(Date.parse(expiresAt) + confirmationSeconds * 1_000).toISOString(),
+        phase: 'waiting', confirmationNotificationScheduled: false,
+      };
+      if (!(await sourceSessionExists(userId, schedule))) throw new Error('Sessione terminata o assente.');
+      checkCurrent();
+      if (Platform.OS === 'android' && kind !== 'manual_sos') {
+        SafetyNotifications.checkExactAlarmPermission();
+        // Native compare-and-recover is atomic with cancel/prepare/arm. It cannot
+        // replace a different identity between the JS check and native mutation.
+        const generation = SafeMeLinkSafety!.recoverDeadlines(userId, kind, sessionId,
+          Date.parse(schedule.expiresAt), Date.parse(schedule.confirmationExpiresAt), schedule.nativeDeadlineGeneration ?? null);
+        if (!generation) throw new Error('Generazione nativa di recupero superata.');
+        schedule = { ...schedule, nativeDeadlineGeneration: generation,
+          operationId: SafeMeLinkSafety!.operationId(userId, sessionId, generation) };
+      }
+      checkCurrent();
+      await save(userId, schedule);
+      checkCurrent();
+      return schedule;
+    });
   },
   cancel(userId: string, kind?: SafetyExpirationKind, sessionId?: string) {
+    const intended = startIdentities.get(userId);
+    if (intended && ((kind && intended.kind !== kind) || (sessionId && intended.sessionId !== sessionId))) {
+      // Do not invalidate the successor's JS launch, but retire an old native
+      // preventive alarm if a manual SOS (which prepares no alarms) supersedes it.
+      try { SafeMeLinkSafety?.cancelDeadlines(userId, kind ?? null, sessionId ?? null); }
+      catch { reportSafetyError('native_deadline_cancel'); }
+      return Promise.resolve(false);
+    }
     // Synchronous invalidation defeats a prepare/claim that is already awaiting storage.
     revisions.set(userId, revision(userId) + 1);
+    const expectedRevision = revision(userId);
     cancelled.add(userId);
     // Native cancellation is synchronous: delayed arming validates its generation
     // and cannot resurrect a cancelled session while JS storage is awaiting I/O.
@@ -149,6 +203,7 @@ export const SafetyExpirationRuntime = {
     catch { reportSafetyError('native_deadline_cancel'); }
     return enqueue(async () => {
       const existing = await read(userId);
+      if (revision(userId) !== expectedRevision) return false;
       if (!existing) {
         if (sessionId) void SafetyNotifications.cancelConfirmation(sessionId);
         return true;
@@ -162,10 +217,28 @@ export const SafetyExpirationRuntime = {
         return false;
       }
       await clear(userId);
+      if (revision(userId) !== expectedRevision) return false;
+      startIdentities.delete(userId);
       void SafetyNotifications.cancelConfirmation(existing.sessionId);
-      await clearSourceSession(userId, existing.kind);
+      await clearSourceSession(userId, existing.kind, existing.sessionId, expectedRevision);
+      if (revision(userId) !== expectedRevision) return false;
       notifyPhase(userId, null);
       return true;
+    });
+  },
+  rollbackPrepared(userId: string, schedule: SafetyExpirationSchedule) {
+    const expectedRevision = revision(userId);
+    return enqueue(async () => {
+      const current = await read(userId);
+      if (revision(userId) !== expectedRevision || !sameIdentity(current, schedule) || executing.has(userId) || current?.phase === 'executing') return;
+      if (schedule.nativeDeadlineGeneration && !SafeMeLinkSafety?.rollbackDeadlines(userId, schedule.sessionId, schedule.nativeDeadlineGeneration)) return;
+      revisions.set(userId, expectedRevision + 1);
+      cancelled.add(userId);
+      await clear(userId);
+      if (revision(userId) !== expectedRevision + 1) return;
+      await clearSourceSession(userId, schedule.kind, schedule.sessionId, expectedRevision + 1);
+      if (revision(userId) !== expectedRevision + 1) return;
+      notifyPhase(userId, null);
     });
   },
   expedite(userId: string) {
@@ -177,10 +250,12 @@ export const SafetyExpirationRuntime = {
       VoiceProtectionRuntime.wakeBackgroundTask();
     }).then(() => this.processDue(userId));
   },
-  markConfirmationScheduled(userId: string, kind: SafetyExpirationKind, sessionId: string) {
+  markConfirmationScheduled(userId: string, kind: SafetyExpirationKind, sessionId: string, generation?: string) {
+    const expectedRevision = revision(userId);
     return enqueue(async () => {
       const existing = await read(userId);
-      if (!existing || existing.kind !== kind || existing.sessionId !== sessionId || existing.phase !== 'waiting') return false;
+      if (revision(userId) !== expectedRevision || cancelled.has(userId) || !existing || existing.kind !== kind || existing.sessionId !== sessionId ||
+          (generation && existing.nativeDeadlineGeneration !== generation) || existing.phase !== 'waiting') return false;
       await save(userId, { ...existing, confirmationNotificationScheduled: true });
       return true;
     });
@@ -192,9 +267,11 @@ export const SafetyExpirationRuntime = {
         trace('PROCESS_DUE_STARTED');
         if (cancelled.has(userId) && !executing.has(userId)) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         let schedule = await read(userId);
+        if (revision(userId) !== expectedRevision) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         if (!schedule) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
         if (schedule.phase === 'completed') {
-          await clearSourceSession(userId, schedule.kind);
+          await clearSourceSession(userId, schedule.kind, schedule.sessionId, expectedRevision);
+          if (revision(userId) !== expectedRevision) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
           if (schedule.nativeDeadlineGeneration) SafeMeLinkSafety?.finishDeadlines(userId, schedule.sessionId, schedule.nativeDeadlineGeneration);
           await clear(userId);
           notifyPhase(userId, null);
@@ -211,6 +288,8 @@ export const SafetyExpirationRuntime = {
         }
         if (revision(userId) !== expectedRevision) return { schedule, waitMs: 0 };
         if (!(await sourceSessionExists(userId, schedule))) {
+          if (revision(userId) !== expectedRevision) return { schedule: null, waitMs: MAX_BACKGROUND_WAIT_MS };
+          if (schedule.nativeDeadlineGeneration) SafeMeLinkSafety?.finishDeadlines(userId, schedule.sessionId, schedule.nativeDeadlineGeneration);
           await clear(userId);
           void SafetyNotifications.cancelConfirmation(schedule.sessionId);
           notifyPhase(userId, null);
@@ -287,6 +366,7 @@ export const SafetyExpirationRuntime = {
     });
   },
   get: read,
+  getRevision: revision,
   waitForExecution(userId: string) {
     return executionPromises.get(userId) ?? Promise.resolve();
   },

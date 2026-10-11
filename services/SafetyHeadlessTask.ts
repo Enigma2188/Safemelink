@@ -8,8 +8,13 @@ export async function runSafetyEscalation(data: { userId: string; sessionId: str
   try {
     if (!SafeMeLinkSafety?.isCurrentDeadline(data.userId, data.sessionId, data.generation)) return;
     const session = await getSOSSessionWithTimeout();
-    if (session?.user.id !== data.userId) {
-      SafeMeLinkSafety.cancelDeadlines(data.userId, null, data.sessionId);
+    if (!session) {
+      // Missing Auth is not evidence of a different account. Preserve bounded recovery.
+      reportSafetyError('native_escalation_auth_unavailable');
+      return;
+    }
+    if (session.user.id !== data.userId) {
+      SafeMeLinkSafety.finishDeadlines(data.userId, data.sessionId, data.generation);
       reportSafetyError('native_escalation_account_mismatch');
       return;
     }

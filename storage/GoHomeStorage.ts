@@ -9,6 +9,7 @@ const HOME_LOCATION_STORAGE_KEY = 'safemelink.gohome.homeLocation';
 const GO_HOME_EVENTS_STORAGE_KEY = 'safemelink.gohome.events';
 const GO_HOME_TRANSPORT_MODE_STORAGE_KEY = 'safemelink.gohome.transportMode';
 const MAX_STORED_EVENTS = 20;
+const homeLocationRevisions = new Map<string, number>();
 
 export type HomeLocation = {
   latitude: number;
@@ -74,6 +75,7 @@ const isActiveGoHomeSession = (value: unknown): value is ActiveGoHomeSession => 
 };
 
 export const GoHomeStorage = {
+  getHomeLocationRevision(userId: string) { return homeLocationRevisions.get(userId) ?? 0; },
   async getActive(userId: string): Promise<ActiveGoHomeSession | null> {
     const storedSession = await getAccountStorageItem(
       userId,
@@ -136,13 +138,26 @@ export const GoHomeStorage = {
       return null;
     }
 
-    return JSON.parse(storedLocation) as HomeLocation;
+    try {
+      const value: unknown = JSON.parse(storedLocation);
+      if (!value || typeof value !== 'object') return null;
+      const candidate = value as Partial<HomeLocation>;
+      if (typeof candidate.latitude !== 'number' || !Number.isFinite(candidate.latitude) || Math.abs(candidate.latitude) > 90 ||
+          typeof candidate.longitude !== 'number' || !Number.isFinite(candidate.longitude) || Math.abs(candidate.longitude) > 180 ||
+          typeof candidate.savedAt !== 'string' || !Number.isFinite(Date.parse(candidate.savedAt))) return null;
+      return candidate as HomeLocation;
+    } catch {
+      // Preserve malformed data; never substitute another account's Casa.
+      return null;
+    }
   },
 
   async saveHomeLocation(
     userId: string,
     location: Pick<HomeLocation, 'latitude' | 'longitude'>,
   ) {
+    // Invalidate pending hydration before the first storage await, for this account only.
+    homeLocationRevisions.set(userId, GoHomeStorage.getHomeLocationRevision(userId) + 1);
     const homeLocation: HomeLocation = {
       ...location,
       savedAt: new Date().toISOString(),
@@ -154,6 +169,8 @@ export const GoHomeStorage = {
       JSON.stringify(homeLocation),
       [HOME_LOCATION_STORAGE_KEY],
     );
+    // Also invalidate reads begun while this write was in flight.
+    homeLocationRevisions.set(userId, GoHomeStorage.getHomeLocationRevision(userId) + 1);
     return homeLocation;
   },
 

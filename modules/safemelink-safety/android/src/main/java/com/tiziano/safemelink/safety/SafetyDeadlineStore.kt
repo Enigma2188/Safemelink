@@ -67,8 +67,13 @@ internal object SafetyDeadlineStore {
   }
   @Synchronized fun arm(context: Context, generation: String, channelId: String): Boolean {
     val record = read(context) ?: return false
-    if (record.getString("generation") != generation || record.optBoolean("claimed")) return false
+    if (record.getString("generation") != generation || record.optString("state") in listOf("failed", "cancelled")) return false
     check(allowed(context)) { "exact_alarm_permission" }
+    // Preserve an in-progress claim and its recovery lease; never create a fresh T2.
+    if (record.optBoolean("claimed")) {
+      recoveryAlarm(context, record)
+      return true
+    }
     record.put("channelId", channelId).put("armed", true)
     write(context, record)
     try {
@@ -89,10 +94,37 @@ internal object SafetyDeadlineStore {
     }
     return true
   }
+  @Synchronized fun recover(context: Context, userId: String, kind: String, sessionId: String, t1: Long, t2: Long, generation: String?): String? {
+    val current = read(context)
+    if (current != null) {
+      if (generation == null || !matches(context, userId, sessionId, generation) || current.optString("kind") != kind ||
+        current.getLong("t1") != t1 || current.getLong("t2") != t2 || current.optString("state") == "failed") return null
+      return generation // Preserve firstFired, claim, operationId and lease.
+    }
+    // Missing durable identity is not permission to revive a former generation.
+    if (generation != null) return null
+    return prepare(context, userId, kind, sessionId, t1, t2)
+  }
+  @Synchronized fun finish(context: Context, userId: String, sessionId: String, generation: String) {
+    if (!matches(context, userId, sessionId, generation)) return
+    cancel(context, userId, null, sessionId)
+  }
+  @Synchronized fun operationId(context: Context, userId: String, sessionId: String, generation: String): String {
+    check(matches(context, userId, sessionId, generation)) { "stale_deadline_generation" }
+    return read(context)!!.getString("operationId")
+  }
+  @Synchronized fun rollback(context: Context, userId: String, sessionId: String, generation: String): Boolean {
+    if (!matches(context, userId, sessionId, generation)) return false
+    val current = read(context) ?: return false
+    // A late arm/storage error must not cancel a legitimate T2 or its recovery lease.
+    if (current.optBoolean("claimed") || (current.optBoolean("armed") && System.currentTimeMillis() >= current.getLong("t2"))) return false
+    finish(context, userId, sessionId, generation)
+    return true
+  }
   @Synchronized fun matches(context: Context, userId: String, sessionId: String, generation: String): Boolean {
     val record = read(context) ?: return false
     return record.optString("userId") == userId && record.optString("sessionId") == sessionId &&
-      record.optString("generation") == generation
+      record.optString("generation") == generation && record.optString("state") != "cancelled"
   }
   @Synchronized fun restore(context: Context) {
     val record = read(context) ?: return
@@ -140,7 +172,10 @@ internal object SafetyDeadlineStore {
     if (record.optString("userId") != userId || (kind != null && record.optString("kind") != kind) ||
       (sessionId != null && record.optString("sessionId") != sessionId)) return
     cancelAlarms(context, record)
-    check(preferences(context).edit().remove("deadline").commit()) { "deadline_cancel_failed" }
+    // Durable tombstone defeats recovery after a crash between native cancellation
+    // and JS/source cleanup. Only an explicit prepare may replace it.
+    record.put("armed", false).put("claimed", false).put("state", "cancelled")
+    write(context, record)
   }
   @Synchronized fun release(context: Context, userId: String, sessionId: String, generation: String) {
     if (!matches(context, userId, sessionId, generation)) return
@@ -150,14 +185,17 @@ internal object SafetyDeadlineStore {
   }
   @Synchronized fun fired(context: Context, generation: String, stage: Int): JSONObject? {
     val record = read(context) ?: return null
-    if (record.optString("generation") != generation || !record.optBoolean("armed") || record.optString("state") == "failed") return null
+    if (record.optString("generation") != generation || !record.optBoolean("armed") || record.optString("state") in listOf("failed", "cancelled")) return null
     val key = if (stage == 1) "firstFired" else "escalationFired"
     if (stage !in 1..2 || (stage == 1 && record.optBoolean(key))) return null
     if (stage == 2 && record.optBoolean("claimed") && System.currentTimeMillis() < record.optLong("leaseUntil")) return null
     val deadline = record.getLong(if (stage == 1) "t1" else "t2")
     if (System.currentTimeMillis() < deadline) return null
-    record.put(key, true)
-    write(context, record)
+    // T1 is consumed only after successful publication, not on receiver entry.
+    if (stage == 2) {
+      record.put(key, true)
+      write(context, record)
+    }
     // Cover service/JS startup failure BEFORE the first claim too. Bounded to three wakeups.
     if (stage == 2 && !record.optBoolean("claimed")) {
       val wakes = record.optInt("startupWakes") + 1
@@ -175,6 +213,14 @@ internal object SafetyDeadlineStore {
     }
     trace(if (stage == 1) "FIRST_ALARM_FIRED" else "ESCALATION_ALARM_FIRED", deadline)
     return record
+  }
+  @Synchronized fun publishConfirmation(context: Context, record: JSONObject) {
+    val current = read(context) ?: return
+    if (current.optString("generation") != record.optString("generation") ||
+      !current.optBoolean("armed") || current.optBoolean("firstFired") || current.optString("state") == "failed") return
+    show(context, current)
+    current.put("firstFired", true)
+    write(context, current)
   }
   fun notification(context: Context, channelId: String, title: String, body: String, silent: Boolean = false): Notification {
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -196,9 +242,20 @@ internal object SafetyDeadlineStore {
     return builder.build()
   }
   fun show(context: Context, record: JSONObject, failed: Boolean = false) {
+    trace(if (failed) "FAILURE_NOTICE_ATTEMPT" else "FIRST_NOTICE_ATTEMPT", record.getLong("t1"))
+    val remainingMs = record.getLong("t2") - System.currentTimeMillis()
+    val elapsed = remainingMs <= 0 || record.optBoolean("claimed") || record.optBoolean("escalationFired")
     val notice = notification(context, record.optString("channelId", "safety-checks"),
-      if (failed) "Controllo di sicurezza da verificare" else "Stai bene?",
-      if (failed) "Apri SafeMeLink per verificare l’SOS." else "Apri SafeMeLink per confermare entro 30 secondi.")
-    (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTICE_ID, notice)
+      if (failed) "Controllo di sicurezza da verificare" else if (elapsed) "Tempo di conferma scaduto" else "Stai bene?",
+      if (failed || elapsed) "Apri SafeMeLink per verificare lo stato dell’SOS."
+      else "Apri SafeMeLink per confermare: restano ${(remainingMs + 999) / 1000} secondi.")
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    check(Build.VERSION.SDK_INT < 24 || manager.areNotificationsEnabled()) { "notifications_disabled" }
+    if (Build.VERSION.SDK_INT >= 26) {
+      val channel = manager.getNotificationChannel(record.optString("channelId", "safety-checks"))
+      check(channel != null && channel.importance >= NotificationManager.IMPORTANCE_HIGH && channel.sound != null) { "notification_channel_silent" }
+    }
+    manager.notify(NOTICE_ID, notice)
+    trace(if (failed) "FAILURE_NOTICE_POSTED" else "FIRST_NOTICE_POSTED", record.getLong("t1"))
   }
 }
