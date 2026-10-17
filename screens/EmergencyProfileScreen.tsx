@@ -10,6 +10,9 @@ import {
 } from 'react-native';
 
 import { useEmergencyProfile } from '@/hooks/useEmergencyProfile';
+import { EmergencyPrivateDetailsForm } from '@/components/EmergencyPrivateDetailsForm';
+import { ICEPrivacyPanel } from '@/components/ICEPrivacyPanel';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   EMERGENCY_PROFILE_LIMITS,
   validateEmergencyProfile,
@@ -89,6 +92,15 @@ const fields: FieldDefinition[] = [
 ];
 
 export function EmergencyProfileScreen() {
+  const [advancedBusy, setAdvancedBusy] = useState(false);
+  const [revokeBusy, setRevokeBusy] = useState(false);
+  const [privateRevision, setPrivateRevision] = useState(0);
+  const [privacyReload, setPrivacyReload] = useState(false);
+  const [profileActionBusy, setProfileActionBusy] = useState(false);
+  const barrier = useRef({ revoke: false, profile: false, advanced: false, reload: false });
+  const reportRevokeBusy = useCallback((value: boolean) => { barrier.current.revoke = value; setRevokeBusy(value); }, []);
+  const reportAdvancedBusy = useCallback((value: boolean) => { barrier.current.advanced = value; setAdvancedBusy(value); }, []);
+  const sawReload = useRef(false);
   const {
     draft,
     setDraft,
@@ -100,8 +112,18 @@ export function EmergencyProfileScreen() {
     save,
   } = useEmergencyProfile();
   const validation = validateEmergencyProfile(draft);
-  const isBusy = status === 'loading' || status === 'saving';
-  const canEdit = hasLoadedProfile && status !== 'unauthenticated' && status !== 'loading';
+  const profileBusy = status === 'loading' || status === 'saving';
+  const isBusy = profileBusy || revokeBusy || privacyReload || profileActionBusy;
+  const canEdit = hasLoadedProfile && status !== 'unauthenticated' && status !== 'loading' && !revokeBusy && !privacyReload;
+  useEffect(() => {
+    if (!privacyReload) return;
+    if (status === 'loading') sawReload.current = true;
+    else if (sawReload.current && status !== 'saving') { barrier.current.reload = false; setPrivacyReload(false); sawReload.current = false; }
+  }, [privacyReload, status]);
+  const refreshAfterICEOperation = () => {
+    // Never let a stale ON draft be silently saved after a successful/uncertain revocation.
+    barrier.current.reload = true; setPrivacyReload(true); sawReload.current = false; reload(); setPrivateRevision(v => v + 1);
+  };
 
   const updateText = (name: TextFieldName, value: string) => {
     setDraft((current) => ({ ...current, [name]: value }));
@@ -214,7 +236,12 @@ export function EmergencyProfileScreen() {
 
       <Pressable
         disabled={!canEdit || isBusy || !validation.valid}
-        onPress={() => void save().catch(() => undefined)}
+        onPress={() => {
+          if (Platform.OS !== 'android') { void save().catch(() => undefined); return; }
+          if (barrier.current.revoke || barrier.current.reload || barrier.current.profile) return;
+          barrier.current.profile = true; setProfileActionBusy(true);
+          void save().catch(() => undefined).finally(() => { barrier.current.profile = false; setProfileActionBusy(false); });
+        }}
         style={[
           styles.saveButton,
           (!canEdit || isBusy || !validation.valid) && styles.disabledButton,
@@ -229,6 +256,12 @@ export function EmergencyProfileScreen() {
           Ultimo salvataggio: {new Date(lastSavedAt).toLocaleString()}
         </Text>
       ) : null}
+      {Platform.OS === 'android' ? <>
+        <ICEPrivacyPanel revision={`${status}:${lastSavedAt}:${advancedBusy}:${privateRevision}`}
+          disabled={profileBusy || advancedBusy || profileActionBusy} canRevoke={() => !barrier.current.profile && !barrier.current.advanced && !barrier.current.revoke}
+          onBusyChange={reportRevokeBusy} onReloadForms={refreshAfterICEOperation} />
+        <EmergencyPrivateDetailsForm key={privateRevision} externalBusy={revokeBusy} onBusyChange={reportAdvancedBusy} />
+      </> : null}
     </ScrollView>
     </KeyboardAvoidingView>
   );

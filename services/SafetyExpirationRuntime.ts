@@ -69,8 +69,9 @@ const clearSourceSession = async (userId: string, kind: SafetyExpirationKind, se
 const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) => {
   trace('SOS_EXECUTION_STARTED', schedule);
   let completed = false;
+  let voiceAttemptId: string | undefined;
   try {
-    VoiceProtectionRuntime.notifySOSExecutionStarted(userId);
+    voiceAttemptId = VoiceProtectionRuntime.notifySOSExecutionStarted(userId);
     const result = await SOSService.completeSOS(userId, {
       allowRemoteDelivery: true,
       allowRecentNetworkLocation: true,
@@ -88,7 +89,7 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
         await clear(userId);
       } catch { reportSafetyError('completed_cleanup'); }
     });
-    VoiceProtectionRuntime.notifySOSCompleted(userId, result);
+    VoiceProtectionRuntime.notifySOSCompleted(userId, result, voiceAttemptId);
     notifyPhase(userId, null);
     trace('SOS_EXECUTION_COMPLETED', schedule);
   } catch (error: unknown) {
@@ -99,7 +100,7 @@ const executeSOS = async (userId: string, schedule: SafetyExpirationSchedule) =>
     }).catch(() => reportSafetyError('failure_persistence'));
     notifyPhase(userId, failed);
     void SafetyNotifications.show(schedule.sessionId, schedule.kind, true);
-    VoiceProtectionRuntime.notifySOSFailed(userId, error);
+    VoiceProtectionRuntime.notifySOSFailed(userId, error, voiceAttemptId);
     trace('SOS_EXECUTION_FAILED', schedule);
   } finally {
     if (completed && schedule.nativeDeadlineGeneration) {

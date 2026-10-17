@@ -82,19 +82,20 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
     }
 
     if (taskUserId && VoiceProtectionRuntime.claimDueSOS(taskUserId)) {
-      VoiceProtectionRuntime.notifySOSExecutionStarted(taskUserId);
+      const voiceAttemptId = VoiceProtectionRuntime.notifySOSExecutionStarted(taskUserId);
+      await withSafetyTimeout(VoiceProtectionRuntime.persistSOSAttempt(taskUserId), 'voice_attempt_journal', 2_000).catch(() => undefined);
       try {
         const result = await SOSService.completeSOS(taskUserId, {
           allowRemoteDelivery: true,
           allowRecentNetworkLocation: true,
           allowInteractiveFallback: false,
         });
-        VoiceProtectionRuntime.notifySOSCompleted(taskUserId, result);
+        VoiceProtectionRuntime.notifySOSCompleted(taskUserId, result, voiceAttemptId);
       } catch (error: unknown) {
         console.warn('[VoiceProtection] completamento SOS non riuscito', {
           category: error instanceof Error ? error.name : 'unknown',
         });
-        VoiceProtectionRuntime.notifySOSFailed(taskUserId, error);
+        VoiceProtectionRuntime.notifySOSFailed(taskUserId, error, voiceAttemptId);
       } finally {
         VoiceProtectionRuntime.finishSOSExecution();
       }

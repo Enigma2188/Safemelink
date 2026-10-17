@@ -450,6 +450,18 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      confirm_my_ice_sharing: { Args: { expected_owner_id: string; expected_revision: string; consent_version: string;
+        enable_legacy: boolean; enable_structured: boolean; enable_phone: boolean }; Returns: Json };
+      get_my_ice_privacy_status: { Args: { expected_owner_id: string }; Returns: Json };
+      revoke_my_all_ice_sharing: { Args: { expected_owner_id: string }; Returns: Json };
+      get_my_emergency_private_details: { Args: { expected_owner_id: string }; Returns: Json };
+      update_my_emergency_private_details: { Args: {
+        expected_owner_id: string; next_ice_name: string | null; next_ice_relation: string | null; next_ice_phone: string | null;
+        next_stalking: string | null; next_domestic_violence: string | null; next_other_risk: string | null; next_instructions: string | null;
+        next_share_ice: boolean; next_share_ice_phone: boolean; next_share_safety: boolean;
+      }; Returns: Json };
+      delete_my_emergency_private_details: { Args: { expected_owner_id: string }; Returns: undefined };
+      get_received_sos_private_details: { Args: { target_sos_id: string }; Returns: Json };
       get_my_neighborhood_discovery_preference: { Args: Record<string, never>; Returns: boolean };
       set_my_neighborhood_discovery_preference: { Args: { enabled: boolean; expected_user_id: string }; Returns: boolean };
       publish_my_neighborhood_discovery_presence: {

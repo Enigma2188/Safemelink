@@ -4,16 +4,30 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 // Exercise the actual lifecycle with an asynchronous Android abort/end sequence.
-function fixture({ confirmStart = true, hangStop = false } = {}) {
+function fixture({ confirmStart = true, hangStop = false, deferPermission = false, deferSOSRead = false, deferRemote = false, failSave = false, failServiceStop = false } = {}) {
   let now = 100_000;
   let timerId = 0;
   const timers = new Map();
   const effects = [];
+  const refs = [];
+  let permissionResolve;
+  let sosResolve;
+  let sosEvents = [];
+  let journal = null;
+  let remoteActive = [];
+  let remoteFailure = null;
+  let remoteResolve;
+  const remoteResolvers = [];
+  let remoteStatus = {};
+  let remoteQueries = 0;
   const events = {};
   let appState;
   let running = false;
   let nativeState = 'inactive';
   let starts = 0;
+  let nativeGeneration = '';
+  let requests = 0;
+  let lastOptions = null;
   let settings = { enabled: false, passphrase: 'test phrase', expiresAt: null };
   const setTimer = (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: now + ms }); return id; };
   const clearTimer = (id) => timers.delete(id);
@@ -35,27 +49,39 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   const native = {
     abort() {
       nativeState = 'stopping';
+      const stoppedGeneration = nativeGeneration;
       events.error?.({ error: 'aborted' });
-      setTimer(() => { events.end?.(); nativeState = 'inactive'; }, 200);
+      setTimer(() => { events.end?.({ safemelinkGeneration: stoppedGeneration }); nativeState = 'inactive'; }, 200);
     },
     getStateAsync: async () => hangStop ? new Promise(() => {}) : nativeState,
-    getPermissionsAsync: async () => ({ granted: true }),
-    start() {
+    getPermissionsAsync: () => deferPermission ? new Promise(resolve => { permissionResolve = resolve; }) : Promise.resolve({ granted: true }),
+    start(options) {
       assert.equal(nativeState, 'inactive', 'replacement must wait for native teardown');
       nativeState = 'starting';
       starts++;
+      lastOptions = options;
+      nativeGeneration = options.androidIntentOptions?.safemelinkGeneration ?? '';
       if (confirmStart) setTimer(() => { nativeState = 'recognizing'; events.start?.(); }, 10);
     },
   };
   const modules = {
     '@/services/VoiceRecognitionCapabilities': { logVoiceEngineError() {} },
-    react: { useRef: (value) => ({ current: value }), useCallback: (fn) => fn, useEffect: (fn) => effects.push(fn) },
+    react: { useRef: (value) => { const ref = { current: value }; refs.push(ref); return ref; }, useCallback: (fn) => fn,
+      useEffect: (fn) => effects.push(fn), useLayoutEffect: (fn) => effects.push(fn) },
     'react-native': { Platform: { OS: 'android' }, AppState: { addEventListener: (_type, fn) => { appState = fn; return { remove() { appState = undefined; } }; } } },
-    'expo-speech-recognition': { ExpoSpeechRecognitionModule: native, useSpeechRecognitionEvent: (event, fn) => { events[event] = fn; } },
+    'expo-speech-recognition': { ExpoSpeechRecognitionModule: native, useSpeechRecognitionEvent: (event, fn) => {
+      events[event] = (payload = {}) => fn({ safemelinkGeneration: nativeGeneration, ...payload });
+    } },
     '@/backend/auth/AuthProvider': { useAuth: () => ({ session: { user: { id: 'account-A' } }, isInitializing: false }) },
-    '@/services/VoiceProtectionService': { VoiceProtectionService: { isRunning: () => running, stop: async () => { running = false; }, getRecognitionReadiness: async () => 'ready' } },
-    '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => ({ ...settings }), save: async (_user, value) => { settings = value; } } },
+    '@/services/VoiceProtectionService': { VoiceProtectionService: { isRunning: () => running, stop: async () => { if(failServiceStop)throw new Error('synthetic stop failure'); running = false; }, getRecognitionReadiness: async () => 'ready' } },
+    '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => ({ ...settings }), save: async (_user, value) => { if(failSave)throw new Error('synthetic storage failure'); settings = value; } } },
     '@/storage/PassphraseStorage': { normalizePassphrase: (value) => value.trim().toLowerCase() },
+    '@/storage/SOSStorage': { SOSStorage: { listEvents: () => deferSOSRead ? new Promise(resolve => { sosResolve = resolve; }) : Promise.resolve(sosEvents) } },
+    '@/storage/VoiceSOSRecoveryStorage': { VoiceSOSRecoveryStorage: {get:async()=>journal,save:async(_user,value)=>{journal=value;}} },
+    '@/backend/auth/AuthService': {AuthService:{getSession:async()=>({user:{id:refs[2]?.current ?? 'account-A'}})}},
+    '@/backend/errors/BackendError': {BackendError:class extends Error {}},
+    '@/backend/repositories/SOSRepository': {SOSRepository:{findOwnActiveForVoiceRecovery:async()=>{remoteQueries++;if(remoteFailure)throw remoteFailure;if(deferRemote)return new Promise(resolve=>{remoteResolve=resolve;remoteResolvers.push(resolve);});return remoteActive;}}},
+    '@/backend/repositories/SOSLifecycleRepository': {SOSLifecycleRepository:{getStatus:async(id)=>({sos_id:id,sos_status:'closed',is_owner:true,...remoteStatus})}},
   };
   function load(file) {
     const exports = {};
@@ -64,17 +90,34 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
       exports, require: (name) => { assert.ok(modules[name], name); return modules[name]; },
       console: { info() {}, warn() {} }, Date: class extends Date { static now() { return now; } },
       setTimeout: setTimer, clearTimeout: clearTimer, queueMicrotask,
+      TypeError,
     }, { filename: file });
     return exports;
   }
   modules['@/services/SafetyOperation'] = load('services/SafetyOperation.ts');
   modules['@/services/VoiceProtectionRuntime'] = load('services/VoiceProtectionRuntime.ts');
+  modules['@/services/VoiceSOSRecovery'] = load('services/VoiceSOSRecovery.ts');
   modules['@/services/VoiceRecognitionStop'] = load('services/VoiceRecognitionStop.ts');
   const runtime = modules['@/services/VoiceProtectionRuntime'].VoiceProtectionRuntime;
-  load('components/VoiceProtectionLifecycle.tsx').VoiceProtectionLifecycle();
-  const cleanups = effects.map((effect) => effect()).filter(Boolean);
+  runtime.onSOSRequested(() => { requests++; });
+  const component = load('components/VoiceProtectionLifecycle.tsx').VoiceProtectionLifecycle;
+  const mount = () => { effects.length = 0; refs.length = 0; component(); return effects.map(effect => effect()).filter(Boolean); };
+  let cleanups = mount();
   return {
     advance, runtime, events,
+    changeAccountBeforeEffects() { refs[2].current = 'account-B'; },
+    commitAccountLayoutCleanup() { cleanups[0](); },
+    grantPermission() { permissionResolve({ granted: true }); },
+    setSOSEvents(value) { sosEvents = value; },
+    setRemoteActive(value) {remoteActive=value;},
+    setRemoteFailure(value) {remoteFailure=value;},
+    setRemoteStatus(value) {remoteStatus=value;},
+    setRecoveryJournal(value) {journal=value;},
+    get recoveryJournal() { return journal ? { ...journal } : null; },
+    resolveRemote(value) {deferRemote=false;remoteResolve(value);},
+    resolveRemoteAt(index,value) {deferRemote=false;remoteResolvers[index](value);},
+    resolveSOSRead(value) { deferSOSRead = false; sosResolve(value); },
+    remount() { cleanups.forEach(cleanup => cleanup()); cleanups = mount(); },
     enable() { running = true; settings.enabled = true; runtime.allowRecognitionStart('account-A'); runtime.notifySettingsChanged('account-A'); },
     stopWithStaleSettings() { runtime.requestRecognitionStop('account-A'); runtime.notifySettingsChanged('account-A'); appState?.('active'); },
     disable() { runtime.requestRecognitionStop('account-A'); settings.enabled = false; running = false; runtime.notifySettingsChanged('account-A'); },
@@ -82,13 +125,18 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
     loseEngine: () => { nativeState = 'inactive'; },
     unmount: () => cleanups.forEach((cleanup) => cleanup()),
     get starts() { return starts; },
+    get remoteQueries() {return remoteQueries;},
+    get requests() { return requests; },
+    get generation() { return nativeGeneration; },
+    get options() { return lastOptions; },
+    changePassphrase(value) { settings.passphrase = value; runtime.notifySettingsChanged('account-A'); },
     get enabled() { return settings.enabled; },
     get pendingTimers() { return timers.size; },
     get status() { return runtime.getRecognitionState('account-A'); },
   };
 }
 
-(async () => {
+if (require.main === module) (async () => {
   const f = fixture();
   await f.advance(250);
   f.enable();
@@ -162,7 +210,8 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   sosCycle.runtime.notifySOSExecutionStarted('account-A');
   await sosCycle.advance(300); sosCycle.appState('active'); await sosCycle.advance(2_000);
   assert.equal(sosCycle.starts, 1, 'foreground cannot resume recognition during active SOS');
-  sosCycle.runtime.notifySOSClosed('account-A'); await sosCycle.advance(2_000);
+  sosCycle.runtime.notifySOSCompleted('account-A',{event:{id:'test-sos',remoteSosId:'remote-test'}},sosCycle.runtime.getSOSAttempt('account-A').attemptId);
+  sosCycle.runtime.notifySOSClosed('account-A','test-sos'); await sosCycle.advance(2_000);
   assert.equal(sosCycle.starts, 2, 'real close resumes once when ON');
   sosCycle.runtime.notifySOSClosed('account-A'); sosCycle.disable();
   await sosCycle.advance(3_000); assert.equal(sosCycle.status, 'off');
@@ -211,3 +260,4 @@ function fixture({ confirmStart = true, hangStop = false } = {}) {
   assert.equal(breaker.pendingTimers, 0);
   console.log('Voice lifecycle: async OFF/ON, native start timeout, recovery, ownership, dedup and cleanup PASS');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
+module.exports = { fixture };

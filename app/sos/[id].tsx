@@ -1,9 +1,11 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { ReceivedSOSRepository } from '@/backend/repositories/ReceivedSOSRepository';
+import { ReceivedEmergencyInformation } from '@/components/ReceivedEmergencyInformation';
+import AndroidReceivedSOSScreen from '@/screens/AndroidReceivedSOSScreen';
 import {
   isActiveSOSStatus,
   SOSLifecycleService,
@@ -32,6 +34,10 @@ const formatLocationFreshness = (updatedAt: string | null) => {
 };
 
 export default function ReceivedSOSScreen() {
+  return Platform.OS === 'android' ? <AndroidReceivedSOSScreen /> : <LegacyReceivedSOSScreen />;
+}
+
+function LegacyReceivedSOSScreen() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const router = useRouter();
   const { session, isInitializing } = useAuth();
@@ -41,10 +47,16 @@ export default function ReceivedSOSScreen() {
   const [remoteState, setRemoteState] = useState<SOSLifecycleState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState<string | undefined>();
+  const [isRefreshingEmergency, setIsRefreshingEmergency] = useState(true);
+  const activeSOSIdRef = useRef(sosId);
+  activeSOSIdRef.current = sosId;
   const activeUserIdRef = useRef<string | undefined>(userId);
   const backNavigationInFlightRef = useRef(false);
   const backNavigationCompletedRef = useRef(false);
   activeUserIdRef.current = userId;
+  const visibleSOS = Platform.OS === 'android' &&
+    (loadedUserId !== userId || sos?.sos_id !== sosId || isInitializing) ? null : sos;
 
   useEffect(
     () => () => {
@@ -60,6 +72,7 @@ export default function ReceivedSOSScreen() {
 
   useEffect(() => {
     setSOS(null);
+    setLoadedUserId(undefined);
     setRemoteState(null);
     setError(null);
     setIsAccepting(false);
@@ -88,11 +101,13 @@ export default function ReceivedSOSScreen() {
       }
 
       requestInFlight = true;
+      if (Platform.OS === 'android') setIsRefreshingEmergency(true);
 
       try {
         const nextRemoteState = await SOSLifecycleService.getStatus(sosId);
 
-        if (!isCurrent || activeUserIdRef.current !== userId) {
+        if (!isCurrent || activeUserIdRef.current !== userId ||
+          (Platform.OS === 'android' && activeSOSIdRef.current !== sosId)) {
           return;
         }
 
@@ -110,8 +125,14 @@ export default function ReceivedSOSScreen() {
 
         const result = await ReceivedSOSRepository.getById(sosId);
 
-        if (isCurrent && activeUserIdRef.current === userId) {
+        if (isCurrent && activeUserIdRef.current === userId &&
+          (Platform.OS !== 'android' || activeSOSIdRef.current === sosId)) {
+          if (Platform.OS === 'android' && (result.sos_id !== sosId || !isActiveSOSStatus(result.sos_status))) {
+            setSOS(null);
+            return;
+          }
           setSOS(result);
+          setLoadedUserId(userId);
           setError(null);
         }
       } catch (loadError: unknown) {
@@ -125,6 +146,8 @@ export default function ReceivedSOSScreen() {
         }
       } finally {
         requestInFlight = false;
+        if (Platform.OS === 'android' && isCurrent && activeUserIdRef.current === userId &&
+          activeSOSIdRef.current === sosId) setIsRefreshingEmergency(false);
       }
     };
 
@@ -244,7 +267,7 @@ export default function ReceivedSOSScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {!remoteState && !error ? <Text style={styles.loading}>Caricamento SOS…</Text> : null}
 
-      {sos ? (
+      {visibleSOS && sos ? (
         <View style={styles.card}>
           <Text style={styles.name}>{sos.sender_display_name}</Text>
           <Text style={styles.alert}>Ha attivato una richiesta di aiuto.</Text>
@@ -286,6 +309,10 @@ export default function ReceivedSOSScreen() {
           {remoteState?.accepted_by_me ? (
             <Text style={styles.acceptedText}>Hai preso in carico questo SOS.</Text>
           ) : null}
+          {Platform.OS === 'android' && userId && visibleSOS.sos_id === sosId &&
+            remoteState?.sos_id === sosId && isActiveSOSStatus(remoteState.sos_status) && !error && !isRefreshingEmergency ? (
+              <ReceivedEmergencyInformation key={`${userId}:${sosId}`} sosId={visibleSOS.sos_id} snapshot={visibleSOS} />
+            ) : null}
         </View>
       ) : null}
 

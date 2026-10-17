@@ -750,6 +750,7 @@ export default function HomeScreen() {
         ]);
       let nextEvents = storedEvents;
       let restoredActiveEvent: ActiveSOSEvent | null = null;
+      let verifiedTerminalEvent: SOSEvent | null = null;
       const latestStoredEvent = storedEvents[0];
 
       const latestEventWasActive =
@@ -792,6 +793,7 @@ export default function HomeScreen() {
               remoteStatus: remoteState.sos_status,
             };
           } else {
+            verifiedTerminalEvent = latestStoredEvent;
             try {
               nextEvents = await runSOSLocalStepWithTimeout(
                 SOSStorage.finalizeEvent(
@@ -840,6 +842,10 @@ export default function HomeScreen() {
       if (statusRef.current === 'idle') {
         setActiveEvent(restoredActiveEvent);
         setStatus(restoredActiveEvent ? 'active' : 'idle');
+        if (verifiedTerminalEvent) {
+          VoiceProtectionRuntime.notifySOSClosed(loadUserId, verifiedTerminalEvent.id, verifiedTerminalEvent.remoteSosId);
+          VoiceProtectionRuntime.notifySettingsChanged(loadUserId);
+        }
       } else {
         console.info('[SafeMeLink SOS] Snapshot locale ignorato durante lifecycle attivo.', {
           lifecycle: statusRef.current,
@@ -2010,10 +2016,13 @@ export default function HomeScreen() {
 
         if (isCurrent && activeUserIdRef.current === trackedUserId) {
           await SOSLiveLocationService.stop(trackedUserId).catch(() => undefined);
+          if (!isCurrent || activeUserIdRef.current !== trackedUserId) return;
           setLastEvents(nextEvents);
           setActiveEvent(null);
           setRemainingSeconds(SAFETY_TIMER_SECONDS);
           setStatus('idle');
+          VoiceProtectionRuntime.notifySOSClosed(trackedUserId, trackedEvent.id, trackedEvent.remoteSosId);
+          VoiceProtectionRuntime.notifySettingsChanged(trackedUserId);
         }
       } catch {
         console.warn('[SafeMeLink SOS] Aggiornamento stato remoto non riuscito.', {
@@ -2345,7 +2354,7 @@ export default function HomeScreen() {
       setPushDeliveryNotice(null);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
-      VoiceProtectionRuntime.notifySOSClosed(actionUserId);
+      VoiceProtectionRuntime.notifySOSClosed(actionUserId, eventToFinish.id, eventToFinish.remoteSosId);
       console.info('[SafeMeLink SOS] Chiusura completata.', {
         durationMs: Date.now() - startedAt,
         terminalStatus,
@@ -2735,6 +2744,14 @@ export default function HomeScreen() {
           </View>
         </View>
       )}
+
+      {Platform.OS === 'android' && status === 'idle' && activePanel === 'home' ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Il mio profilo di emergenza"
+          style={styles.emergencyProfileLink} onPress={() => router.push('/emergency-profile' as Href)}>
+          <Ionicons accessible={false} name="medical-outline" color="#8eeaff" size={20} />
+          <Text style={styles.emergencyProfileLinkText}>Il mio profilo di emergenza</Text>
+        </Pressable>
+      ) : null}
 
       {activePanel === 'checkpoint' && (
       <View style={styles.section}>
@@ -3232,6 +3249,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  emergencyProfileLink: { minHeight: 48, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 12, backgroundColor: '#17243b' },
+  emergencyProfileLinkText: { color: '#c5f4ff', fontSize: 15, fontWeight: '700', flexShrink: 1 },
   screen: {
     backgroundColor: '#050816',
     flex: 1,

@@ -374,8 +374,12 @@ export default function VoiceProtectionScreen() {
       };
 
       console.info('[VoiceProtection] scrittura storage avviata');
+      const settingsWrite = VoiceProtectionStorage.save(userId, updatedSettings);
+      // Storage completion, not screen lifetime or verification UI, is the
+      // configuration commit point. Never leave the old recognizer cache active.
+      void settingsWrite.then(() => VoiceProtectionRuntime.notifySettingsChanged(userId), () => undefined);
       await runWithTimeout(
-        VoiceProtectionStorage.save(userId, updatedSettings),
+        settingsWrite,
         VOICE_SETTINGS_SAVE_TIMEOUT_MS,
         'Il salvataggio locale non risponde. Riprova.',
       );
@@ -408,7 +412,6 @@ export default function VoiceProtectionScreen() {
           status: 'success',
           text: 'Parola d’ordine salvata.',
         });
-        VoiceProtectionRuntime.notifySettingsChanged(userId);
       }
     } catch (error) {
       console.error('[VoiceProtection] salvataggio fallito', {
@@ -596,6 +599,13 @@ export default function VoiceProtectionScreen() {
       assertActivationCurrent();
       if (!didStart || !VoiceProtectionService.isRunning() ||
         VoiceProtectionRuntime.getRecognitionState(userId) !== 'listening') {
+        const state = VoiceProtectionRuntime.getRecognitionState(userId);
+        if (state === 'verifying_sos' || state === 'sos_active' || state === 'sos_uncertain') {
+          setSettings(activeSettings);
+          setMicrophoneState('off');
+          setActivationFeedback('Ascolto sospeso: verifica lo stato SOS. Nessun nuovo SOS viene inviato.');
+          return;
+        }
         const inactiveSettings: VoiceProtectionSettings = {
           ...activeSettings,
           enabled: false,
@@ -760,11 +770,18 @@ export default function VoiceProtectionScreen() {
   };
 
   const microphoneLabel =
-    microphoneState === 'error'
+    recognitionState === 'error'
+      ? 'Stato microfono non verificato'
+      : microphoneState === 'error'
       ? 'Richiede attenzione'
       : settings.enabled && recognitionState === 'listening'
         ? 'Ascolto locale attivo'
-        : 'Non in uso';
+        : 'Nessuna conferma di ascolto attivo';
+  const voiceStatusLabel: Record<VoiceRecognitionState, string> = {
+    off: 'DISATTIVATA', listening: 'IN ASCOLTO', verifying_sos: 'VERIFICA SOS',
+    sos_active: 'SOS ATTIVO', sos_uncertain: 'ESITO SOS INCERTO', error: 'ASCOLTO NON OPERATIVO',
+    starting: 'RIPRISTINO IN CORSO', retrying: 'RIPRISTINO IN CORSO',
+  };
 
   const toggleUnavailableFeedback = isSaving
     ? 'Operazione in corso…'
@@ -822,9 +839,7 @@ export default function VoiceProtectionScreen() {
                   styles.status,
                   settings.enabled ? styles.statusActive : styles.statusInactive,
                 ]}>
-                {settings.enabled
-                  ? recognitionState === 'listening' ? 'IN ASCOLTO' : 'ASCOLTO IN RIPRISTINO'
-                  : 'NON ATTIVA'}
+                {voiceStatusLabel[recognitionState]}
               </Text>
             </View>
             {Platform.OS === 'android' ? <Pressable accessibilityRole="button" accessibilityLabel={voiceCommandIsStop ? 'Disattiva protezione vocale' : 'Attiva protezione vocale'}
@@ -847,12 +862,24 @@ export default function VoiceProtectionScreen() {
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
               {toggleUnavailableFeedback || (recognitionState === 'error'
                 ? VoiceProtectionRuntime.getRecognitionFailureMessage(userId) || 'Ascolto interrotto. Controlla i permessi e riprova ad attivare la protezione.'
+                : recognitionState === 'sos_uncertain'
+                  ? 'Esito SOS non verificato. L’ascolto resta sospeso; una risposta vuota non annulla un tentativo incerto.'
+                  : recognitionState === 'sos_active'
+                    ? 'Ascolto sospeso durante l’emergenza. Attendi una chiusura verificata.'
+                    : recognitionState === 'verifying_sos'
+                      ? 'Verifica dello stato SOS in corso. Nessun SOS, SMS o push viene inviato.'
                 : settings.enabled
                   ? recognitionState === 'listening'
                     ? 'Microfono in ascolto. La parola d’ordine può avviare il countdown SOS.'
                     : 'L’ascolto non è ancora pronto. SafeMeLink sta tentando di ripristinarlo.'
                   : activationFeedback)}
             </Text>
+          ) : null}
+          {(recognitionState === 'sos_uncertain' || recognitionState === 'sos_active') && settings.enabled ? (
+            <Pressable accessibilityRole="button" style={styles.batteryButton}
+              onPress={() => { if (userId) VoiceProtectionRuntime.notifySettingsChanged(userId); }}>
+              <Text style={styles.batteryButtonText}>RIPROVA VERIFICA SOS</Text>
+            </Pressable>
           ) : null}
           <Text style={styles.cardDescription}>
             {Platform.OS === 'android'
@@ -877,8 +904,8 @@ export default function VoiceProtectionScreen() {
             <View
               style={[
                 styles.microphoneDot,
-                microphoneState === 'ready' && styles.microphoneReady,
-                microphoneState === 'error' && styles.microphoneError,
+                recognitionState === 'listening' && settings.enabled && styles.microphoneReady,
+                recognitionState === 'error' && styles.microphoneError,
               ]}
             />
             <Text style={styles.microphoneText}>{microphoneLabel}</Text>

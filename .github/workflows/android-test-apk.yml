@@ -60,6 +60,78 @@ jobs:
           node-version: 20.20.1
           cache: npm
 
+      - name: Verify Development URL and client API key (fail closed)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          node <<'NODE'
+          const { randomBytes } = require('node:crypto');
+          class DevelopmentVerificationError extends Error {}
+          async function verifyDevelopment() {
+            const expectedRef = 'lwkxufnbjrpsehdkfmgy';
+            const expectedUrl = `https://${expectedRef}.supabase.co`;
+            const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+            const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+            if (url !== expectedUrl) throw new DevelopmentVerificationError('Development URL mismatch or missing.');
+            if (!key || key !== key.trim() || key.length > 4096) {
+              throw new DevelopmentVerificationError('Client API key missing or malformed.');
+            }
+            if (!/^sb_publishable_[A-Za-z0-9_-]{16,}$/.test(key)) {
+              const parts = key.split('.');
+              if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) {
+                throw new DevelopmentVerificationError('Only a publishable key or legacy anon JWT is allowed.');
+              }
+              let claims;
+              try { claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); }
+              catch { throw new DevelopmentVerificationError('Invalid client JWT payload.'); }
+              const now = Math.floor(Date.now() / 1000);
+              if (!claims || claims.role !== 'anon' || claims.ref !== expectedRef ||
+                  !Number.isFinite(claims.exp) || claims.exp <= now ||
+                  (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > now))) {
+                throw new DevelopmentVerificationError('Client JWT project, role or validity mismatch.');
+              }
+            }
+            // Decoded claims alone are NOT authentication. Both requests go only
+            // to the fixed Development Auth settings endpoint, with no user data.
+            // No redirects, retries, SQL, login or application RPCs are allowed.
+            const readSettings = apiKey => fetch(`${expectedUrl}/auth/v1/settings`, {
+              method: 'GET', redirect: 'error', signal: AbortSignal.timeout(15000),
+              headers: { apikey: apiKey, Accept: 'application/json' },
+            });
+            const invalidKey = `sb_publishable_${randomBytes(32).toString('hex')}`;
+            let negative;
+            try { negative = await readSettings(invalidKey); }
+            catch { throw new DevelopmentVerificationError('Development API negative control unavailable.'); }
+            const negativeStatus = negative.status;
+            await negative.body?.cancel();
+            if (![401, 403].includes(negativeStatus)) {
+              throw new DevelopmentVerificationError('Development endpoint did not reject the invalid-key control.');
+            }
+            let response;
+            let settings;
+            try {
+              response = await readSettings(key);
+              if (response.status !== 200 ||
+                  !response.headers.get('content-type')?.includes('application/json')) {
+                await response.body?.cancel();
+                throw new Error('Rejected response.');
+              }
+              settings = await response.json();
+            } catch { throw new DevelopmentVerificationError('Development client key was not verified by the API.'); }
+            if (!settings || typeof settings !== 'object' || Array.isArray(settings) ||
+                !settings.external || typeof settings.external !== 'object' || Array.isArray(settings.external)) {
+              throw new DevelopmentVerificationError('Unexpected Development Auth settings response.');
+            }
+            console.log('PASS: exact Development URL, public client key accepted, invalid key rejected.');
+          }
+          verifyDevelopment().catch(error => {
+            // Only fixed diagnostic messages; never log credentials or responses.
+            console.error(`::error::${error instanceof DevelopmentVerificationError ? error.message : 'Unexpected Development verification failure.'}`);
+            process.exitCode = 1;
+          });
+          NODE
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:

@@ -1,13 +1,15 @@
 import type { SOSCompletionResult } from '@/services/SOSService';
+import { VoiceSOSRecoveryStorage, type VoiceSOSAttempt } from '@/storage/VoiceSOSRecoveryStorage';
 
 type SettingsChangedListener = (userId: string) => void;
 type SOSRequestListener = (userId: string) => void;
 type RecognitionStartedListener = (userId: string) => void;
-export type VoiceRecognitionState = 'off' | 'starting' | 'listening' | 'retrying' | 'error';
+export type VoiceRecognitionState = 'off' | 'starting' | 'listening' | 'retrying' | 'error' | 'verifying_sos' | 'sos_active' | 'sos_uncertain';
 type RecognitionStateListener = (userId: string, state: VoiceRecognitionState) => void;
 const recognitionStateListeners = new Set<RecognitionStateListener>();
 const recognitionStopListeners = new Set<SettingsChangedListener>();
 const recognitionStoppedAccounts = new Set<string>();
+const recognitionBlockedAccounts = new Set<string>();
 let recognitionStatus: { userId: string; state: VoiceRecognitionState } | null = null;
 let recognitionFailure: { userId: string; category: 'permission' | 'readiness' | 'start' | 'circuit_breaker' } | null = null;
 type SOSExecutionListener = (userId: string) => void;
@@ -26,21 +28,48 @@ const sosFailureListeners = new Set<SOSFailureListener>();
 const sosClosedListeners = new Set<SOSClosedListener>();
 const backgroundWakeListeners = new Set<() => void>();
 let sosRequestLockedUntil = 0;
+let sosRequestLockOwner: string | null = null;
 let pendingSOSUserId: string | null = null;
 let scheduledSOS: { userId: string; expiresAt: number } | null = null;
 let sosExecutionInFlight = false;
+const activeVoiceEmergencies = new Map<string, VoiceSOSAttempt>();
+let attemptSequence = 0;
+const persistAttempt = (userId: string) => VoiceSOSRecoveryStorage.save(userId, activeVoiceEmergencies.get(userId) ?? null);
 
 const signalBackgroundTask = () => {
   backgroundWakeListeners.forEach((listener) => listener());
 };
 
 export const VoiceProtectionRuntime = {
+  isSOSSuspended(userId: string) { return activeVoiceEmergencies.has(userId); },
+  getSOSAttempt(userId: string) { const value = activeVoiceEmergencies.get(userId); return value ? {...value} : null; },
+  restoreSOSAttempt(userId: string, attempt: VoiceSOSAttempt) {
+    if (!activeVoiceEmergencies.has(userId)) activeVoiceEmergencies.set(userId, {...attempt});
+  },
+  adoptVerifiedActive(userId: string, remoteId: string) {
+    if (activeVoiceEmergencies.has(userId)) return;
+    activeVoiceEmergencies.set(userId, {attemptId:`remote:${remoteId}`,eventId:null,remoteId,phase:'active'});
+    void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+  },
+  restoreSOSSuspension(userId: string, eventId: string) {
+    if (!activeVoiceEmergencies.has(userId)) activeVoiceEmergencies.set(userId, {attemptId:`restored:${eventId}`,eventId,remoteId:null,phase:'active'});
+  },
+  async clearVerifiedSuspension(userId: string, attemptId: string | null) {
+    const current = activeVoiceEmergencies.get(userId);
+    if (current && current.attemptId !== attemptId) return false;
+    activeVoiceEmergencies.delete(userId);
+    await VoiceSOSRecoveryStorage.save(userId, null);
+    return !activeVoiceEmergencies.has(userId);
+  },
+  persistSOSAttempt: persistAttempt,
+  blockRecognition(userId: string) { recognitionBlockedAccounts.add(userId); },
   getRecognitionState(userId: string | null): VoiceRecognitionState {
     return recognitionStatus?.userId === userId ? recognitionStatus.state : 'off';
   },
 
   setRecognitionState(userId: string, state: VoiceRecognitionState) {
     if (recognitionStoppedAccounts.has(userId) && state !== 'off') return;
+    if (recognitionBlockedAccounts.has(userId) && state !== 'error' && state !== 'off') return;
     if (state === 'off' || state === 'listening') recognitionFailure = null;
     if (recognitionStatus?.state !== state || recognitionStatus?.userId !== userId) {
       console.info('[VoiceProtection] listener', { state });
@@ -76,10 +105,11 @@ export const VoiceProtectionRuntime = {
 
   allowRecognitionStart(userId: string) {
     recognitionStoppedAccounts.delete(userId);
+    recognitionBlockedAccounts.delete(userId);
   },
 
   isRecognitionStopped(userId: string) {
-    return recognitionStoppedAccounts.has(userId);
+    return recognitionStoppedAccounts.has(userId) || recognitionBlockedAccounts.has(userId);
   },
 
   onRecognitionStopRequested(listener: SettingsChangedListener) {
@@ -88,7 +118,7 @@ export const VoiceProtectionRuntime = {
   },
 
   notifyRecognitionStarted(userId: string) {
-    if (recognitionStoppedAccounts.has(userId)) return;
+    if (VoiceProtectionRuntime.isRecognitionStopped(userId)) return;
     VoiceProtectionRuntime.setRecognitionState(userId, 'listening');
     recognitionStartedListeners.forEach((listener) => listener(userId));
   },
@@ -128,11 +158,12 @@ export const VoiceProtectionRuntime = {
 
   requestSOS(userId: string) {
     const now = Date.now();
-    if (now < sosRequestLockedUntil) {
+    if (now < sosRequestLockedUntil || activeVoiceEmergencies.has(userId) || sosExecutionInFlight) {
       console.info('[VoiceProtection] richiesta SOS duplicata ignorata');
       return false;
     }
     scheduledSOS = { userId, expiresAt: now + VOICE_SOS_COUNTDOWN_MS };
+    sosRequestLockOwner = userId;
     signalBackgroundTask();
     if (sosRequestListeners.size === 0) {
       pendingSOSUserId = userId;
@@ -236,18 +267,57 @@ export const VoiceProtectionRuntime = {
   },
 
   notifySOSExecutionStarted(userId: string) {
+    const attemptId = `voice:${Date.now()}:${++attemptSequence}:${Math.random().toString(36).slice(2)}`;
+    activeVoiceEmergencies.set(userId, {attemptId,eventId:null,remoteId:null,phase:'pending'});
+    VoiceProtectionRuntime.setRecognitionState(userId, 'sos_active');
+    void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
     sosExecutionStartedListeners.forEach((listener) => listener(userId));
+    return attemptId;
   },
 
-  notifySOSCompleted(userId: string, result: SOSCompletionResult) {
+  notifySOSCompleted(userId: string, result: SOSCompletionResult, attemptId?: string) {
+    const current = activeVoiceEmergencies.get(userId);
+    if (!current || current.attemptId !== attemptId) return;
+    // A fulfilled local pipeline is not acknowledgement of the legacy INSERT.
+    // Neither timeout nor an ambiguous creation error proves that it rolled back.
+    const uncertainCreation = result.pushResult?.reason === 'remote_creation_timeout' ||
+      result.pushResult?.reason === 'remote_creation_error';
+    activeVoiceEmergencies.set(userId, {
+      ...current,
+      eventId: result.event?.id ?? current.eventId,
+      remoteId: result.event?.remoteSosId ?? result.pushResult?.sosId ?? current.remoteId,
+      phase: uncertainCreation ? 'unknown' : 'active',
+    });
+    void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+    if (uncertainCreation) VoiceProtectionRuntime.setRecognitionState(userId, 'sos_uncertain');
     sosCompletionListeners.forEach((listener) => listener(userId, result));
   },
 
-  notifySOSFailed(userId: string, error: unknown) {
+  notifySOSFailed(userId: string, error: unknown, attemptId?: string) {
+    const current = activeVoiceEmergencies.get(userId);
+    if (!current || current.attemptId !== attemptId) return;
+    // A known active event must never be treated as a failed activation.
+    if (current.eventId) return;
+    // A thrown launch can follow remote side effects. Absence of a completion
+    // response is not proof of absence of an SOS; keep the suspension fail-closed.
+    if (activeVoiceEmergencies.has(userId)) {
+      activeVoiceEmergencies.set(userId, {...current,phase:'unknown'});
+      void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+      VoiceProtectionRuntime.setRecognitionState(userId, 'sos_uncertain');
+    }
     sosFailureListeners.forEach((listener) => listener(userId, error));
   },
 
-  notifySOSClosed(userId: string) {
+  notifySOSClosed(userId: string, eventId?: string, remoteId?: string) {
+    const activeId = activeVoiceEmergencies.get(userId);
+    if (activeId && (activeId.phase !== 'active' ||
+      !((eventId && activeId.eventId === eventId) || (remoteId && activeId.remoteId === remoteId)))) return;
+    activeVoiceEmergencies.delete(userId);
+    if (activeId) void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+    if (sosRequestLockOwner === userId && !sosExecutionInFlight && !scheduledSOS) {
+      sosRequestLockedUntil = 0;
+      sosRequestLockOwner = null;
+    }
     sosClosedListeners.forEach((listener) => listener(userId));
   },
 
