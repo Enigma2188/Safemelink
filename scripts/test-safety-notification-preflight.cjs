@@ -40,6 +40,13 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync('services/SafetyNotificati
   assert.equal(await api.configure(), false); assert.equal(settings, 3);
   sound = 'default'; importance = 2;
   assert.equal(await api.configure(), false);
+  await assert.rejects(api.scheduleConfirmation('synthetic', 'checkpoint', new Date().toISOString(), 'generation'));
+  importance = 4; sound = null;
+  await assert.rejects(api.scheduleConfirmation('synthetic', 'checkpoint', new Date().toISOString(), 'generation'));
+  sound = 'default'; granted = false;
+  await assert.rejects(api.scheduleConfirmation('synthetic', 'checkpoint', new Date().toISOString(), 'generation'));
+  granted = true; exact = false;
+  await assert.rejects(api.scheduleConfirmation('synthetic', 'checkpoint', new Date().toISOString(), 'generation'));
   assert.equal(alarms, 0, 'Permission flows and resume checks never arm alarms');
   const home = fs.readFileSync('app/(tabs)/index.tsx', 'utf8');
   assert.match(home, /if \(!notificationsReady\) \{[\s\S]*?return false;/);

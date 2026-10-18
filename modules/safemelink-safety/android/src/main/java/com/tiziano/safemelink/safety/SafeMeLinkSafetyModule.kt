@@ -13,6 +13,17 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class SafeMeLinkSafetyModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("SafeMeLinkSafety")
+    Events("onCheckpointNoticeFailed")
+    OnCreate {
+      SafetyDeadlineStore.onCheckpointNoticeFailed = { sendEvent("onCheckpointNoticeFailed", emptyMap<String, Any>()) }
+    }
+    OnDestroy { SafetyDeadlineStore.onCheckpointNoticeFailed = null }
+    Function("getCheckpointNoticeFailure") { userId: String ->
+      SafetyDeadlineStore.checkpointNoticeFailure(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId)
+    }
+    Function("acknowledgeCheckpointNoticeFailure") { userId: String, generation: String ->
+      SafetyDeadlineStore.acknowledgeCheckpointNoticeFailure(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId, generation)
+    }
     Function("canScheduleExactAlarms") {
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val alarms = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager

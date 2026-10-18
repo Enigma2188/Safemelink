@@ -13,6 +13,7 @@ import { PushTokenRegistrar } from '@/components/PushTokenRegistrar';
 import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
 import { SOSNetworkPresenceProvider } from '@/components/SOSNetworkPresenceProvider';
 import { VoiceProtectionLifecycle } from '@/components/VoiceProtectionLifecycle';
+import { CheckpointNotificationWarning } from '@/components/CheckpointNotificationWarning';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -73,6 +74,7 @@ function RootNavigator() {
       <SOSNetworkPresenceProvider>
         <PushTokenRegistrar />
         <VoiceProtectionLifecycle />
+        <CheckpointNotificationWarning />
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={styles.container}>
             <OfflineStatusBanner />

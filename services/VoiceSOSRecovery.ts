@@ -29,10 +29,21 @@ export const VoiceSOSRecovery = {
       const active = await SOSRepository.findOwnActiveForVoiceRecovery(userId);
       if ((await AuthService.getSession().catch(() => null))?.user.id !== userId) return result('uncertain');
       if (active.length) return {...result('active'),remoteActiveId:active[0].id};
-      // A SELECT cannot fence an in-flight legacy INSERT. Never infer failure.
-      if (unresolved) return result('uncertain');
-      const ids = new Set([...activeLocal.map(event => event.remoteSosId), attempt?.remoteId].filter((id): id is string => Boolean(id)));
-      if (activeLocal.some(event => !event.remoteSosId) || (attempt && !attempt.remoteId)) return result('active');
+      // Recover the binding from the SAME local event, never from an unrelated SOS.
+      const correlatedEvent = attempt?.eventId ? events.find(event => event.id === attempt.eventId) : undefined;
+      if (attempt?.remoteId && correlatedEvent?.remoteSosId && attempt.remoteId !== correlatedEvent.remoteSosId) return result('uncertain');
+      const attemptRemoteId = attempt?.remoteId ?? correlatedEvent?.remoteSosId;
+      // A SELECT cannot fence an in-flight legacy INSERT. Only a known, correlated
+      // remote ID can provide terminal proof for an uncertain creation.
+      if (unresolved && !attemptRemoteId) return result('uncertain');
+      const ids = new Set([...activeLocal.map(event => event.remoteSosId), attemptRemoteId].filter((id): id is string => Boolean(id)));
+      if (activeLocal.some(event => !event.remoteSosId)) return result('uncertain');
+      if (attempt && !attemptRemoteId) {
+        // Confirmed local-only completion may be released after its own local close.
+        // Missing history is NOT evidence of a close, nor of server absence.
+        if (attempt.phase !== 'active' || !correlatedEvent || correlatedEvent.isActive !== false ||
+          !['closed','cancelled'].includes(correlatedEvent.remoteStatus ?? '')) return result('uncertain');
+      }
       for (const id of ids) {
         const state = await SOSLifecycleRepository.getStatus(id);
         if (state.sos_id !== id || !state.is_owner) return result('uncertain');

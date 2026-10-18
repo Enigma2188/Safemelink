@@ -1129,6 +1129,7 @@ export default function HomeScreen() {
       if (checkpointOperationGenerationRef.current !== operationGeneration || activeUserIdRef.current !== userId) return false;
       if (!notificationsReady) {
         setSafetyError('Checkpoint non avviato: completa le autorizzazioni e verifica il suono del canale, poi riprova.');
+        Alert.alert('CHECKPOINT NON AVVIATO', 'La protezione automatica non è attiva. Abilita le notifiche, il suono del canale Verifiche di sicurezza e “Sveglie e promemoria”, poi riprova.', [{ text: 'HO CAPITO' }], { cancelable: false });
         return false;
       }
       const startedAtMs = Date.now();

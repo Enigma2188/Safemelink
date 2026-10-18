@@ -19,6 +19,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import { VoiceProtectionRuntime, type VoiceRecognitionState } from '@/services/VoiceProtectionRuntime';
 import { VoiceProtectionService } from '@/services/VoiceProtectionService';
+import { stopVoiceRecognition } from '@/services/VoiceRecognitionStop';
 import { voiceReadinessMessage } from '@/services/VoiceRecognitionCapabilities';
 import { normalizePassphrase } from '@/storage/PassphraseStorage';
 import {
@@ -336,6 +337,10 @@ export default function VoiceProtectionScreen() {
   );
 
   const savePassphrase = async () => {
+    if (settingsRef.current.enabled) {
+      setMessage('Disattiva Protezione Vocale prima di modificare la parola d’ordine.');
+      return;
+    }
     if (saveInFlightRef.current) {
       console.info('[VoiceProtection] salvataggio ignorato: operazione già in corso');
       return;
@@ -368,6 +373,13 @@ export default function VoiceProtectionScreen() {
     console.info('[VoiceProtection] inizio salvataggio parola');
 
     try {
+      // OFF is requested immediately, but Android teardown is asynchronous.
+      // Never commit a different phrase until the native listener is inactive.
+      VoiceProtectionRuntime.requestRecognitionStop(userId);
+      if (Platform.OS === 'android' && !(await stopVoiceRecognition())) {
+        throw new Error('Arresto del microfono non confermato. Riprova prima di salvare.');
+      }
+      if (screenGenerationRef.current !== screenGeneration || settingsRef.current.enabled) return;
       const updatedSettings: VoiceProtectionSettings = {
         ...settingsRef.current,
         passphrase: trimmedPassphrase,
@@ -426,6 +438,7 @@ export default function VoiceProtectionScreen() {
           error instanceof Error &&
           (error.message.startsWith('Il salvataggio locale non risponde') ||
             error.message.startsWith('La verifica del salvataggio locale non risponde') ||
+            error.message.startsWith('Arresto del microfono non confermato') ||
             error.message.startsWith('La parola salvata non coincide'))
             ? error.message
             : 'Impossibile salvare la parola d’ordine. Riprova.';
@@ -880,6 +893,11 @@ export default function VoiceProtectionScreen() {
               onPress={() => { if (userId) VoiceProtectionRuntime.notifySettingsChanged(userId); }}>
               <Text style={styles.batteryButtonText}>RIPROVA VERIFICA SOS</Text>
             </Pressable>
+          ) : null}
+          {settings.enabled && recognitionState !== 'listening' ? (
+            <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
+              Modalità abilitata, ma microfono non in ascolto. Premi DISATTIVA PROTEZIONE per arrestarla e modificare la parola d’ordine. L’eventuale verifica SOS resterà conservata.
+            </Text>
           ) : null}
           <Text style={styles.cardDescription}>
             {Platform.OS === 'android'

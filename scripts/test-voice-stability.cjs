@@ -13,7 +13,7 @@ async function boot() {
   assert.equal(f.status, 'listening');
   return f;
 }
-async function saveAfterUnmount() {
+async function saveAfterUnmount({ enabled = false, stopConfirmed = true } = {}) {
   // Execute the actual screen save handler with controlled storage completion.
   const screen = fs.readFileSync('app/voice-protection.tsx', 'utf8');
   const start = screen.indexOf('  const savePassphrase = async () => {');
@@ -21,7 +21,7 @@ async function saveAfterUnmount() {
   assert.ok(start >= 0 && end > start);
   const source = screen.slice(start, end) + '\nexports.save = savePassphrase;';
   let settle;
-  let stored = { enabled: true, passphrase: 'old phrase' };
+  let stored = { enabled, passphrase: 'old phrase' };
   let notices = 0;
   const active = { current: true };
   const context = {
@@ -29,13 +29,14 @@ async function saveAfterUnmount() {
     saveInFlightRef: { current: false }, refreshGenerationRef: { current: 0 },
     screenGenerationRef: { current: 1 }, screenActiveRef: active,
     settingsRef: { current: stored }, VOICE_SETTINGS_SAVE_TIMEOUT_MS: 5000,
+    Platform: { OS: 'android' }, stopVoiceRecognition: async () => stopConfirmed,
     normalizePassphrase: value => value.trim().toLowerCase(),
     runWithTimeout: promise => promise,
     VoiceProtectionStorage: {
       save: (_user, value) => new Promise(resolve => { settle = () => { stored = value; resolve(); }; }),
       get: async () => stored,
     },
-    VoiceProtectionRuntime: { notifySettingsChanged: () => { notices++; } },
+    VoiceProtectionRuntime: { requestRecognitionStop() {}, notifySettingsChanged: () => { notices++; } },
     Date, console: { info() {}, error() {} },
   };
   for (const name of ['setIsSaving','setMessage','setPassphraseSaveFeedback','setSettings','setPassphraseDraft']) context[name] = () => {};
@@ -43,6 +44,15 @@ async function saveAfterUnmount() {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
   } }).outputText, context);
   const pending = context.exports.save();
+  // Native teardown now precedes persistence; the UI cannot save while ON.
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  if (enabled || !stopConfirmed) {
+    await pending;
+    assert.equal(settle, undefined, 'unsafe passphrase changes never reach storage');
+    assert.equal(stored.passphrase, 'old phrase'); assert.equal(notices, 0);
+    return;
+  }
+  assert.equal(typeof settle, 'function', 'storage begins only after confirmed native stop');
   active.current = false;
   settle();
   await pending;
@@ -98,7 +108,9 @@ const cases = [
       assert.equal(f.requests, 1, 'new passphrase recognized once');
     } finally { f.unmount(); await f.advance(300); }
   }],
-  ['persisted passphrase change after screen unmount', saveAfterUnmount],
+  ['persisted passphrase change after screen unmount', () => saveAfterUnmount()],
+  ['passphrase cannot change while mode remains enabled', () => saveAfterUnmount({ enabled: true })],
+  ['passphrase cannot change before native stop confirmation', () => saveAfterUnmount({ stopConfirmed: false })],
   ['OFF during recovery prevents late callbacks and timers', async () => {
     const f = await boot();
     try {

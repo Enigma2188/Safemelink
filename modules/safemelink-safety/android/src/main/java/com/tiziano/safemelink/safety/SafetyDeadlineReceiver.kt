@@ -8,9 +8,9 @@ import android.util.Log
 
 class SafetyDeadlineReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    val generation = intent.getStringExtra("generation") ?: return
+    val stage = intent.getIntExtra("stage", 0)
     try {
-      val generation = intent.getStringExtra("generation") ?: return
-      val stage = intent.getIntExtra("stage", 0)
       val record = SafetyDeadlineStore.fired(context, generation, stage) ?: return
       if (stage == 1) SafetyDeadlineStore.publishConfirmation(context, record) else {
         val service = Intent(context, SafetyEscalationService::class.java).putExtra("generation", generation)
@@ -18,7 +18,9 @@ class SafetyDeadlineReceiver : BroadcastReceiver() {
       }
     } catch (error: Exception) {
       Log.w("SafetyDeadline", "ALARM_HANDLING_FAILED category=${error.javaClass.simpleName} nowMs=${System.currentTimeMillis()}")
-      SafetyDeadlineStore.read(context)?.let { runCatching { SafetyDeadlineStore.show(context, it, true) } }
+      SafetyDeadlineStore.read(context)?.takeIf {
+        it.optString("generation") == generation && !(stage == 1 && it.optString("kind") == "checkpoint" && it.optBoolean("firstNoticeFailed"))
+      }?.let { runCatching { SafetyDeadlineStore.show(context, it, true) } }
     }
   }
 }

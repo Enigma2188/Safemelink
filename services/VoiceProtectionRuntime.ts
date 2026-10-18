@@ -310,8 +310,13 @@ export const VoiceProtectionRuntime = {
 
   notifySOSClosed(userId: string, eventId?: string, remoteId?: string) {
     const activeId = activeVoiceEmergencies.get(userId);
-    if (activeId && (activeId.phase !== 'active' ||
-      !((eventId && activeId.eventId === eventId) || (remoteId && activeId.remoteId === remoteId)))) return;
+    // Home supplies remoteId only after server-confirmed terminal state.
+    // That proof closes this SAME remote attempt even if its creation was uncertain.
+    // A local-only close must never release an unknown/pending legacy INSERT.
+    const remoteMatches = Boolean(remoteId && activeId?.remoteId === remoteId);
+    const localMatches = Boolean(eventId && activeId?.eventId === eventId);
+    if (activeId?.remoteId && remoteId && activeId.remoteId !== remoteId) return;
+    if (activeId && !remoteMatches && !(activeId.phase === 'active' && localMatches)) return;
     activeVoiceEmergencies.delete(userId);
     if (activeId) void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
     if (sosRequestLockOwner === userId && !sosExecutionInFlight && !scheduledSOS) {

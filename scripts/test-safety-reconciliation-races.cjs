@@ -163,17 +163,19 @@ async function extraRaces() {
   assert.match(native, /if \(generation != null\) return null/);
   assert.match(native, /remainingMs <= 0 \|\| record.optBoolean\("claimed"\) \|\| record.optBoolean\("escalationFired"\)/);
   assert.match(native, /Tempo di conferma scaduto/);
-  assert.match(native, /show\(context, current\)\s*current.put\("firstFired", true\)\s*write\(context, current\)/);
+  assert.match(native, /try \{\s*show\(context, current\)\s*\} catch/);
+  assert.match(native, /throw error[\s\S]*?current.put\("firstFired", true\)\s*write\(context, current\)/);
   const home = fs.readFileSync('app/(tabs)/index.tsx', 'utf8');
   assert.match(home, /checkpointConfirmSeconds > 0 && <Pressable/);
   assert.match(home, /goHomeConfirmSeconds > 0 && <Pressable/);
   assert.match(home, /Date.now\(\) >= Date.parse\(checkpointExpiresAt\) \+ CHECKPOINT_CONFIRM_SECONDS \* 1_000/);
   assert.match(home, /Date.now\(\) >= Date.parse\(goHomeExpiresAt\) \+ GO_HOME_CONFIRM_SECONDS \* 1_000/);
 }
-(async () => {
+if (require.main === module) (async () => {
   const results = { CANCEL_RACE_OLD_REARMED: Boolean(await cancelRace()), STALE_RECONCILE_REPLACED_NEW_ALARM: await replacementRace(), OLDER_CASA_HYDRATION_OVERWROTE_NEW_UI_SAVE: await casaRace() };
   for (const [name, value] of Object.entries(results)) console.log(`${name}=${value}`);
   for (const value of Object.values(results)) assert.equal(value, process.argv.includes('--expect-bugs'));
   if (!process.argv.includes('--expect-bugs')) { assert.equal(await replacementRace(true), false, 'Repeat generation remains current'); await extraRaces(); }
   console.log(process.argv.includes('--expect-bugs') ? 'REPRODUCTION CONFIRMED: 3 bugs on unchanged runtime' : 'PASS real runtime reconciliation races');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
+module.exports = { fixture };

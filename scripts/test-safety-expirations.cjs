@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.resolve('services/SafetyExpirationRuntime.ts
 const homeSource = fs.readFileSync(path.resolve('app/(tabs)/index.tsx'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
-function fixture(initial = null, os = 'ios') {
+function fixture(initial = null, os = 'ios', diagnostics = console) {
   let now = 1_000_000;
   let stored = initial;
   let deliveries = 0;
@@ -73,7 +73,7 @@ function fixture(initial = null, os = 'ios') {
   };
   class Clock extends Date { constructor(value) { super(value === undefined ? now : value); } static now() { return now; } }
   const load = () => {
-    vm.runInNewContext(compiled, { exports, require: (name) => { assert.ok(modules[name], name); return modules[name]; }, Date: Clock, console });
+    vm.runInNewContext(compiled, { exports, require: (name) => { assert.ok(modules[name], name); return modules[name]; }, Date: Clock, console: diagnostics });
   };
   load();
   return {
@@ -386,4 +386,5 @@ async function main() {
   }
   console.log('PASS safety deadlines: pending notification, stages, duplicate callback, cancel, expedite, storage recovery');
 }
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+if (require.main === module) main().catch((error) => { console.error(error); process.exitCode = 1; });
+module.exports = { fixture };

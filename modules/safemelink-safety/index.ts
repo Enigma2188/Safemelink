@@ -14,4 +14,7 @@ export const SafeMeLinkSafety = requireOptionalNativeModule<{
   finishDeadlines(userId: string, sessionId: string, generation: string): void;
   rollbackDeadlines(userId: string, sessionId: string, generation: string): boolean;
   isCurrentDeadline(userId: string, sessionId: string, generation: string): boolean;
+  getCheckpointNoticeFailure(userId: string): string | null;
+  acknowledgeCheckpointNoticeFailure(userId: string, generation: string): boolean;
+  addListener(event: 'onCheckpointNoticeFailed', listener: () => void): { remove(): void };
 }>('SafeMeLinkSafety');

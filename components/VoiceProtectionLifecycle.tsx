@@ -49,15 +49,25 @@ export function VoiceProtectionLifecycle() {
   const recognitionOwnerRef = useRef(0);
   const recognitionAccountRef = useRef<string | null>(null);
   const recoveryVerifiedRef = useRef(false);
+  const nativeDiagnosticsRef = useRef(new Set<string>());
   if (!recognitionOwnerRef.current) recognitionOwnerRef.current = ++recognitionOwnerSequence;
   activeUserIdRef.current = userId;
   // The local Android config plugin tags events at native emission time.
   // Events from a previous recognizer (including already queued bridge events)
   // are never authority for the current owner/generation.
-  const isCurrentNativeEvent = (event: unknown) => {
+  const isCurrentNativeEvent = (event: unknown, kind: 'start' | 'result' | 'error' | 'end') => {
     const generation = (event as { safemelinkGeneration?: unknown } | null)?.safemelinkGeneration;
-    return recognitionAccountRef.current === activeUserIdRef.current && typeof generation === 'string' &&
+    const accepted = recognitionAccountRef.current === activeUserIdRef.current && typeof generation === 'string' &&
       generation === recognitionOwnerRef.current + ':' + recognitionGenerationRef.current;
+    const category = accepted ? 'accepted' : recognitionAccountRef.current !== activeUserIdRef.current
+      ? 'account_mismatch' : typeof generation !== 'string' ? 'missing_generation' : 'stale_generation';
+    const key = kind + ':' + category;
+    // Once per category/session: never log payloads, transcripts or passphrases.
+    if (!nativeDiagnosticsRef.current.has(key)) {
+      nativeDiagnosticsRef.current.add(key);
+      console.info('[VoiceProtection] native_event', { kind, category, generation: recognitionGenerationRef.current });
+    }
+    return accepted;
   };
 
   const clearRestartTimer = useCallback(() => {
@@ -76,6 +86,7 @@ export function VoiceProtectionLifecycle() {
 
   const stopRecognition = useCallback(() => {
     recognitionGenerationRef.current += 1;
+    nativeDiagnosticsRef.current.clear();
     clearRestartTimer();
     clearPostSOSRecoveryTimer();
     recognitionStartedRef.current = false;
@@ -339,7 +350,7 @@ export function VoiceProtectionLifecycle() {
   }, [clearRestartTimer, disableProtection, startRecognition]);
 
   useSpeechRecognitionEvent('start', (event) => {
-    if (!isCurrentNativeEvent(event)) return;
+    if (!isCurrentNativeEvent(event, 'start')) return;
     recognitionStartedAtRef.current = Date.now();
     const currentUserId = activeUserIdRef.current;
     if (currentUserId && VoiceProtectionRuntime.isRecognitionStopped(currentUserId)) {
@@ -356,7 +367,7 @@ export function VoiceProtectionLifecycle() {
   });
 
   useSpeechRecognitionEvent('result', (event) => {
-    if (!isCurrentNativeEvent(event)) return;
+    if (!isCurrentNativeEvent(event, 'result')) return;
     if (
       !shouldListenRef.current ||
       !recognitionConfirmedRef.current ||
@@ -393,7 +404,7 @@ export function VoiceProtectionLifecycle() {
   });
 
   useSpeechRecognitionEvent('error', (event) => {
-    if (!isCurrentNativeEvent(event)) return;
+    if (!isCurrentNativeEvent(event, 'error')) return;
     if (
       !shouldListenRef.current ||
       !recognitionStartedRef.current
@@ -425,7 +436,7 @@ export function VoiceProtectionLifecycle() {
   });
 
   useSpeechRecognitionEvent('end', (event) => {
-    if (!isCurrentNativeEvent(event)) return;
+    if (!isCurrentNativeEvent(event, 'end')) return;
     if (
       !shouldListenRef.current ||
       !recognitionStartedRef.current
