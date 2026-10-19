@@ -232,7 +232,7 @@ internal object SafetyDeadlineStore {
       current.put("firstNoticeFailed", true)
       // An already-armed Checkpoint retains its original T2 even if T1 fails.
       // Only diagnostics change; claim, lease, deadlines and alarms are untouched.
-      if (current.optString("kind") == "checkpoint") {
+      if (current.optString("kind") == "checkpoint" || current.optString("kind") == "go_home") {
         val reason = when (error.message) {
           "notifications_disabled" -> "notifications_disabled"
           "notification_channel_silent" -> "notification_channel_silent"
@@ -240,11 +240,7 @@ internal object SafetyDeadlineStore {
         }
         current.put("firstNoticeFailureReason", reason)
         // Persist the account/session-scoped warning without invalidating T2.
-        check(preferences(context).edit().putString("deadline", current.toString())
-          .putString("checkpoint-notice-failure-${current.getString("userId")}", JSONObject()
-            .put("sessionId", current.getString("sessionId")).put("generation", current.getString("generation"))
-            .put("reason", reason).toString()).commit()) { "deadline_persistence_failed" }
-        runCatching { onCheckpointNoticeFailed?.invoke() }
+        persistNoticeWarning(context, current, reason)
       } else write(context, current)
       trace("FIRST_NOTICE_REJECTED", current.getLong("t1"))
       throw error
@@ -252,6 +248,19 @@ internal object SafetyDeadlineStore {
     // Failure to persist this flag is NOT evidence that Android rejected notify().
     current.put("firstFired", true)
     write(context, current)
+    if (current.optBoolean("firstNoticeDegraded")) {
+      // notify() returned, but Android/user settings do not guarantee an audible,
+      // high-importance alert. Never call this a failed publication or cancel T2.
+      runCatching { persistNoticeWarning(context, current, "notification_channel_degraded") }
+        .onFailure { Log.w("SafetyDeadline", "NOTICE_WARNING_PERSISTENCE_FAILED") }
+    }
+  }
+  private fun persistNoticeWarning(context: Context, current: JSONObject, reason: String) {
+    check(preferences(context).edit().putString("deadline", current.toString())
+      .putString("checkpoint-notice-failure-${current.getString("userId")}", JSONObject()
+        .put("sessionId", current.getString("sessionId")).put("generation", current.getString("generation"))
+        .put("kind", current.getString("kind")).put("reason", reason).toString()).commit()) { "deadline_persistence_failed" }
+    runCatching { onCheckpointNoticeFailed?.invoke() }
   }
   @Synchronized fun checkpointNoticeFailure(context: Context, userId: String): String? =
     preferences(context).getString("checkpoint-notice-failure-$userId", null)
@@ -262,7 +271,7 @@ internal object SafetyDeadlineStore {
     // Acknowledgement only dismisses the warning; T2 remains unchanged.
     return preferences(context).edit().remove("checkpoint-notice-failure-$userId").commit()
   }
-  private fun checkNotificationPrerequisites(context: Context, channelId: String) {
+  private fun checkNotificationPrerequisites(context: Context, channelId: String, requireAudible: Boolean = true): Boolean {
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled()) {
       Log.w("SafetyDeadline", "NOTIFICATION_PREREQUISITE_FAILED category=notifications_disabled")
@@ -270,11 +279,18 @@ internal object SafetyDeadlineStore {
     }
     if (Build.VERSION.SDK_INT >= 26) {
       val channel = manager.getNotificationChannel(channelId)
-      if (channel == null || channel.importance < NotificationManager.IMPORTANCE_HIGH || channel.sound == null) {
+      if (channel == null || channel.importance == NotificationManager.IMPORTANCE_NONE) {
+        Log.w("SafetyDeadline", "NOTIFICATION_PREREQUISITE_FAILED category=channel_missing_or_blocked")
+        error("notification_channel_silent")
+      }
+      val audible = channel.importance >= NotificationManager.IMPORTANCE_HIGH && channel.sound != null
+      if (requireAudible && !audible) {
         Log.w("SafetyDeadline", "NOTIFICATION_PREREQUISITE_FAILED category=channel_unavailable_or_silent")
         error("notification_channel_silent")
       }
+      return audible
     }
+    return true
   }
   fun notification(context: Context, channelId: String, title: String, body: String, silent: Boolean = false): Notification {
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -304,7 +320,11 @@ internal object SafetyDeadlineStore {
       if (failed || elapsed) "Apri SafeMeLink per verificare lo stato dell’SOS."
       else "Apri SafeMeLink per confermare: restano ${(remainingMs + 999) / 1000} secondi.")
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    checkNotificationPrerequisites(context, record.optString("channelId", "safety-checks"))
+    // Keep strict pre-arm requirements, but do not suppress a possible visual
+    // alert for an already armed session merely because the channel was demoted.
+    val audible = checkNotificationPrerequisites(context, record.optString("channelId", "safety-checks"), requireAudible = false)
+    record.put("firstNoticeDegraded", !audible)
+    if (!audible) trace("FIRST_NOTICE_DEGRADED", record.getLong("t1"))
     manager.notify(NOTICE_ID, notice)
     trace(if (failed) "FAILURE_NOTICE_POSTED" else "FIRST_NOTICE_POSTED", record.getLong("t1"))
   }

@@ -53,6 +53,7 @@ import {
   type HomeLocation,
 } from '@/storage/GoHomeStorage';
 import { SOSStorage } from '@/storage/SOSStorage';
+import { SOSClosureRecovery, SOSClosureUncertainError } from '@/services/SOSClosureRecovery';
 import { InterfaceModeStorage, type InterfaceMode } from '@/storage/InterfaceModeStorage';
 import { SafetyNotificationPreferenceStorage } from '@/storage/SafetyNotificationPreferenceStorage';
 
@@ -734,6 +735,17 @@ export default function HomeScreen() {
     }).catch(() => reportSafetyError('home_location_load'));
 
     try {
+      if (!isOffline) {
+        try {
+          const reconciled = await SOSClosureRecovery.reconcile(loadUserId);
+          if (activeUserIdRef.current !== loadUserId || loadGenerationRef.current !== loadGeneration) return;
+          for (const closed of reconciled.completed) VoiceProtectionRuntime.notifySOSClosed(loadUserId, closed.eventId, closed.remoteId);
+          if (reconciled.unresolved) setSafetyError('Chiusura SOS non ancora confermata. La richiesta è conservata: nessuna emergenza incerta è stata dichiarata conclusa.');
+        } catch {
+          if (activeUserIdRef.current === loadUserId) setSafetyError('Chiusura SOS non ancora confermata. La richiesta è conservata e verrà verificata al prossimo accesso alla Home.');
+          reportSafetyError('sos_close_reconcile');
+        }
+      }
       const [
         storedContacts,
         storedEvents,
@@ -998,14 +1010,27 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadSOSData();
+      const foreground = AppState.addEventListener('change', state => {
+        if (state !== 'active' || !userId || isOffline) return;
+        void SOSClosureRecovery.reconcile(userId).then(reconciled => {
+          if (activeUserIdRef.current !== userId) return;
+          for (const closed of reconciled.completed) VoiceProtectionRuntime.notifySOSClosed(userId, closed.eventId, closed.remoteId);
+          if (reconciled.unresolved) setSafetyError('Chiusura SOS non ancora confermata. Richiesta conservata: riapri la Home per riprovare.');
+          if (reconciled.completed.length) void loadSOSData();
+        }).catch(() => {
+          if (activeUserIdRef.current === userId) setSafetyError('Chiusura SOS non ancora confermata. Richiesta conservata: riapri la Home per riprovare.');
+          reportSafetyError('sos_close_reconcile');
+        });
+      });
 
       return () => {
+        foreground.remove();
         loadGenerationRef.current += 1;
         goHomeEstimateGenerationRef.current += 1;
         goHomeEstimateInFlightRef.current = false;
         homeCaptureInFlightRef.current = false;
       };
-    }, [loadSOSData]),
+    }, [isOffline, loadSOSData, userId]),
   );
 
   useFocusEffect(
@@ -2306,18 +2331,12 @@ export default function HomeScreen() {
     });
 
     try {
-      if (eventToFinish.remoteSosId) {
-        console.info('[SafeMeLink SOS] Aggiornamento stato remoto avviato.');
-        const remoteState =
-          terminalStatus === 'closed'
-            ? await SOSLifecycleService.close(eventToFinish.remoteSosId)
-            : await SOSLifecycleService.cancel(eventToFinish.remoteSosId);
-
-        if (remoteState.sos_status !== terminalStatus) {
-          throw new SOSLifecycleDiagnosticError('unexpected_status');
-        }
-        console.info('[SafeMeLink SOS] Stato remoto confermato.', { terminalStatus });
+      console.info('[SafeMeLink SOS] Aggiornamento stato remoto avviato.');
+      const confirmedClosure = await SOSClosureRecovery.request(actionUserId, eventToFinish, terminalStatus);
+      if (confirmedClosure.sos_status !== terminalStatus) {
+        throw new SOSLifecycleDiagnosticError('unexpected_status');
       }
+      console.info('[SafeMeLink SOS] Stato remoto confermato.', { terminalStatus });
 
       let nextEvents: SOSEvent[];
 
@@ -2355,7 +2374,7 @@ export default function HomeScreen() {
       setPushDeliveryNotice(null);
       setRemainingSeconds(SAFETY_TIMER_SECONDS);
       setStatus('idle');
-      VoiceProtectionRuntime.notifySOSClosed(actionUserId, eventToFinish.id, eventToFinish.remoteSosId);
+      VoiceProtectionRuntime.notifySOSClosed(actionUserId, eventToFinish.id, confirmedClosure.sos_id);
       console.info('[SafeMeLink SOS] Chiusura completata.', {
         durationMs: Date.now() - startedAt,
         terminalStatus,
@@ -2370,7 +2389,8 @@ export default function HomeScreen() {
       if (activeUserIdRef.current === actionUserId) {
         Alert.alert(
           'SOS ancora attivo',
-          `${diagnosticError.message}\n\nCodice diagnostico: ${diagnosticError.category}`,
+          finishError instanceof SOSClosureUncertainError ? finishError.message
+            : `${diagnosticError.message}\n\nLa chiusura non è confermata. Riapri la Home per riprovare la verifica.\nCodice diagnostico: ${diagnosticError.category}`,
         );
       }
     } finally {

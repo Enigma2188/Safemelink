@@ -533,12 +533,12 @@ export function VoiceProtectionLifecycle() {
       stopRecognition();
     });
     const recoverAfterSOS = (executionUserId: string) => {
-      if (VoiceProtectionRuntime.isSOSSuspended(executionUserId)) return;
       const wasSuspended = sosSuspendedRef.current || !recognitionStartedRef.current;
       if (executionUserId === activeUserIdRef.current) sosSuspendedRef.current = false;
       if (!wasSuspended || executionUserId !== activeUserIdRef.current ||
-        disposed || VoiceProtectionRuntime.isRecognitionStopped(executionUserId) ||
-        VoiceProtectionRuntime.isSOSSuspended(executionUserId)) return;
+        disposed || VoiceProtectionRuntime.isRecognitionStopped(executionUserId)) return;
+      // Reconcile even when an older attempt remains suspended. Only inspect()
+      // may release it after checking all remote emergencies and its own IDs.
       // Invalidate an in-flight persisted-state read taken before this close.
       stopRecognition();
       // A confirmed close ends the old emergency, not a new voice cooldown.

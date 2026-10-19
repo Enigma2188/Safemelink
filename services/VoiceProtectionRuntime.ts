@@ -315,11 +315,22 @@ export const VoiceProtectionRuntime = {
     // A local-only close must never release an unknown/pending legacy INSERT.
     const remoteMatches = Boolean(remoteId && activeId?.remoteId === remoteId);
     const localMatches = Boolean(eventId && activeId?.eventId === eventId);
-    if (activeId?.remoteId && remoteId && activeId.remoteId !== remoteId) return;
-    if (activeId && !remoteMatches && !(activeId.phase === 'active' && localMatches)) return;
-    activeVoiceEmergencies.delete(userId);
-    if (activeId) void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
-    if (sosRequestLockOwner === userId && !sosExecutionInFlight && !scheduledSOS) {
+    const correlated = !activeId || (!(activeId.remoteId && remoteId && activeId.remoteId !== remoteId) &&
+      (remoteMatches || (activeId.phase === 'active' && localMatches)));
+    if (!correlated && !remoteId) return;
+    if (activeId && !activeId.remoteId && localMatches && remoteId) {
+      // Home proved this SAME event terminal. Retain uncertainty until inspect()
+      // verifies the bound remote ID and checks for other open emergencies.
+      activeVoiceEmergencies.set(userId, { ...activeId, remoteId });
+      void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+    }
+    // A verified close of another/local-rebound event is still a reason to
+    // re-inspect the account. It is NOT permission to discard the old journal.
+    if (correlated) {
+      activeVoiceEmergencies.delete(userId);
+      if (activeId) void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
+    }
+    if (correlated && sosRequestLockOwner === userId && !sosExecutionInFlight && !scheduledSOS) {
       sosRequestLockedUntil = 0;
       sosRequestLockOwner = null;
     }

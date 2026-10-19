@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
 
-type Warning = { owner: string; generation: string };
+type Warning = { owner: string; generation: string; kind: 'checkpoint' | 'go_home'; degraded: boolean };
 
 // A normal-flow banner, NOT a modal/overlay: confirmation and cancellation stay
 // accessible in the screen below. No timer/runtime mutation belongs here.
@@ -29,9 +29,11 @@ export function CheckpointNotificationWarning() {
         if (!parsed || typeof parsed !== 'object' || !('generation' in parsed) || typeof parsed.generation !== 'string' || !parsed.generation) {
           throw new Error('Invalid notification warning');
         }
-        setWarning({ owner: userId, generation: parsed.generation });
+        setWarning({ owner: userId, generation: parsed.generation,
+          kind: 'kind' in parsed && parsed.kind === 'go_home' ? 'go_home' : 'checkpoint',
+          degraded: 'reason' in parsed && parsed.reason === 'notification_channel_degraded' });
       } catch {
-        setWarning({ owner: userId, generation: '' });
+        setWarning({ owner: userId, generation: '', kind: 'checkpoint', degraded: false });
         setAcknowledgementFailed(true);
       }
     };
@@ -42,12 +44,13 @@ export function CheckpointNotificationWarning() {
   }, [userId, isInitializing]);
 
   if (Platform.OS !== 'android' || !warning || warning.owner !== userId || isInitializing) return null;
+  const mode = warning.kind === 'go_home' ? 'TORNO A CASA' : 'CHECKPOINT';
   return <SafeAreaView edges={['top']} style={{ maxHeight: '35%', backgroundColor: '#29354D' }}>
     <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
       <View accessibilityLiveRegion="assertive">
-        <Text accessibilityRole="header" style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '700' }}>{warning.generation ? 'AVVISO CHECKPOINT NON MOSTRATO' : 'AVVISO CHECKPOINT NON VERIFICABILE'}</Text>
+        <Text accessibilityRole="header" style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '700' }}>{!warning.generation ? 'AVVISO DI SICUREZZA NON VERIFICABILE' : warning.degraded ? `AVVISO ${mode} LIMITATO` : `AVVISO ${mode} NON MOSTRATO`}</Text>
         <Text style={{ color: '#FFFFFF', fontSize: 16 }}>{warning.generation
-          ? 'Un avviso “Stai bene?” non è stato mostrato. Il SOS automatico rimane previsto alla scadenza se non rispondi. Puoi rispondere o disattivare Checkpoint nella Home; se il tempo è già scaduto, verifica lo stato SOS.'
+          ? `${warning.degraded ? 'La pubblicazione dell’avviso è stata richiesta, ma il canale Android non garantisce suono o rilievo adeguati.' : 'Un avviso “Stai bene?” non è stato mostrato.'} Il SOS automatico rimane previsto alla scadenza se non rispondi. Puoi rispondere o disattivare la modalità nella Home; se il tempo è già scaduto, verifica lo stato SOS. Controlla Notifiche → Verifiche di sicurezza nelle impostazioni Android di SafeMeLink.`
           : 'Non è stato possibile leggere l’avviso Checkpoint. Questo non annulla i timer o il SOS automatico. Verifica lo stato nella Home.'}</Text>
         {acknowledgementFailed && warning.generation ? <Text style={{ color: '#FFB4B4', fontSize: 16 }}>Presa visione non salvata. Puoi comunque usare i controlli Checkpoint nella Home.</Text> : null}
       </View>
