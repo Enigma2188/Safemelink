@@ -13,6 +13,9 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class SafeMeLinkSafetyModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("SafeMeLinkSafety")
+    AsyncFunction("testCheckpointNotification") {
+      SafetyDeadlineStore.testCheckpointNotification(appContext.reactContext ?: throw Exceptions.ReactContextLost())
+    }
     Events("onCheckpointNoticeFailed")
     OnCreate {
       SafetyDeadlineStore.onCheckpointNoticeFailed = { sendEvent("onCheckpointNoticeFailed", emptyMap<String, Any>()) }

@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 50
     env:
       CI: "true"
+      EXPO_PUBLIC_CHECKPOINT_DIAGNOSTICS: "true"
 
     steps:
       - name: Checkout selected SafeMeLink source

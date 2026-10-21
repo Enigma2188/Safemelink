@@ -62,7 +62,8 @@ function load(file) {
   const preflight = native.slice(native.indexOf('private fun checkNotificationPrerequisites'), native.indexOf('fun notification('));
   const publish = native.slice(native.indexOf('@Synchronized fun publishConfirmation'), native.indexOf('@Synchronized fun checkpointNoticeFailure'));
   assert.match(show, /requireAudible = false/);
-  assert.match(show, /manager.notify\(NOTICE_ID, notice\)/);
+  assert.match(show, /requestNotification\(context, NOTICE_ID, notice\)/);
+  assert.match(native, /NotificationManager\)\.notify\(id, notice\)/);
   assert.match(preflight, /requireAudible: Boolean = true/);
   assert.match(preflight, /if \(requireAudible && !audible\)/);
   assert.match(preflight, /channel.importance == NotificationManager.IMPORTANCE_NONE/);

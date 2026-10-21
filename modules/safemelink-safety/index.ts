@@ -1,6 +1,19 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
+export type CheckpointNotificationDiagnostic = {
+  notificationsEnabled: boolean | null;
+  channelExistedBefore: boolean | null;
+  channelExists: boolean | null;
+  importance: number | null;
+  sound: 'unknown' | 'none' | 'default' | 'custom' | 'not_applicable';
+  notifyAttempted: boolean;
+  notifyOutcome: 'not_requested' | 'requested' | 'rejected';
+  errorCategory: string | null;
+  errorCode: string | null;
+};
+
 export const SafeMeLinkSafety = requireOptionalNativeModule<{
+  testCheckpointNotification(): Promise<CheckpointNotificationDiagnostic>;
   canScheduleExactAlarms(): boolean;
   openExactAlarmSettings(): Promise<void>;
   prepareDeadlines(userId: string, kind: string, sessionId: string, expiresAt: number, escalationAt: number): string;

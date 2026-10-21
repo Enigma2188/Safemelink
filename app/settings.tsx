@@ -8,6 +8,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import { InterfaceModeStorage, type InterfaceMode } from '@/storage/InterfaceModeStorage';
 import { ensureOperationalChannel, openOperationalChannelSettings, SAFETY_NOTIFICATION_CHANNEL_ID } from '@/services/OperationalNotificationChannels';
 import { SafetyNotificationPreferenceStorage } from '@/storage/SafetyNotificationPreferenceStorage';
+import { CheckpointNotificationDiagnostic } from '@/components/CheckpointNotificationDiagnostic';
 
 type NotificationState = 'loading' | 'active' | 'permission' | 'blocked' | 'disabled';
 
@@ -166,6 +167,7 @@ export default function SettingsScreen() {
           {notificationsEnabled && notificationState !== 'active' ? <Pressable accessibilityRole="button" onPress={openNotificationSettings} style={styles.actionButton}><Text style={styles.actionText}>APRI IMPOSTAZIONI NOTIFICHE</Text></Pressable> : null}
           {notificationsEnabled ? <Pressable accessibilityRole="button" disabled={testInFlight} onPress={() => void sendTestNotification()} style={[styles.secondaryButton, testInFlight && styles.disabledButton]}><Text style={styles.secondaryText}>{testInFlight ? 'PROGRAMMAZIONE…' : 'PROVA NOTIFICA'}</Text></Pressable> : null}
           {testMessage ? <Text style={styles.cardText}>{testMessage}</Text> : null}
+          <CheckpointNotificationDiagnostic />
           <Pressable accessibilityRole="button" onPress={() => void refreshNotificationState()} style={styles.secondaryButton}><Text style={styles.secondaryText}>AGGIORNA STATO</Text></Pressable>
         </View>
 

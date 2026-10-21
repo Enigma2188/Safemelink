@@ -85,6 +85,7 @@ export const VoiceProtectionRuntime = {
   getRecognitionFailureMessage(userId: string | null) {
     if (recognitionFailure?.userId !== userId) return '';
     switch (recognitionFailure?.category) {
+      case 'start': return 'NON IN ASCOLTO. Il servizio o il riconoscitore vocale non è disponibile. Riprova ad attivare la protezione.';
       case 'readiness': return 'Il motore non riesce a usare l’italiano offline. Controlla il servizio vocale e il modello italiano nelle impostazioni, poi riprova.';
       case 'permission': return 'Il microfono o il servizio vocale non è autorizzato. Controlla i permessi nelle impostazioni Android.';
       case 'circuit_breaker': return 'Il motore vocale si interrompe ripetutamente. Aggiorna il servizio vocale e controlla la lingua italiana offline prima di riprovare.';

@@ -319,13 +319,60 @@ internal object SafetyDeadlineStore {
       if (failed) "Controllo di sicurezza da verificare" else if (elapsed) "Tempo di conferma scaduto" else "Stai bene?",
       if (failed || elapsed) "Apri SafeMeLink per verificare lo stato dell’SOS."
       else "Apri SafeMeLink per confermare: restano ${(remainingMs + 999) / 1000} secondi.")
-    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     // Keep strict pre-arm requirements, but do not suppress a possible visual
     // alert for an already armed session merely because the channel was demoted.
     val audible = checkNotificationPrerequisites(context, record.optString("channelId", "safety-checks"), requireAudible = false)
     record.put("firstNoticeDegraded", !audible)
     if (!audible) trace("FIRST_NOTICE_DEGRADED", record.getLong("t1"))
-    manager.notify(NOTICE_ID, notice)
+    requestNotification(context, NOTICE_ID, notice)
     trace(if (failed) "FAILURE_NOTICE_POSTED" else "FIRST_NOTICE_POSTED", record.getLong("t1"))
+  }
+  private fun requestNotification(context: Context, id: Int, notice: Notification) {
+    (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(id, notice)
+  }
+
+  // Diagnostic only: no deadline record, Receiver, AlarmManager or safety journal.
+  // Separate ID cannot replace/cancel the real T1 notice (4100) or service (4103).
+  fun testCheckpointNotification(context: Context): Map<String, Any?> {
+    val channelId = "safety-checks"
+    val result = mutableMapOf<String, Any?>(
+      "notificationsEnabled" to null, "channelExistedBefore" to null,
+      "channelExists" to null, "importance" to null, "sound" to "unknown",
+      "notifyAttempted" to false, "notifyOutcome" to "not_requested",
+      "errorCategory" to null, "errorCode" to null)
+    try {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      result["notificationsEnabled"] = Build.VERSION.SDK_INT < 24 || manager.areNotificationsEnabled()
+      fun snapshotChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+          val channel = manager.getNotificationChannel(channelId)
+          result["channelExists"] = channel != null
+          result["importance"] = channel?.importance
+          result["sound"] = if (channel == null) "unknown" else if (channel.sound == null) "none"
+            else if (channel.sound == Settings.System.DEFAULT_NOTIFICATION_URI) "default" else "custom"
+        } else result["sound"] = "not_applicable"
+      }
+      snapshotChannel()
+      result["channelExistedBefore"] = result["channelExists"]
+      // Same builder and pre-publication check used by show(), including its
+      // native channel creation when missing. Never change an existing channel.
+      val notice = notification(context, channelId, "TEST — Stai bene?",
+        "Diagnostica Checkpoint: questo test non avvia timer o SOS.")
+      snapshotChannel()
+      checkNotificationPrerequisites(context, channelId, requireAudible = false)
+      result["notifyAttempted"] = true
+      requestNotification(context, 4199, notice)
+      result["notifyOutcome"] = "requested"
+    } catch (error: Exception) {
+      if (result["notifyAttempted"] == true) result["notifyOutcome"] = "rejected"
+      result["errorCategory"] = error.javaClass.simpleName
+      // Fixed categories only: never return arbitrary Android exception payloads.
+      result["errorCode"] = when (error.message) {
+        "notifications_disabled" -> "notifications_disabled"
+        "notification_channel_silent" -> "channel_missing_or_blocked"
+        else -> "native_publication_error"
+      }
+    }
+    return result
   }
 }

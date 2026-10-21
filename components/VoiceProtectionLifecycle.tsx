@@ -241,9 +241,14 @@ export function VoiceProtectionLifecycle() {
     }
     VoiceProtectionRuntime.setRecognitionState(targetUserId, 'starting');
     if (!VoiceProtectionService.isRunning()) {
-      console.warn('[VoiceProtection] servizio foreground non disponibile');
-      void disableProtection(targetUserId, 'start');
-      return;
+      let restored = false;
+      try { restored = await VoiceProtectionService.restoreListeningService(targetUserId, current); }
+      catch { console.warn('[VoiceProtection] ripristino servizio foreground fallito'); }
+      if (!current()) return;
+      if (!restored) {
+        await disableProtection(targetUserId, 'start');
+        return;
+      }
     }
     const readiness = recognitionReadyRef.current
       ? 'ready'

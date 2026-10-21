@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 // Exercise the actual lifecycle with an asynchronous Android abort/end sequence.
-function fixture({ confirmStart = true, hangStop = false, deferPermission = false, deferSOSRead = false, deferRemote = false, failSave = false, failServiceStop = false } = {}) {
+function fixture({ confirmStart = true, hangStop = false, deferPermission = false, deferSOSRead = false, deferRemote = false, failSave = false, failServiceStop = false, failServiceRestore = false } = {}) {
   let now = 100_000;
   let timerId = 0;
   const timers = new Map();
@@ -73,7 +73,12 @@ function fixture({ confirmStart = true, hangStop = false, deferPermission = fals
       events[event] = (payload = {}) => fn({ safemelinkGeneration: nativeGeneration, ...payload });
     } },
     '@/backend/auth/AuthProvider': { useAuth: () => ({ session: { user: { id: 'account-A' } }, isInitializing: false }) },
-    '@/services/VoiceProtectionService': { VoiceProtectionService: { isRunning: () => running, stop: async () => { if(failServiceStop)throw new Error('synthetic stop failure'); running = false; }, getRecognitionReadiness: async () => 'ready' } },
+    '@/services/VoiceProtectionService': { VoiceProtectionService: { isRunning: () => running, stop: async () => { if(failServiceStop)throw new Error('synthetic stop failure'); running = false; }, getRecognitionReadiness: async () => 'ready',
+      restoreListeningService: async (_owner, current) => {
+        if (failServiceRestore) throw new Error('synthetic foreground rejection');
+        if (!current() || !settings.enabled) return false;
+        running = true; return true;
+      } } },
     '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => ({ ...settings }), save: async (_user, value) => { if(failSave)throw new Error('synthetic storage failure'); settings = value; } } },
     '@/storage/PassphraseStorage': { normalizePassphrase: (value) => value.trim().toLowerCase() },
     '@/storage/SOSStorage': { SOSStorage: { listEvents: () => deferSOSRead ? new Promise(resolve => { sosResolve = resolve; }) : Promise.resolve(sosEvents) } },
@@ -123,6 +128,7 @@ function fixture({ confirmStart = true, hangStop = false, deferPermission = fals
     disable() { runtime.requestRecognitionStop('account-A'); settings.enabled = false; running = false; runtime.notifySettingsChanged('account-A'); },
     appState: (state) => appState?.(state),
     loseEngine: () => { nativeState = 'inactive'; },
+    loseService: () => { running = false; },
     unmount: () => cleanups.forEach((cleanup) => cleanup()),
     get starts() { return starts; },
     get remoteQueries() {return remoteQueries;},

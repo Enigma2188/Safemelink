@@ -261,6 +261,47 @@ export const VoiceProtectionService = {
     });
   },
 
+  async restoreListeningService(userId: string, isCurrent: () => boolean) {
+    return serializeService(async () => {
+      const permitted = () => Platform.OS === 'android' && isCurrent() &&
+        !VoiceProtectionRuntime.isRecognitionStopped(userId) && !VoiceProtectionRuntime.isSOSSuspended(userId);
+      const enabled = (settings: Awaited<ReturnType<typeof VoiceProtectionStorage.get>>) =>
+        settings.enabled && Boolean(settings.passphrase.trim()) && (settings.expiresAt === null ||
+          (Number.isFinite(Date.parse(settings.expiresAt)) && Date.parse(settings.expiresAt) > Date.now()));
+      if (!permitted()) return false;
+      const settings = await withSafetyTimeout(VoiceProtectionStorage.get(userId), 'voice_settings');
+      if (!permitted() || !enabled(settings)) return false;
+      if (BackgroundService.isRunning()) return activeTaskUserId === userId;
+      if (activeTaskUserId) {
+        // isRunning() can be false before the previous task's automatic stop.
+        // Drain it before replacement so its continuation cannot stop the new task.
+        await stopNativeTask();
+        activeTaskUserId = null;
+        if (!permitted() || !enabled(settings)) return false;
+      }
+      // Reuse the saved authorization and original expiry, never a fresh duration.
+      await startNativeTask({
+        taskName: 'SafeMeLinkVoiceProtection',
+        taskTitle: 'Protezione Vocale attiva',
+        taskDesc: 'SafeMeLink mantiene pronta la protezione locale.',
+        taskIcon: { name: 'ic_launcher', type: 'mipmap' },
+        color: '#7868FF',
+        foregroundServiceType: ['microphone', 'location', 'specialUse'],
+        linkingURI: 'safemelink://voice-protection',
+        parameters: { expiresAt: settings.expiresAt, userId, voiceRequested: true },
+      });
+      activeTaskUserId = userId;
+      const latest = await withSafetyTimeout(VoiceProtectionStorage.get(userId), 'voice_settings').catch(() => null);
+      if (!permitted() || !latest || !enabled(latest)) {
+        // Serialized cleanup cannot stop a newer account's successor service.
+        await stopNativeTask();
+        activeTaskUserId = null;
+        return false;
+      }
+      return BackgroundService.isRunning();
+    });
+  },
+
   async ensureSafetyMonitoring(userId: string) {
     return serializeService(async () => {
     // iOS owns the first deadline through a scheduled local notification.
