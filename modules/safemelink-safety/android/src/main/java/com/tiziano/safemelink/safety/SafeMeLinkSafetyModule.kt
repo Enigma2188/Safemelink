@@ -13,6 +13,21 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class SafeMeLinkSafetyModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("SafeMeLinkSafety")
+    Function("checkpointDiagnosticsAvailable") { BuildConfig.CHECKPOINT_DIAGNOSTICS }
+    AsyncFunction("getCheckpointDiagnosticEvents") { userId: String ->
+      CheckpointDiagnosticJournal.read(appContext.reactContext ?: throw Exceptions.ReactContextLost(), userId)
+    }
+    // Explicit user action only; copy exactly the same sanitized read-only report.
+    Function("copyCheckpointDiagnosticReport") { userId: String, build: String ->
+      check(BuildConfig.CHECKPOINT_DIAGNOSTICS) { "diagnostic_disabled" }
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      require(userId.isNotBlank())
+      val safeBuild = if (build.matches(Regex("[a-fA-F0-9]{7,40}"))) build else "unavailable"
+      val report = "Checkpoint diagnostic / build=$safeBuild\nnotify() returned does NOT prove visibility or reading.\n" +
+        CheckpointDiagnosticJournal.read(context, userId)
+      val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+      clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Checkpoint diagnostic", report))
+    }
     AsyncFunction("testCheckpointNotification") {
       SafetyDeadlineStore.testCheckpointNotification(appContext.reactContext ?: throw Exceptions.ReactContextLost())
     }

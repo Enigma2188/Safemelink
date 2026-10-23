@@ -10,6 +10,7 @@ class SafetyDeadlineReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     val generation = intent.getStringExtra("generation") ?: return
     val stage = intent.getIntExtra("stage", 0)
+    CheckpointDiagnosticJournal.record(context, "RECEIVER_ENTERED", generation = generation, stage = stage)
     try {
       val record = SafetyDeadlineStore.fired(context, generation, stage) ?: return
       if (stage == 1) SafetyDeadlineStore.publishConfirmation(context, record) else {
@@ -17,6 +18,7 @@ class SafetyDeadlineReceiver : BroadcastReceiver() {
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(service) else context.startService(service)
       }
     } catch (error: Exception) {
+      CheckpointDiagnosticJournal.record(context, "ALARM_HANDLING_FAILED", generation = generation, stage = stage, outcome = "native_exception")
       Log.w("SafetyDeadline", "ALARM_HANDLING_FAILED category=${error.javaClass.simpleName} nowMs=${System.currentTimeMillis()}")
       SafetyDeadlineStore.read(context)?.takeIf {
         it.optString("generation") == generation && !(stage == 1 && it.optString("kind") == "checkpoint" && it.optBoolean("firstNoticeFailed"))

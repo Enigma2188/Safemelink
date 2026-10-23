@@ -30,9 +30,17 @@ internal object SafetyDeadlineStore {
   }
   private fun alarms(context: Context) = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
   fun allowed(context: Context) = Build.VERSION.SDK_INT < 31 || alarms(context).canScheduleExactAlarms()
-  fun trace(event: String, deadline: Long) {
+  fun trace(context: Context, record: JSONObject, event: String, deadline: Long) {
     val now = System.currentTimeMillis()
     Log.i("SafetyDeadline", "$event nowMs=$now deadlineMs=$deadline latenessMs=${maxOf(0, now - deadline)}")
+    CheckpointDiagnosticJournal.record(context, event, record, stage = if (event.startsWith("ESCALATION") || event.startsWith("SOS_")) 2 else 1,
+      outcome = if (event.endsWith("POSTED")) "notify_returned" else if (event.endsWith("REJECTED")) {
+        when (record.optString("firstNoticeFailureReason")) {
+          "notifications_disabled" -> "notifications_disabled"
+          "notification_channel_silent" -> "channel_missing_or_blocked"
+          else -> "publication_rejected"
+        }
+      } else "recorded", deadline = deadline)
   }
   fun openApp(context: Context): PendingIntent {
     val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
@@ -51,6 +59,7 @@ internal object SafetyDeadlineStore {
       alarms(context).cancel(operation)
       operation.cancel()
     }
+    CheckpointDiagnosticJournal.record(context, "NOTICE_CANCEL_REQUESTED", record, outcome = "app_cleanup")
     (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTICE_ID)
   }
   @Synchronized fun prepare(context: Context, userId: String, kind: String, sessionId: String, t1: Long, t2: Long): String {
@@ -78,7 +87,7 @@ internal object SafetyDeadlineStore {
     // Check at the native arm boundary too: JS preflight may now be obsolete.
     // A later permission revocation must NOT silently cancel an existing T2.
     if (!record.optBoolean("armed")) checkNotificationPrerequisites(context, channelId)
-    if (System.currentTimeMillis() >= record.getLong("t1")) trace("LATE_ARM_ORIGINAL_DEADLINES_PRESERVED", record.getLong("t1"))
+    if (System.currentTimeMillis() >= record.getLong("t1")) trace(context, record, "LATE_ARM_ORIGINAL_DEADLINES_PRESERVED", record.getLong("t1"))
     record.put("channelId", channelId).put("armed", true)
     write(context, record)
     try {
@@ -89,7 +98,7 @@ internal object SafetyDeadlineStore {
         // nine-minute allowWhileIdle quota: T2 really may follow T1 by 30s.
         alarms(context).setAlarmClock(AlarmManager.AlarmClockInfo(maxOf(System.currentTimeMillis() + 100, deadline),
           openApp(context)), pending(context, generation, stage))
-        trace(if (stage == 1) "FIRST_ALARM_SCHEDULED" else "ESCALATION_ALARM_SCHEDULED", deadline)
+        trace(context, record, if (stage == 1) "FIRST_ALARM_SCHEDULED" else "ESCALATION_ALARM_SCHEDULED", deadline)
       }
     } catch (error: Exception) {
       cancelAlarms(context, record)
@@ -158,7 +167,7 @@ internal object SafetyDeadlineStore {
       .put("leaseUntil", now + 300_000)
     write(context, record) // Durable before any JS/network side effect; operation identity survives recovery.
     recoveryAlarm(context, record)
-    trace("SOS_EXECUTION_CLAIMED_NATIVE", record.getLong("t2"))
+    trace(context, record, "SOS_EXECUTION_CLAIMED_NATIVE", record.getLong("t2"))
     return true
   }
   private fun recoveryAlarm(context: Context, record: JSONObject) {
@@ -189,13 +198,18 @@ internal object SafetyDeadlineStore {
     write(context, record) // Used only for a JS storage failure BEFORE completeSOS was called.
   }
   @Synchronized fun fired(context: Context, generation: String, stage: Int): JSONObject? {
-    val record = read(context) ?: return null
-    if (record.optString("generation") != generation || !record.optBoolean("armed") || record.optString("state") in listOf("failed", "cancelled")) return null
+    fun ignored(reason: String): JSONObject? {
+      CheckpointDiagnosticJournal.record(context, "ALARM_IGNORED", generation = generation, stage = stage, outcome = reason)
+      return null
+    }
+    val record = read(context) ?: return ignored("record_missing_or_unreadable")
+    if (record.optString("generation") != generation) return ignored("generation_mismatch")
+    if (!record.optBoolean("armed") || record.optString("state") in listOf("failed", "cancelled")) return ignored("inactive_session")
     val key = if (stage == 1) "firstFired" else "escalationFired"
-    if (stage !in 1..2 || (stage == 1 && record.optBoolean(key))) return null
-    if (stage == 2 && record.optBoolean("claimed") && System.currentTimeMillis() < record.optLong("leaseUntil")) return null
+    if (stage !in 1..2 || (stage == 1 && record.optBoolean(key))) return ignored("invalid_stage_or_consumed")
+    if (stage == 2 && record.optBoolean("claimed") && System.currentTimeMillis() < record.optLong("leaseUntil")) return ignored("lease_active")
     val deadline = record.getLong(if (stage == 1) "t1" else "t2")
-    if (System.currentTimeMillis() < deadline) return null
+    if (System.currentTimeMillis() < deadline) return ignored("before_deadline")
     // T1 is consumed only after successful publication, not on receiver entry.
     if (stage == 2) {
       record.put(key, true)
@@ -216,7 +230,7 @@ internal object SafetyDeadlineStore {
         return null
       }
     }
-    trace(if (stage == 1) "FIRST_ALARM_FIRED" else "ESCALATION_ALARM_FIRED", deadline)
+    trace(context, record, if (stage == 1) "FIRST_ALARM_FIRED" else "ESCALATION_ALARM_FIRED", deadline)
     return record
   }
   @Synchronized fun publishConfirmation(context: Context, record: JSONObject) {
@@ -225,7 +239,12 @@ internal object SafetyDeadlineStore {
       !current.optBoolean("armed") || current.optBoolean("firstFired") || current.optString("state") == "failed") return
     current.put("firstNoticeAttemptedAt", System.currentTimeMillis())
     current.put("firstNoticeFailed", false)
-    write(context, current)
+    try {
+      write(context, current)
+    } catch (error: Exception) {
+      CheckpointDiagnosticJournal.record(context, "PRE_PUBLICATION_PERSISTENCE_FAILED", current, stage = 1, outcome = "storage_error")
+      throw error
+    }
     try {
       show(context, current)
     } catch (error: Exception) {
@@ -242,7 +261,7 @@ internal object SafetyDeadlineStore {
         // Persist the account/session-scoped warning without invalidating T2.
         persistNoticeWarning(context, current, reason)
       } else write(context, current)
-      trace("FIRST_NOTICE_REJECTED", current.getLong("t1"))
+      trace(context, current, "FIRST_NOTICE_REJECTED", current.getLong("t1"))
       throw error
     }
     // Failure to persist this flag is NOT evidence that Android rejected notify().
@@ -312,7 +331,7 @@ internal object SafetyDeadlineStore {
     return builder.build()
   }
   fun show(context: Context, record: JSONObject, failed: Boolean = false) {
-    trace(if (failed) "FAILURE_NOTICE_ATTEMPT" else "FIRST_NOTICE_ATTEMPT", record.getLong("t1"))
+    trace(context, record, if (failed) "FAILURE_NOTICE_ATTEMPT" else "FIRST_NOTICE_ATTEMPT", record.getLong("t1"))
     val remainingMs = record.getLong("t2") - System.currentTimeMillis()
     val elapsed = remainingMs <= 0 || record.optBoolean("claimed") || record.optBoolean("escalationFired")
     val notice = notification(context, record.optString("channelId", "safety-checks"),
@@ -323,9 +342,10 @@ internal object SafetyDeadlineStore {
     // alert for an already armed session merely because the channel was demoted.
     val audible = checkNotificationPrerequisites(context, record.optString("channelId", "safety-checks"), requireAudible = false)
     record.put("firstNoticeDegraded", !audible)
-    if (!audible) trace("FIRST_NOTICE_DEGRADED", record.getLong("t1"))
+    if (!audible) trace(context, record, "FIRST_NOTICE_DEGRADED", record.getLong("t1"))
+    CheckpointDiagnosticJournal.record(context, "NOTICE_REPLACEMENT_POSSIBLE", record, stage = 1, outcome = "shared_id_4100")
     requestNotification(context, NOTICE_ID, notice)
-    trace(if (failed) "FAILURE_NOTICE_POSTED" else "FIRST_NOTICE_POSTED", record.getLong("t1"))
+    trace(context, record, if (failed) "FAILURE_NOTICE_POSTED" else "FIRST_NOTICE_POSTED", record.getLong("t1"))
   }
   private fun requestNotification(context: Context, id: Int, notice: Notification) {
     (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(id, notice)
@@ -334,6 +354,7 @@ internal object SafetyDeadlineStore {
   // Diagnostic only: no deadline record, Receiver, AlarmManager or safety journal.
   // Separate ID cannot replace/cancel the real T1 notice (4100) or service (4103).
   fun testCheckpointNotification(context: Context): Map<String, Any?> {
+    check(BuildConfig.CHECKPOINT_DIAGNOSTICS) { "diagnostic_disabled" }
     val channelId = "safety-checks"
     val result = mutableMapOf<String, Any?>(
       "notificationsEnabled" to null, "channelExistedBefore" to null,

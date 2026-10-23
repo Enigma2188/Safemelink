@@ -13,7 +13,10 @@ dependencies {
 
 android {
   namespace 'com.tiziano.safemelink.safety'
+  buildFeatures { buildConfig true }
   defaultConfig {
+    // No debug/release inference: only the manual test workflow opts in.
+    buildConfigField 'boolean', 'CHECKPOINT_DIAGNOSTICS', System.getenv('EXPO_PUBLIC_CHECKPOINT_DIAGNOSTICS') == 'true' ? 'true' : 'false'
     versionCode 1
     versionName '1.0.0'
   }

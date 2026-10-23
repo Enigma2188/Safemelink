@@ -13,6 +13,9 @@ export type CheckpointNotificationDiagnostic = {
 };
 
 export const SafeMeLinkSafety = requireOptionalNativeModule<{
+  checkpointDiagnosticsAvailable(): boolean;
+  getCheckpointDiagnosticEvents(userId: string): Promise<string>;
+  copyCheckpointDiagnosticReport(userId: string, build: string): void;
   testCheckpointNotification(): Promise<CheckpointNotificationDiagnostic>;
   canScheduleExactAlarms(): boolean;
   openExactAlarmSettings(): Promise<void>;
