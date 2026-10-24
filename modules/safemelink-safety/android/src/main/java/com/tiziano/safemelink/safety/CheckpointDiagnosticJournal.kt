@@ -14,7 +14,8 @@ internal object CheckpointDiagnosticJournal {
     .digest("$salt:$value".toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
   @Synchronized fun record(context: Context, event: String, record: JSONObject? = null,
-    generation: String? = null, stage: Int = 0, outcome: String = "recorded", deadline: Long? = null) {
+    generation: String? = null, stage: Int = 0, outcome: String = "recorded", deadline: Long? = null,
+    occurredAt: Long = System.currentTimeMillis()) {
     if (!BuildConfig.CHECKPOINT_DIAGNOSTICS) return
     try {
       val p = prefs(context)
@@ -29,7 +30,7 @@ internal object CheckpointDiagnosticJournal {
       val owner = if (record != null && record.optString("generation") == gen &&
         record.optString("kind") == "checkpoint" && record.optString("userId").isNotBlank())
         hash(salt, record.getString("userId")) else previous?.optString("owner") ?: return
-      val now = System.currentTimeMillis()
+      val now = occurredAt
       val entry = JSONObject().put("owner", owner).put("session", correlation)
         .put("timestamp", now).put("event", event).put("phase", if (stage == 1) "T1" else if (stage == 2) "T2" else "session")
         .put("outcome", outcome)

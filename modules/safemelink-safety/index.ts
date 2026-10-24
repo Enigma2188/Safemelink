@@ -14,6 +14,8 @@ export type CheckpointNotificationDiagnostic = {
 
 export const SafeMeLinkSafety = requireOptionalNativeModule<{
   checkpointDiagnosticsAvailable(): boolean;
+  scheduleCheckpointAlarmProbe(userId: string): Promise<string>;
+  getCheckpointAlarmProbe(userId: string): Promise<string>;
   getCheckpointDiagnosticEvents(userId: string): Promise<string>;
   copyCheckpointDiagnosticReport(userId: string, build: string): void;
   testCheckpointNotification(): Promise<CheckpointNotificationDiagnostic>;

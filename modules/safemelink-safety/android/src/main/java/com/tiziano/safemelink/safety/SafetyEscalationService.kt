@@ -31,6 +31,8 @@ class SafetyEscalationService : Service(), HeadlessJsTaskEventListener {
   private val tasks = mutableSetOf<Int>()
   private var destroyed = false
   private var ready = false
+  // The service-wide timeout belongs to its first request, never a later session.
+  private var failureGeneration: String? = null
   private val reactApplication get() = application as ReactApplication
   override fun onCreate() {
     super.onCreate()
@@ -62,9 +64,15 @@ class SafetyEscalationService : Service(), HeadlessJsTaskEventListener {
     }
   }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (!ready) { stopSelf(startId); return START_NOT_STICKY }
+    val requestedGeneration = runCatching { intent?.getStringExtra("generation") }.getOrNull()
+    if (failureGeneration == null) failureGeneration = requestedGeneration
+    if (!ready) {
+      runCatching { SafetyDeadlineStore.showFailureIfCurrent(this, requestedGeneration) }
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
     return try { handleStart(intent, startId) } catch (_: Exception) {
-      failed("HEADLESS_START_FAILED")
+      failed("HEADLESS_START_FAILED", requestedGeneration)
       stopSelf(startId)
       START_NOT_STICKY
     }
@@ -106,8 +114,9 @@ class SafetyEscalationService : Service(), HeadlessJsTaskEventListener {
     return START_NOT_STICKY
   }
   private fun dispatch(context: ReactContext) {
+    val failureGenerations = pending.mapNotNull { runCatching { it.data.getString("generation") }.getOrNull() }.distinct()
     try { dispatchReady(context) } catch (_: Exception) {
-      failed("HEADLESS_DISPATCH_FAILED")
+      for (generation in failureGenerations) failed("HEADLESS_DISPATCH_FAILED", generation)
       stopSelf()
     }
   }
@@ -144,9 +153,9 @@ class SafetyEscalationService : Service(), HeadlessJsTaskEventListener {
       }
     }
   }
-  private fun failed(event: String) {
+  private fun failed(event: String, generation: String? = failureGeneration) {
     Log.w("SafetyDeadline", "$event nowMs=${System.currentTimeMillis()}")
-    SafetyDeadlineStore.read(this)?.let { runCatching { SafetyDeadlineStore.show(this, it, true) } }
+    runCatching { SafetyDeadlineStore.showFailureIfCurrent(this, generation) }
   }
   override fun onBind(intent: Intent): IBinder? = null
   override fun onDestroy() {

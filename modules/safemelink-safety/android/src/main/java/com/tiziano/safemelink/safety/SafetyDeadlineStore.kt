@@ -327,8 +327,18 @@ internal object SafetyDeadlineStore {
     val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, channelId) else Notification.Builder(context)
     builder.setSmallIcon(context.applicationInfo.icon).setContentTitle(title).setContentText(body)
       .setContentIntent(openApp(context)).setAutoCancel(!silent).setVisibility(Notification.VISIBILITY_PRIVATE)
-    if (Build.VERSION.SDK_INT < 26 && !silent) builder.setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE)
+    if (Build.VERSION.SDK_INT < 26 && !silent) builder.setPriority(Notification.PRIORITY_HIGH)
+      .setDefaults(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE)
     return builder.build()
+  }
+  // A delayed service failure must not publish for a cancelled or successor session.
+  // Validation and notify share the same monitor as prepare/cancel/finish.
+  @Synchronized fun showFailureIfCurrent(context: Context, generation: String?, suppressRejectedCheckpointT1: Boolean = false) {
+    if (generation == null) return
+    val record = read(context) ?: return
+    if (record.optString("generation") != generation || !record.optBoolean("armed") || record.optString("state") == "cancelled") return
+    if (suppressRejectedCheckpointT1 && record.optString("kind") == "checkpoint" && record.optBoolean("firstNoticeFailed")) return
+    show(context, record, true)
   }
   fun show(context: Context, record: JSONObject, failed: Boolean = false) {
     trace(context, record, if (failed) "FAILURE_NOTICE_ATTEMPT" else "FIRST_NOTICE_ATTEMPT", record.getLong("t1"))

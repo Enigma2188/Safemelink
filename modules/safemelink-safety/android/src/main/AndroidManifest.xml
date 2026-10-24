@@ -6,6 +6,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
   <application>
+    <receiver android:name=".CheckpointAlarmProbeReceiver" android:exported="false" />
     <receiver android:name=".SafetyDeadlineReceiver" android:exported="false" />
     <receiver android:name=".SafetyDeadlineRestoreReceiver" android:exported="false">
       <intent-filter>

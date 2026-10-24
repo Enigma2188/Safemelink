@@ -1,0 +1,58 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const ts = require('typescript');
+const { execFileSync } = require('node:child_process');
+const root = 'modules/safemelink-safety/android/src/main/java/com/tiziano/safemelink/safety/';
+const probe = fs.readFileSync(root + 'CheckpointAlarmProbe.kt', 'utf8');
+const receiver = probe.slice(probe.indexOf('class CheckpointAlarmProbeReceiver'));
+assert.equal((probe.match(/manager\.setAlarmClock\(/g) || []).length, 1);
+assert.match(probe, /private const val DELAY_MS = 60_000L/);
+assert.match(probe, /AlarmClockInfo\(now \+ DELAY_MS, show\), operation/);
+assert.match(probe, /getBroadcast\(context, 4290/);
+assert.match(probe, /getActivity\(context, 4291/);
+assert.match(probe, /safemelink-probe:\/\/alarm\/\$token/);
+assert.match(probe, /safemelink-probe:\/\/alarm\/\$previous/);
+assert.match(probe, /PendingIntent.FLAG_NO_CREATE/);
+assert.match(probe, /if \(state.optString\("probe"\) != token \|\| state.optString\("status"\) != "scheduled"\) return/);
+assert.match(probe, /check\(BuildConfig.CHECKPOINT_DIAGNOSTICS\)/);
+assert.match(receiver, /if \(!BuildConfig.CHECKPOINT_DIAGNOSTICS/);
+assert.match(probe, /getSharedPreferences\("checkpoint-isolated-alarm-probe"/);
+assert.match(probe, /state.optString\("owner"\) != owner\(salt, userId\)/);
+assert.doesNotMatch(probe, /SafetyDeadlineStore|SafetyExpiration|SafetyEscalationService|SOSService|NotificationManager|\.notify\(|startService|startForeground|Location|Supabase|supabase|SEND_SMS|SmsManager|openExactAlarmSettings|requestPermissions/);
+assert.ok(receiver.indexOf('val enteredAt = System.currentTimeMillis()') < receiver.indexOf('goAsync()'));
+assert.ok(receiver.indexOf('val enteredElapsed = SystemClock.elapsedRealtime()') < receiver.indexOf('getStringExtra'));
+assert.match(receiver, /writer.execute/);
+assert.match(receiver, /finally \{ completion.finish\(\) \}/);
+const read = probe.slice(probe.indexOf('@Synchronized fun read'), probe.indexOf('class CheckpointAlarmProbeReceiver'));
+assert.doesNotMatch(read, /\.edit\(|\.apply\(|\.commit\(|setAlarmClock|\.cancel\(/);
+assert.match(fs.readFileSync('modules/safemelink-safety/android/src/main/AndroidManifest.xml', 'utf8'), /name="\.CheckpointAlarmProbeReceiver" android:exported="false"/);
+const operationalReceiver = fs.readFileSync(root + 'SafetyDeadlineReceiver.kt', 'utf8');
+assert.ok(operationalReceiver.indexOf('val enteredAt = System.currentTimeMillis()') < operationalReceiver.indexOf('getStringExtra'));
+assert.match(operationalReceiver, /occurredAt = enteredAt/);
+assert.match(fs.readFileSync(root + 'CheckpointDiagnosticJournal.kt', 'utf8'), /val now = occurredAt/);
+const before = execFileSync('git', ['show', 'c363e9cc3c4bacfd7ecf235cf4f2755ec4a8473e:' + root + 'CheckpointDiagnosticJournal.kt'], { encoding: 'utf8' });
+assert.ok(before.indexOf('getSharedPreferences') < before.indexOf('val now = System.currentTimeMillis()'));
+console.log('PASS STATIC: one real setAlarmClock request, own receiver/storage/identities, old probe cancellation only, native gate, early timestamps, account-filtered read; no T2/SOS/notification/network/GPS call graph');
+console.log('REPRO source: old RECEIVER_ENTERED time was sampled inside synchronized journal after preference work; now sampled at receiver entry');
+
+const exportsObject = {};
+let reads = 0;
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('services/CheckpointNotificationDiagnostic.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: exportsObject, process: { env: {} }, require: name => {
+  if (name === 'react-native') return { Platform: { OS: 'android' } };
+  if (name === 'expo-notifications') return { getPermissionsAsync: () => { reads++; throw Error('Unexpected call'); } };
+  if (name === '@/modules/safemelink-safety') return { SafeMeLinkSafety: {} };
+  throw Error(name);
+} });
+const parse = value => exportsObject.parseCheckpointAlarmProbe(JSON.stringify(value));
+assert.equal(parse({}).status, 'idle');
+const result = parse({ status: 'receiver_entered', deadline: 1000, enteredAt: 6845, wallDelayMs: 5845, elapsedDelayMs: 5845, owner: 'must-not-export', clockUncertain: false });
+assert.equal(result.wallDelayMs, 5845); assert.equal(result.owner, undefined);
+assert.equal(parse({ status: 'scheduled', deadline: 1234 }).status, 'scheduled');
+assert.equal(parse({ status: 'schedule_failed', deadline: 1234 }).status, 'schedule_failed');
+for (const invalid of [null, { status: 'unexpected' }, { status: 'scheduled' }, { status: 'scheduled', deadline: '1234' }, { status: 'receiver_entered', deadline: 1 }]) assert.throws(() => parse(invalid));
+assert.equal(reads, 0);
+console.log('PASS actual TS parser: scheduled/received/error distinct, missing/invalid times rejected, owner not exported, no permission or operational API invoked');
+console.log('NOT EXECUTED: real AlarmManager delivery, reboot/force-stop, process cold start, Kotlin compilation.');

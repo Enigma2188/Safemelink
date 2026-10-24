@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, Text, View } from 'react-native';
 import { useAuth } from '@/backend/auth/AuthProvider';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
-import { checkpointDiagnosticsEnabled, runCheckpointNotificationDiagnostic } from '@/services/CheckpointNotificationDiagnostic';
+import { checkpointDiagnosticsEnabled, parseCheckpointAlarmProbe, runCheckpointNotificationDiagnostic, type CheckpointAlarmProbeResult } from '@/services/CheckpointNotificationDiagnostic';
 
 type Result = Awaited<ReturnType<typeof runCheckpointNotificationDiagnostic>>;
 const yesNo = (value: boolean | null) => value === null ? 'non disponibile' : value ? 'sì' : 'no';
@@ -16,6 +16,10 @@ export function CheckpointNotificationDiagnostic() {
   ownerRef.current = owner;
   const [journal, setJournal] = useState<{ owner: string; text: string } | null>(null);
   const [journalMessage, setJournalMessage] = useState<string | null>(null);
+  const [probe, setProbe] = useState<{ owner: string; value: CheckpointAlarmProbeResult } | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
+  const probeInFlight = useRef(false);
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -25,6 +29,7 @@ export function CheckpointNotificationDiagnostic() {
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     setJournal(null); setJournalMessage(null);
+    setProbe(null); setProbeError(null);
     setResult(null); setSeen(false); setError(false);
     if (!owner || !checkpointDiagnosticsEnabled() || !SafeMeLinkSafety?.checkpointDiagnosticsAvailable?.()) return;
     let disposed = false;
@@ -34,6 +39,10 @@ export function CheckpointNotificationDiagnostic() {
       try {
         const text = await SafeMeLinkSafety!.getCheckpointDiagnosticEvents(owner);
         if (!disposed && ownerRef.current === owner && requestRevision.current === revision) setJournal({ owner, text });
+        if (!disposed && ownerRef.current === owner && requestRevision.current === revision && !probeInFlight.current && typeof SafeMeLinkSafety?.getCheckpointAlarmProbe === 'function') {
+          const value = parseCheckpointAlarmProbe(await SafeMeLinkSafety.getCheckpointAlarmProbe(owner));
+          if (!disposed && ownerRef.current === owner && requestRevision.current === revision) setProbe({ owner, value });
+        }
       } catch {
         if (!disposed && ownerRef.current === owner && requestRevision.current === revision) setJournalMessage('Registro non disponibile; nessuna conclusione sull’esito T1.');
       }
@@ -52,8 +61,28 @@ export function CheckpointNotificationDiagnostic() {
     try {
       const text = await SafeMeLinkSafety!.getCheckpointDiagnosticEvents(expected);
       if (alive.current && ownerRef.current === expected && requestRevision.current === revision) setJournal({ owner: expected, text });
+      if (ownerRef.current === expected && !probeInFlight.current && typeof SafeMeLinkSafety?.getCheckpointAlarmProbe === 'function') {
+        const value = parseCheckpointAlarmProbe(await SafeMeLinkSafety.getCheckpointAlarmProbe(expected));
+        if (alive.current && ownerRef.current === expected && requestRevision.current === revision) setProbe({ owner: expected, value });
+      }
     } catch {
       if (alive.current && ownerRef.current === expected && requestRevision.current === revision) setJournalMessage('Lettura registro non riuscita.');
+    }
+  };
+
+  const scheduleProbe = async () => {
+    const expected = owner;
+    if (!expected || probeInFlight.current) return;
+    requestRevision.current++;
+    probeInFlight.current = true; setProbeBusy(true); setProbeError(null);
+    try {
+      const value = parseCheckpointAlarmProbe(await SafeMeLinkSafety!.scheduleCheckpointAlarmProbe(expected));
+      if (alive.current && ownerRef.current === expected) setProbe({ owner: expected, value });
+    } catch {
+      if (alive.current && ownerRef.current === expected) setProbeError('Test non programmato/confermato. Verifica il permesso “Sveglie e promemoria”. Nessun Checkpoint o SOS è stato armato.');
+    } finally {
+      probeInFlight.current = false;
+      if (alive.current) setProbeBusy(false);
     }
   };
 
@@ -75,6 +104,25 @@ export function CheckpointNotificationDiagnostic() {
   return <View style={{ gap: 10, paddingVertical: 12 }}>
     <Text style={{ color: '#18243D', fontWeight: '700' }}>DIAGNOSTICA APK DI COLLAUDO</Text>
     <Text style={{ color: '#5E6D84' }}>Solo notifica locale: non avvia Checkpoint, timer, SOS o GPS. Non disattiva eventuali protezioni già attive.</Text>
+    {owner && typeof SafeMeLinkSafety?.scheduleCheckpointAlarmProbe === 'function' ? <View style={{ gap: 8 }}>
+      <Text style={{ color: '#18243D', fontWeight: '700' }}>MISURA ALLARME ISOLATO — 60 SECONDI</Text>
+      <Text style={{ color: '#5E6D84' }}>Un solo allarme Android, senza T2, notifiche, suono o SOS. Un nuovo test sostituisce soltanto il precedente test isolato. Torna qui per leggere il ritardo; “programmato” non significa “eseguito”.</Text>
+      <Pressable accessibilityRole="button" disabled={probeBusy} onPress={() => { void scheduleProbe(); }} style={{ minHeight: 48, padding: 12, opacity: probeBusy ? 0.5 : 1 }}>
+        <Text>{probeBusy ? 'PROGRAMMAZIONE TEST ISOLATO…' : 'TEST ALLARME ISOLATO — 60 s'}</Text>
+      </Pressable>
+      {probe?.owner === owner ? <Text selectable style={{ color: '#18243D' }}>{[
+        `Stato test: ${probe.value.status}`,
+        `Scadenza prevista (epoch ms): ${probe.value.deadline ?? 'non disponibile'}`,
+        `Richiesta AlarmManager (epoch ms): ${probe.value.alarmRequestAt ?? 'non disponibile'}`,
+        `Ritorno AlarmManager (epoch ms): ${probe.value.alarmReturnedAt ?? 'non disponibile'}`,
+        `Ingresso receiver (epoch ms): ${probe.value.enteredAt ?? 'non ancora registrato'}`,
+        `Ritardo orologio (ms): ${probe.value.wallDelayMs ?? 'non disponibile'}`,
+        `Ritardo monotono (ms): ${probe.value.elapsedDelayMs ?? 'non disponibile'}`,
+        probe.value.clockUncertain ? 'ATTENZIONE: orologio cambiato o misura temporale non confrontabile.' : '',
+        'Un ingresso mancante non prova da solo che Android non abbia consegnato l’allarme. Riavvio e arresto forzato possono annullare il test.',
+      ].filter(Boolean).join('\n')}</Text> : null}
+      {probeError ? <Text accessibilityLiveRegion="polite" style={{ color: '#9B2C2C' }}>{probeError}</Text> : null}
+    </View> : null}
     <Text style={{ color: '#5E6D84' }}>Registro locale, massimo 100 eventi. notify() ritornato NON significa notifica visualizzata o letta. Nessun evento non equivale a prova di mancata esecuzione.</Text>
     {owner ? <View style={{ gap: 8 }}>
       <Pressable accessibilityRole="button" onPress={() => { void refreshJournal(); }} style={{ minHeight: 48, padding: 12 }}>

@@ -35,7 +35,8 @@ console.log('NOTE: Kotlin/Android storage and background execution are not execu
 async function uiTest() {
   let currentOwner = 'A', flag = true, nativeGate = true, cursor = 0;
   const slots = [], effects = [], pending = [], listeners = new Set();
-  const calls = { read: 0, copy: 0, notify: 0 };
+  const calls = { read: 0, copy: 0, notify: 0, probe: 0 };
+  let probeResolve;
   const react = {
     useState(value) {
       const i = cursor++;
@@ -64,6 +65,8 @@ async function uiTest() {
       return new Promise(resolve => pending.push({ owner, resolve }));
     },
     copyCheckpointDiagnosticReport(owner) { assert.equal(owner, currentOwner); calls.copy++; },
+    getCheckpointAlarmProbe: async () => '{}',
+    scheduleCheckpointAlarmProbe() { calls.probe++; return new Promise(resolve => { probeResolve = resolve; }); },
   };
   const jsx = (type, props) => ({ type, props });
   const dependencies = {
@@ -74,7 +77,7 @@ async function uiTest() {
     } },
     '@/backend/auth/AuthProvider': { useAuth: () => ({ session: currentOwner ? { user: { id: currentOwner } } : null }) },
     '@/modules/safemelink-safety': { SafeMeLinkSafety: native },
-    '@/services/CheckpointNotificationDiagnostic': { checkpointDiagnosticsEnabled: () => flag,
+    '@/services/CheckpointNotificationDiagnostic': { checkpointDiagnosticsEnabled: () => flag, parseCheckpointAlarmProbe: JSON.parse,
       runCheckpointNotificationDiagnostic: () => { calls.notify++; throw Error('not used'); } },
   };
   const exports = {};
@@ -105,10 +108,17 @@ async function uiTest() {
   const readsBeforeResume = calls.read;
   for (const listener of listeners) listener('active');
   assert.equal(calls.read, readsBeforeResume + 1);
+  const probeButton = nodes(render()).find(n => n.type === 'Pressable' && JSON.stringify(n.props.children).includes('TEST ALLARME ISOLATO'));
+  probeButton.props.onPress(); probeButton.props.onPress();
+  assert.equal(calls.probe, 1, 'double tap schedules only one isolated probe');
+  currentOwner = 'C'; render();
+  probeResolve('{"status":"scheduled","deadline":999999}');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.doesNotMatch(JSON.stringify(render()), /999999/);
   currentOwner = null; tree = render();
   assert.doesNotMatch(JSON.stringify(tree), /ACCOUNT_[AB]_EVENTS/);
   const before = calls.read;
-  flag = false; currentOwner = 'C'; assert.equal(render(), null); assert.equal(calls.read, before);
+  flag = false; currentOwner = 'E'; assert.equal(render(), null); assert.equal(calls.read, before);
   flag = true; nativeGate = false; currentOwner = 'D'; assert.equal(render(), null); assert.equal(calls.read, before);
   assert.equal(calls.notify, 0);
   console.log('PASS actual TSX with controlled hooks: stale account response discarded, logout clears display, foreground re-read, manual copy only, JS/native OFF hides UI, reading never invokes notification test');

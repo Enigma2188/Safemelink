@@ -59,6 +59,9 @@ function serviceFixture(flag, os = 'android', outcome = 'requested') {
   assert.ok(diagnostic.indexOf('requestNotification(context, 4199, notice)') < diagnostic.indexOf('result["notifyOutcome"] = "requested"'));
   const builder = native.slice(native.indexOf('fun notification('), native.indexOf('fun show('));
   assert.doesNotMatch(builder, /AlarmManager|SafetyEscalationService|Receiver|putExtra|completeSOS/);
+  assert.match(builder, /if \(Build.VERSION.SDK_INT < 26 && !silent\) builder.setPriority\(Notification.PRIORITY_HIGH\)\s*\.setDefaults\(Notification.DEFAULT_SOUND or Notification.DEFAULT_VIBRATE\)/);
+  assert.doesNotMatch(builder, /setFullScreenIntent|setBypassDnd|IMPORTANCE_MAX/);
+  console.log('PASS STATIC Android 7/7.1 audible alert has HIGH priority; silent service and Android 8+ channel policy unchanged');
   const receiver = fs.readFileSync('modules/safemelink-safety/android/src/main/java/com/tiziano/safemelink/safety/SafetyDeadlineReceiver.kt', 'utf8');
   assert.doesNotMatch(receiver, /testCheckpointNotification/);
   console.log('PASS STATIC native path shares T1 builder/check/notify, uses a separate ID and never touches deadlines or SOS');
