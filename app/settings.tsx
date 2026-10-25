@@ -141,6 +141,10 @@ export default function SettingsScreen() {
         <View style={styles.headerSpacer} />
       </View>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {Platform.OS === 'android' && <Pressable accessibilityRole="button" style={styles.card} onPress={() => router.push('/security-setup' as Href)}>
+          <Text style={styles.cardTitle}>Configura la tua sicurezza</Text>
+          <Text style={styles.cardText}>Verifica permessi e impostazioni Android, un requisito alla volta.</Text>
+        </Pressable>}
         <Text style={styles.sectionLabel}>INTERFACCIA</Text>
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Modalità interfaccia</Text>

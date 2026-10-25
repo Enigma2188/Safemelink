@@ -14,6 +14,7 @@ import { SOSNotificationCenter } from '@/components/SOSNotificationCenter';
 import { SOSNetworkPresenceProvider } from '@/components/SOSNetworkPresenceProvider';
 import { VoiceProtectionLifecycle } from '@/components/VoiceProtectionLifecycle';
 import { CheckpointNotificationWarning } from '@/components/CheckpointNotificationWarning';
+import { SecuritySetupInvitation } from '@/components/SecuritySetupInvitation';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -78,6 +79,7 @@ function RootNavigator() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={styles.container}>
             <OfflineStatusBanner />
+            <SecuritySetupInvitation />
             <Stack>
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="login" options={{ title: 'Login' }} />
@@ -101,6 +103,7 @@ function RootNavigator() {
               <Stack.Screen name="network" options={{ headerShown: false }} />
               <Stack.Screen name="protection-signal" options={{ headerShown: false }} />
               <Stack.Screen name="settings" options={{ headerShown: false }} />
+              <Stack.Screen name="security-setup" options={{ headerShown: false }} />
               <Stack.Screen
                 name="how-safemelink-works"
                 options={{ headerShown: false }}
