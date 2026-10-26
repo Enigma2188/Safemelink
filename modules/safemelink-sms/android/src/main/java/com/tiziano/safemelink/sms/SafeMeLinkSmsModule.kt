@@ -7,10 +7,16 @@ import androidx.core.content.ContextCompat
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.Promise
 
 class SafeMeLinkSmsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("SafeMeLinkSms")
+
+    AsyncFunction("sendSosSmsWithResult") { phone: String, message: String, promise: Promise ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SosSmsSender.send(context, phone, message, promise)
+    }
 
     AsyncFunction("sendSms") { phone: String, message: String ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()

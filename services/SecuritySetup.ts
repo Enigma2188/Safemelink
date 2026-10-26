@@ -5,10 +5,11 @@ import { Linking, Platform } from 'react-native';
 import { SafeMeLinkSafety } from '@/modules/safemelink-safety';
 import { ensureOperationalChannel, openOperationalChannelSettings, SAFETY_NOTIFICATION_CHANNEL_ID } from '@/services/OperationalNotificationChannels';
 import { VoiceProtectionService } from '@/services/VoiceProtectionService';
+import { getVoiceRecognitionReadiness, voiceReadinessMessage } from '@/services/VoiceRecognitionCapabilities';
 
-export type SetupRequirement = 'notifications' | 'channel' | 'location' | 'gps' | 'background' | 'microphone' | 'alarms' | 'visibility' | 'battery';
+export type SetupRequirement = 'notifications' | 'channel' | 'location' | 'gps' | 'background' | 'microphone' | 'recognizer' | 'microphonePrivacy' | 'alarms' | 'visibility' | 'battery';
 export type SetupStatus = 'ready' | 'missing' | 'unknown';
-export type SetupSnapshot = Record<SetupRequirement, SetupStatus>;
+export type SetupSnapshot = Record<SetupRequirement, SetupStatus> & { recognitionDetail?: string };
 const permissionStatus = (p: { granted: boolean }): SetupStatus => p.granted ? 'ready' : 'missing';
 const inspect = async (read: () => Promise<SetupStatus>): Promise<SetupStatus> => {
   try { return await read(); } catch { return 'unknown'; }
@@ -29,7 +30,13 @@ export async function readSecuritySetup(): Promise<SetupSnapshot> {
     inspect(async () => permissionStatus(await ExpoSpeechRecognitionModule.getMicrophonePermissionsAsync())),
     inspect(async () => SafeMeLinkSafety ? (SafeMeLinkSafety.canScheduleExactAlarms() ? 'ready' : 'missing') : 'unknown'),
   ]);
-  return { notifications, channel, location, gps, background, microphone, alarms, visibility: 'unknown', battery: 'unknown' };
+  const readiness = await getVoiceRecognitionReadiness().catch(() => 'model_status_unknown' as const);
+  const recognizer = readiness === 'ready' ? 'ready' : readiness === 'model_status_unknown' ? 'unknown' : 'missing';
+  return { notifications, channel, location, gps, background, microphone, alarms, recognizer,
+    microphonePrivacy: 'unknown', visibility: 'unknown', battery: 'unknown',
+    recognitionDetail: voiceReadinessMessage(readiness) || (readiness === 'model_status_unknown'
+      ? 'Il motore non permette di confermare la disponibilità della lingua offline. Il solo permesso microfono non conferma l’ascolto.'
+      : 'Motore locale e lingua italiana disponibili. L’ascolto richiede comunque attivazione e conferma nativa.') };
 }
 
 async function requestOrSettings(get: () => Promise<{ granted: boolean; canAskAgain: boolean }>, request: () => Promise<unknown>) {
@@ -57,6 +64,10 @@ export async function configureSecurityRequirement(id: SetupRequirement): Promis
       await requestOrSettings(Location.getBackgroundPermissionsAsync, Location.requestBackgroundPermissionsAsync); return;
     case 'microphone':
       await requestOrSettings(() => ExpoSpeechRecognitionModule.getMicrophonePermissionsAsync(), () => ExpoSpeechRecognitionModule.requestMicrophonePermissionsAsync()); return;
+    case 'recognizer':
+      await Linking.sendIntent('android.settings.VOICE_INPUT_SETTINGS').catch(() => Linking.openSettings()); return;
+    case 'microphonePrivacy':
+      await Linking.sendIntent('android.settings.PRIVACY_SETTINGS').catch(() => Linking.openSettings()); return;
     case 'alarms':
       if (!SafeMeLinkSafety) throw new Error('Controllo nativo non disponibile in questa installazione.');
       await SafeMeLinkSafety.openExactAlarmSettings(); return;

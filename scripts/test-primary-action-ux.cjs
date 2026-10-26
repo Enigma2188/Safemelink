@@ -5,18 +5,18 @@ const ts = require('typescript');
 const read = path => fs.readFileSync(path, 'utf8');
 const compile = source => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 async function authorization(result, alreadyGranted = false) {
-  let consent = false, requests = 0;
+  let consent = false, requests = 0, granted = alreadyGranted;
   const exports = {};
   const modules = {
     'react-native': { Platform: { OS: 'android' }, PermissionsAndroid: {
       PERMISSIONS: { SEND_SMS: 'sms' }, RESULTS: { GRANTED: 'granted', NEVER_ASK_AGAIN: 'never' },
-      check: async () => alreadyGranted, request: async () => { requests++; return result; },
+      check: async () => granted, request: async () => { requests++; granted = result === 'granted'; return result; },
     } },
     'safemelink-sms': { SafeMeLinkSms: {} },
-    '@/storage/SOSAutomaticSmsStorage': { SOSAutomaticSmsStorage: { setConsent: async (_u, value) => { consent = value; } } },
+    '@/storage/SOSAutomaticSmsStorage': { SOSAutomaticSmsStorage: { setConsent: async (_u, value) => { consent = value; }, hasConsent: async () => consent } },
     '@/services/PhoneIdentity': {}, '@/services/SOSSessionTimeout': {},
   };
-  vm.runInNewContext(compile(read('services/SOSAutomaticSmsService.ts')), { exports, require: n => { assert.ok(modules[n], n); return modules[n]; } });
+  vm.runInNewContext(compile(read('services/SOSAutomaticSmsService.ts')), { exports, setTimeout, clearTimeout, require: n => { assert.ok(modules[n], n); return modules[n]; } });
   const state = await exports.SOSAutomaticSmsService.requestAuthorization('fixture');
   assert.equal(consent, true);
   assert.equal(state.permission, alreadyGranted || result === 'granted');

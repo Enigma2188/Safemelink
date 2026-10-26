@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
-import { Linking, Platform } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import BackgroundService from 'react-native-background-actions';
 
 import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
@@ -153,6 +153,11 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
 const startNativeTask = async (
   options: Parameters<typeof BackgroundService.start<VoiceProtectionTaskData>>[1],
 ) => {
+  // Microphone while-in-use authorization is not sufficient for a new service
+  // created in background. This guard does not affect safety-only monitoring.
+  if (options.parameters?.voiceRequested && AppState.currentState !== 'active') {
+    throw new Error('Apri SafeMeLink in primo piano per avviare il microfono. La protezione non è in ascolto.');
+  }
   if (nativeStartUnsettled) throw new Error('Avvio precedente ancora in verifica. Riprova.');
   let releaseStart = () => {};
   taskStartGate = new Promise<void>((resolve) => { releaseStart = resolve; });
@@ -225,6 +230,9 @@ export const VoiceProtectionService = {
     return serializeService(async () => {
     if (Platform.OS !== 'android') {
       throw new Error('Protezione Vocale continua non disponibile su questa piattaforma.');
+    }
+    if (AppState.currentState !== 'active') {
+      throw new Error('Apri SafeMeLink in primo piano per avviare il microfono. La protezione non è in ascolto.');
     }
 
     if (BackgroundService.isRunning()) {

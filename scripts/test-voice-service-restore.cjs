@@ -13,7 +13,7 @@ function fixture() {
   const signal = () => { if (wake) { const resolve = wake; wake = null; resolve(); } else wakePending = true; };
   const dependencies = {
     'expo-notifications': {}, 'expo-speech-recognition': { ExpoSpeechRecognitionModule: { abort() {} } },
-    'react-native': { Platform: { OS: 'android' }, Linking: {} },
+    'react-native': { Platform: { OS: 'android' }, Linking: {}, AppState: { currentState: 'active' } },
     'react-native-background-actions': { default: {
       isRunning: () => running,
       start: async (task, value) => {
@@ -50,6 +50,7 @@ function fixture() {
   const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
   return {
     api, flush, restore: () => api.restoreListeningService('A', () => current),
+    background() { dependencies['react-native'].AppState.currentState = 'background'; },
     get starts() { return starts; }, get stops() { return stops; }, get saves() { return saves; },
     get expiry() { return expiry; }, get options() { return options; },
     off() { blocked = true; settings.enabled = false; }, sos() { sos = true; },
@@ -60,6 +61,13 @@ function fixture() {
   };
 }
 const cases = [
+  ['background restore never starts a missing microphone foreground service', async () => {
+    const f = fixture(); f.background(); await assert.rejects(f.restore(), /primo piano/); assert.equal(f.starts, 0);
+  }],
+  ['background transition during authorization read prevents native service creation', async () => {
+    const f = fixture(); f.deferSettings(); const pending = f.restore(); await f.flush(); f.background(); f.releaseSettings();
+    await assert.rejects(pending, /primo piano/); assert.equal(f.starts, 0);
+  }],
   ['real service serializes concurrent restoration and preserves the original expiry', async () => {
     const f = fixture(); const results = await Promise.all([f.restore(), f.restore()]);
     assert.deepEqual(results, [true, true]); assert.equal(f.starts, 1);

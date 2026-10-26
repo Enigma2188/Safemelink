@@ -29,6 +29,7 @@ import {
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { automaticSmsFeedback } from '@/services/SOSAutomaticSmsFeedback';
 import { SOSLaunchRuntime } from '@/services/SOSLaunchRuntime';
 import { SafetyExpirationService } from '@/services/SafetyExpirationService';
 import { SafetyExpirationRuntime } from '@/services/SafetyExpirationRuntime';
@@ -89,17 +90,9 @@ const getSOSDeliveryNotice = (
   localResult: SOSLocalDeliveryResult,
   automaticSmsResult: SOSAutomaticSmsResult,
 ) => {
-  const automaticSmsNotice = automaticSmsResult.status === 'sent'
-    ? [
-        `SMS automatici affidati al sistema: ${automaticSmsResult.sentCount}.`,
-        automaticSmsResult.failedCount > 0
-          ? `Invio automatico non avviato per ${automaticSmsResult.failedCount} contatti.`
-          : null,
-        automaticSmsResult.skippedCount > 0
-          ? `Contatti non utilizzabili, duplicati o oltre il limite: ${automaticSmsResult.skippedCount}.`
-          : null,
-      ].filter(Boolean).join(' ')
-    : null;
+  const smsFeedback = automaticSmsFeedback(automaticSmsResult);
+  const automaticSmsNotice = smsFeedback ? [smsFeedback, localResult.status === 'sms_opened'
+    ? 'Composer SMS aperto: controlla il destinatario e premi Invia solo dopo aver verificato eventuali invii già effettuati.' : null].filter(Boolean).join(' ') : null;
   if (result.notificationsSent > 0) {
     return [
       'SOS attivo. La notifica SafeMeLink è stata accettata per l’invio.',

@@ -157,11 +157,12 @@ export const SOSService = {
 
     const automaticSmsPromise: Promise<SOSAutomaticSmsResult> =
       runLocalOperationWithTimeout(SOSAutomaticSmsService.sendForSOS(expectedUserId, event, contacts)).catch(() => ({
-        status: 'failed' as const,
-        reason: 'native_send_failed' as const,
+        status: 'uncertain' as const,
+        reason: 'native_result_unknown' as const,
         sentCount: 0,
         failedCount: 0,
         skippedCount: contacts.length,
+        unknownCount: contacts.length,
       }));
 
     const pushResult: SOSDeliveryResult = allowRemoteDelivery

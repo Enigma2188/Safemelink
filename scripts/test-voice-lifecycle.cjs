@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 // Exercise the actual lifecycle with an asynchronous Android abort/end sequence.
-function fixture({ confirmStart = true, hangStop = false, deferPermission = false, deferSOSRead = false, deferRemote = false, failSave = false, failServiceStop = false, failServiceRestore = false } = {}) {
+function fixture({ confirmStart = true, hangStop = false, deferPermission = false, permissionGranted = true, deferSOSRead = false, deferRemote = false, failSave = false, failServiceStop = false, failServiceRestore = false } = {}) {
   let now = 100_000;
   let timerId = 0;
   const timers = new Map();
@@ -54,7 +54,7 @@ function fixture({ confirmStart = true, hangStop = false, deferPermission = fals
       setTimer(() => { events.end?.({ safemelinkGeneration: stoppedGeneration }); nativeState = 'inactive'; }, 200);
     },
     getStateAsync: async () => hangStop ? new Promise(() => {}) : nativeState,
-    getPermissionsAsync: () => deferPermission ? new Promise(resolve => { permissionResolve = resolve; }) : Promise.resolve({ granted: true }),
+    getPermissionsAsync: () => deferPermission ? new Promise(resolve => { permissionResolve = resolve; }) : Promise.resolve({ granted: permissionGranted }),
     start(options) {
       assert.equal(nativeState, 'inactive', 'replacement must wait for native teardown');
       nativeState = 'starting';

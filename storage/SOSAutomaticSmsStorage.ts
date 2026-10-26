@@ -3,7 +3,7 @@ import { getAccountStorageItem, setAccountStorageItem } from '@/storage/AccountS
 const CONSENT_NAMESPACE = 'sos-sms-consent' as const;
 const DISPATCH_NAMESPACE = 'sos-sms-dispatch' as const;
 const MAX_DISPATCH_MARKERS = 40;
-type SmsState = 'attempted' | 'handed_to_system' | 'failed' | 'unknown';
+type SmsState = 'attempted' | 'handed_to_system' | 'sent_confirmed' | 'failed' | 'unknown';
 type Dispatch = { attempts: Record<string, string[]>; states: Record<string, Record<string, SmsState>> };
 let queue: Promise<unknown> = Promise.resolve();
 const ordered = <T>(action: () => Promise<T>) => {

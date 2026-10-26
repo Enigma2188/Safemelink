@@ -31,9 +31,10 @@ vm.runInNewContext(compiled, {
       },
     };
     if (specifier === 'safemelink-sms') return { SafeMeLinkSms: {
-      async sendSms(phone) {
+      async sendSosSmsWithResult(phone) {
         nativeCalls.push(phone);
-        if (phone === '+22222222') throw new Error('native_failure');
+        return { attemptId: '11111111-1111-4111-8111-111111111111', status: phone === '+22222222' ? 'failed' : 'sent',
+          reason: phone === '+22222222' ? 'send_failed' : 'sent_confirmed', requested: true, delivery: 'not_verified' };
       },
     } };
     if (specifier.endsWith('/PhoneIdentity')) return {
@@ -104,7 +105,7 @@ async function main() {
   assert.match(fallbackSource, /if \(!canOpen\)[\s\S]*return \{ opened: false/);
   assert.match(fallbackSource, /Linking\.openURL\(url\)/);
   assert.doesNotMatch(fallbackSource, /whatsapp:\/\/|wa\.me|Share\.share/i);
-  assert.match(homeSource, /SMS automatici affidati al sistema/);
+  assert.match(homeSource, /automaticSmsFeedback\(automaticSmsResult\)/);
   assert.match(homeSource, /Composer SMS aperto: controlla il destinatario e premi Invia/);
   const serializedDiagnostics = JSON.stringify(diagnostics);
   for (const value of ['+11111111', '+22222222', '+33333333', 'latitude', 'longitude']) {

@@ -1209,8 +1209,9 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   assert.match(sosAutomaticSmsService, /PermissionsAndroid\.request/);
   assert.match(
     sosAutomaticSmsService,
-    /SOSAutomaticSmsStorage\.setConsent\(userId, true\)[\s\S]*PermissionsAndroid\.request/,
+    /writeSmsConsent\(userId, true\)[\s\S]*PermissionsAndroid\.request/,
   );
+  assert.match(sosAutomaticSmsService, /consentWrites\.then\(\(\) => SOSAutomaticSmsStorage\.setConsent\(userId, value\)\)/);
   // Check the boolean contract, independently of JSX whitespace or operand order.
   const ts = require('typescript');
   const source = ts.createSourceFile('TrustedContactsScreen.tsx', contactsScreen,
@@ -1228,33 +1229,29 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   };
   visit(source);
   const smsValue = switchValues.filter(expression => expression &&
-    /\bsmsConsent\b/.test(expression.getText(source)));
+    /\bsmsReady\b/.test(expression.getText(source)));
   assert.equal(smsValue.length, 1, 'Expected one automatic SMS status control.');
-  const evaluate = (node, values) => {
-    if (ts.isParenthesizedExpression(node)) return evaluate(node.expression, values);
-    if (ts.isIdentifier(node) && Object.hasOwn(values, node.text)) return values[node.text];
-    if (ts.isBinaryExpression(node)) {
-      const left = evaluate(node.left, values);
-      const right = evaluate(node.right, values);
-      if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return left && right;
-      if (node.operatorToken.kind === ts.SyntaxKind.BarBarToken) return left || right;
-    }
-    throw new Error('Review changed automatic SMS status expression.');
-  };
+  assert.equal(smsValue[0].getText(source), 'smsReady');
+  const readyExpression = contactsScreen.match(/const smsReady = ([^;]+);/)[1];
   for (const smsConsent of [false, true]) {
     for (const smsPermission of [false, true]) {
-      assert.equal(evaluate(smsValue[0], { smsConsent, smsPermission }), smsConsent && smsPermission,
-        'SMS must appear active only with explicit consent AND OS permission.');
+      for (const verified of [false, true]) for (const smsSupported of [false, true]) for (const problem of [null, 'consent_read']) {
+        const ready = require('node:vm').runInNewContext(readyExpression, {
+          authorization: { verified, problem }, smsConsent, smsPermission, smsSupported,
+        });
+        assert.equal(ready, verified && problem === null && smsSupported && smsConsent && smsPermission,
+          'SMS must appear active only with verified consent, permission, native support and no verification error.');
+      }
     }
   }
   assert.match(contactsScreen, /onValueChange=\{\(value\) => void setAutomaticSmsEnabled\(value\)\}/);
   assert.match(contactsScreen, /onPress=\{\(\) => void setAutomaticSmsEnabled\(true\)\}[^\n]*ATTIVA SMS AUTOMATICI/);
-  assert.match(contactsScreen, /contacts\.length > 0 && !\(smsConsent && smsPermission\)/);
+  assert.match(contactsScreen, /contacts\.length > 0 && !smsReady/);
   assert.match(contactsScreen, /Con il tuo consenso/);
-  assert.match(contactsScreen, /smsConsent && smsPermission \? 'SMS automatici attivi' : 'SMS automatici NON ATTIVI'/);
-  assert.match(contactsScreen, /await SOSAutomaticSmsService\.requestAuthorization\(expectedUserId\)/);
-  assert.match(contactsScreen, /setSmsConsent\(state\.consent\)/);
-  assert.match(contactsScreen, /setSmsPermission\(state\.permission\)/);
+  assert.match(contactsScreen, /smsReady \? contacts.length > 0 \? 'SMS automatici attivi'/);
+  assert.match(contactsScreen, /SOSAutomaticSmsService\.requestAuthorization\(expectedUserId, current\)/);
+  assert.match(contactsScreen, /consentVerified === true && authorization.consent/);
+  assert.match(contactsScreen, /permissionVerified === true && authorization.permission/);
   assert.doesNotMatch(contactsScreen, /setSmsConsent\(true\)|setSmsPermission\(true\)/);
   assert.match(sosAutomaticSmsService, /getDeliveryTargets/);
   assert.match(
@@ -1273,7 +1270,8 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   assert.match(sosAutomaticSmsService, /MAX_AUTOMATIC_SMS_RECIPIENTS = 3/);
   assert.match(sosAutomaticSmsService, /first\.priority - second\.priority/);
   assert.match(sosAutomaticSmsService, /seen\.has\(phone\)/);
-  assert.match(homeScreen, /SMS automatici affidati al sistema/);
+  assert.match(homeScreen, /automaticSmsFeedback\(automaticSmsResult\)/);
+  assert.match(read('services/SOSAutomaticSmsFeedback.ts'), /consegna ai destinatari non è verificata/);
   assert.match(homeScreen, /Composer SMS aperto: controlla il destinatario e premi Invia/);
   const smsLogStatements = (
     sosAutomaticSmsService.match(/console\.(?:log|info|warn)\([\s\S]*?\);/g) ?? []

@@ -20,7 +20,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
-import { SOSAutomaticSmsService } from '@/services/SOSAutomaticSmsService';
+import { awaitSmsAuthorization, smsAuthorizationMessage, SOSAutomaticSmsService, type SmsAuthorizationState } from '@/services/SOSAutomaticSmsService';
 import {
   TrustedLinksService,
   type TrustedLinkRequest,
@@ -54,10 +54,17 @@ export function TrustedContactsScreen() {
   const [contactActionPending, setContactActionPending] = useState(false);
   const [isLoadingContacts, setIsLoadingContacts] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [smsConsent, setSmsConsent] = useState(false);
-  const [smsPermission, setSmsPermission] = useState(false);
-  const [smsSupported, setSmsSupported] = useState(Platform.OS === 'android');
+  const [smsAuthorization, setSmsAuthorization] = useState<{ owner: string; state: SmsAuthorizationState } | null>(null);
+  const [smsAuthorizationFeedback, setSmsAuthorizationFeedback] = useState('');
+  const authorization = smsAuthorization?.owner === userId ? smsAuthorization.state : null;
+  const smsConsent = authorization?.consentVerified === true && authorization.consent;
+  const smsPermission = authorization?.permissionVerified === true && authorization.permission;
+  const smsSupported = authorization?.supported ?? SOSAutomaticSmsService.isSupported();
+  const smsReady = authorization?.verified === true && authorization.problem === null && smsSupported && smsConsent && smsPermission;
   const [smsAuthorizationPending, setSmsAuthorizationPending] = useState(false);
+  const smsAuthorizationPendingRef = useRef(false);
+  const smsAuthorizationRevisionRef = useRef(0);
+  const smsAuthorizationActionRef = useRef<number | null>(null);
   const isFocusedRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
   const loadGenerationRef = useRef(0);
@@ -135,17 +142,21 @@ export function TrustedContactsScreen() {
 
   const loadSmsAuthorization = useCallback(async () => {
     const expectedUserId = userId;
-    if (!expectedUserId) return;
+    if (!expectedUserId || smsAuthorizationPendingRef.current) return;
+    const revision = ++smsAuthorizationRevisionRef.current;
+    // A previous foreground snapshot is not evidence after settings/revocation.
+    setSmsAuthorization(null);
     try {
       const state = await SOSAutomaticSmsService.getAuthorizationState(expectedUserId);
-      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId) {
-        setSmsConsent(state.consent);
-        setSmsPermission(state.permission);
-        setSmsSupported(state.supported);
+      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId && revision === smsAuthorizationRevisionRef.current) {
+        setSmsAuthorization({ owner: expectedUserId, state });
+        setSmsAuthorizationFeedback(state.requestInProgress
+          ? 'Una richiesta precedente è ancora pendente. Puoi verificare lo stato senza aprire un secondo dialogo Android.' : '');
       }
     } catch {
-      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId) {
-        setSmsPermission(false);
+      if (isFocusedRef.current && activeUserIdRef.current === expectedUserId && revision === smsAuthorizationRevisionRef.current) {
+        setSmsAuthorization(null);
+        setSmsAuthorizationFeedback('Verifica SMS non riuscita. Consenso e permesso non sono stati confermati; riprova la verifica.');
       }
     }
   }, [userId]);
@@ -168,8 +179,11 @@ export function TrustedContactsScreen() {
     setContactActionPending(false);
     setIsLoadingContacts(false);
     setLoadError(null);
-    setSmsConsent(false);
-    setSmsPermission(false);
+    smsAuthorizationRevisionRef.current++;
+    smsAuthorizationPendingRef.current = false;
+    smsAuthorizationActionRef.current = null;
+    setSmsAuthorization(null);
+    setSmsAuthorizationFeedback('');
     setSmsAuthorizationPending(false);
   }, [userId]);
 
@@ -181,6 +195,9 @@ export function TrustedContactsScreen() {
   useFocusEffect(
     useCallback(() => {
       isFocusedRef.current = true;
+      smsAuthorizationPendingRef.current = false;
+      smsAuthorizationActionRef.current = null;
+      setSmsAuthorizationPending(false);
       setContactActionPending(contactActionInFlightRef.current);
       setLinkActionPending(linkActionInFlightRef.current);
       void loadContacts();
@@ -188,6 +205,7 @@ export function TrustedContactsScreen() {
 
       return () => {
         isFocusedRef.current = false;
+        smsAuthorizationRevisionRef.current++;
         loadGenerationRef.current += 1;
       };
     }, [loadContacts, loadSmsAuthorization]),
@@ -195,37 +213,35 @@ export function TrustedContactsScreen() {
 
   const setAutomaticSmsEnabled = async (nextEnabled: boolean) => {
     const expectedUserId = userId;
-    if (!expectedUserId || smsAuthorizationPending) return;
+    if (!expectedUserId || smsAuthorizationPendingRef.current) return;
+    smsAuthorizationPendingRef.current = true;
+    const revision = ++smsAuthorizationRevisionRef.current;
+    smsAuthorizationActionRef.current = revision;
+    const current = () => isFocusedRef.current && activeUserIdRef.current === expectedUserId && revision === smsAuthorizationRevisionRef.current;
     setSmsAuthorizationPending(true);
+    setSmsAuthorizationFeedback('');
     try {
-      if (!nextEnabled) {
-        await SOSAutomaticSmsService.revokeAuthorization(expectedUserId);
-        if (activeUserIdRef.current === expectedUserId) {
-          setSmsConsent(false);
-        }
-        return;
-      }
-      const state = await SOSAutomaticSmsService.requestAuthorization(expectedUserId);
-      if (activeUserIdRef.current !== expectedUserId) return;
-      setSmsConsent(state.consent);
-      setSmsPermission(state.permission);
-      setSmsSupported(state.supported);
-      if (!state.supported) {
-        Alert.alert('SMS automatici', 'L’invio automatico SMS non è disponibile su questo dispositivo.');
-      } else if (!state.permission) {
-        Alert.alert(
-          'SMS automatici non attivi',
-          'Il permesso SMS non è stato concesso. SafeMeLink userà il composer SMS come fallback.',
-          state.permanentlyDenied ? [{ text: 'Non ora', style: 'cancel' },
-            { text: 'Apri impostazioni', onPress: () => { void Linking.openSettings().catch(() => {}); } }] : [{ text: 'OK' }],
-        );
-      }
-    } catch {
-      if (activeUserIdRef.current === expectedUserId) {
-        Alert.alert('SMS automatici', 'Impossibile aggiornare ora questa autorizzazione. Riprova.');
+      const operation = nextEnabled
+        ? SOSAutomaticSmsService.requestAuthorization(expectedUserId, current)
+        : SOSAutomaticSmsService.revokeAuthorization(expectedUserId).then(() => SOSAutomaticSmsService.getAuthorizationState(expectedUserId));
+      const state = await awaitSmsAuthorization(operation);
+      if (!current()) return;
+      setSmsAuthorization({ owner: expectedUserId, state });
+      setSmsAuthorizationFeedback(state.requestInProgress ? 'Una richiesta precedente è ancora pendente. Riprova la verifica; non verrà aperto un secondo dialogo Android.' : '');
+    } catch (error) {
+      if (current()) {
+        // A UI timeout cannot cancel Android's dialog or a pending storage write.
+        // Invalidate continuations so a delayed write cannot launch a new dialog.
+        smsAuthorizationRevisionRef.current++;
+        setSmsAuthorization(null);
+        setSmsAuthorizationFeedback(error instanceof Error && error.message === 'sms_authorization_timeout'
+          ? 'Richiesta SMS non conclusa entro il tempo previsto. L’esito è da verificare: un dialogo Android o un salvataggio può essere ancora pendente. Premi VERIFICA STATO SMS; nessuna seconda richiesta verrà avviata nel frattempo.'
+          : 'Operazione SMS non verificata. Non viene confermata alcuna attivazione. Premi VERIFICA STATO SMS.');
       }
     } finally {
-      if (activeUserIdRef.current === expectedUserId) {
+      if (activeUserIdRef.current === expectedUserId && smsAuthorizationActionRef.current === revision) {
+        smsAuthorizationPendingRef.current = false;
+        smsAuthorizationActionRef.current = null;
         setSmsAuthorizationPending(false);
       }
     }
@@ -668,10 +684,10 @@ export function TrustedContactsScreen() {
       </View>
       <ContactPickerButton key={userId ?? 'signed-out'} disabled={!userId || contactActionPending}
         onPick={(name, phone) => setForm((current) => ({ ...current, name, phone }))} />
-      {Platform.OS === 'android' && contacts.length > 0 && !(smsConsent && smsPermission) ? (
+      {Platform.OS === 'android' && contacts.length > 0 && !smsReady ? (
         <View style={styles.section}>
-          <Text accessibilityRole="header" style={styles.sectionTitle}>SMS AUTOMATICI NON ATTIVI</Text>
-          <Text style={styles.sectionHelp}>I tuoi contatti sono salvati. Per l’invio automatico servono il tuo consenso e il permesso SMS Android.</Text>
+          <Text accessibilityRole="header" style={styles.sectionTitle}>{authorization?.verified ? 'SMS AUTOMATICI NON ATTIVI' : 'STATO SMS DA VERIFICARE'}</Text>
+          <Text style={styles.sectionHelp}>I tuoi contatti sono salvati. {smsAuthorizationMessage(authorization)}</Text>
           {smsSupported ? <Pressable accessibilityRole="button" disabled={!userId || smsAuthorizationPending}
             style={styles.primaryButton} onPress={() => void setAutomaticSmsEnabled(true)}>
             <Text style={styles.primaryButtonText}>{smsAuthorizationPending ? 'VERIFICA IN CORSO…' : 'ATTIVA SMS AUTOMATICI'}</Text>
@@ -826,26 +842,30 @@ export function TrustedContactsScreen() {
           <View style={styles.smsConsentCopy}>
             <Text style={styles.sectionTitle}>SMS automatici di emergenza</Text>
             <Text style={styles.sectionHelp}>
-              {smsAuthorizationPending ? 'Verifica in corso…' : smsConsent && smsPermission ? 'SMS automatici attivi' : 'SMS automatici NON ATTIVI'}
+              {smsAuthorizationPending ? 'Verifica in corso…' : smsReady ? contacts.length > 0 ? 'SMS automatici attivi' : 'SMS autorizzati — nessun contatto fidato configurato' : authorization?.verified ? 'SMS automatici NON ATTIVI' : 'Stato SMS da verificare'}
             </Text>
             <Text style={styles.sectionHelp}>
               Con il tuo consenso, SafeMeLink invia direttamente un SMS ai numeri fidati quando parte un SOS.
             </Text>
-            {!smsSupported ? (
-              <Text style={styles.legacyPhoneWarning}>Funzione disponibile soltanto su Android.</Text>
-            ) : smsConsent && !smsPermission ? (
-              <Text style={styles.legacyPhoneWarning}>Permesso SMS revocato: riattiva l’opzione per richiederlo.</Text>
-            ) : null}
+            <Text style={styles.sectionHelp}>{Platform.OS === 'android' ? smsAuthorizationMessage(authorization) : 'Funzione disponibile soltanto su Android.'}</Text>
+            {!!smsAuthorizationFeedback && <Text accessibilityRole="alert" style={styles.legacyPhoneWarning}>{smsAuthorizationFeedback}</Text>}
           </View>
           <Switch
             disabled={!userId || smsAuthorizationPending || !smsSupported}
             onValueChange={(value) => void setAutomaticSmsEnabled(value)}
-            value={smsConsent && smsPermission}
+            value={smsReady}
           />
         </View>
-        {smsSupported && contacts.length === 0 && !(smsConsent && smsPermission) ? <Pressable accessibilityRole="button"
+        {smsSupported && contacts.length === 0 && !smsReady ? <Pressable accessibilityRole="button"
           disabled={!userId || smsAuthorizationPending} style={styles.primaryButton}
           onPress={() => void setAutomaticSmsEnabled(true)}><Text style={styles.primaryButtonText}>ATTIVA SMS AUTOMATICI</Text></Pressable> : null}
+        {Platform.OS === 'android' ? <Pressable accessibilityRole="button" disabled={!userId || smsAuthorizationPending} onPress={() => void loadSmsAuthorization()}>
+          <Text style={styles.secondaryButtonText}>VERIFICA STATO SMS</Text>
+        </Pressable> : null}
+        {Platform.OS === 'android' && authorization?.permissionState === 'blocked_or_restricted' ? <Pressable accessibilityRole="button"
+          onPress={() => void Linking.openSettings().catch(() => setSmsAuthorizationFeedback('Impossibile aprire le impostazioni. Apri Impostazioni Android → App → SafeMeLink → Autorizzazioni.'))}>
+          <Text style={styles.secondaryButtonText}>Apri impostazioni</Text>
+        </Pressable> : null}
       </View>
 
 

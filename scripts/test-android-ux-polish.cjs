@@ -45,9 +45,9 @@ assert.doesNotMatch(voice, /allowFontScaling=\{false\}/);
 
 // Existing contacts alone must make the persistent banner eligible, on every mount.
 const banner = contacts.match(/\{(Platform\.OS === 'android' && contacts.length > 0 &&[^\n]+) \? \(/)[1];
-for (const count of [0, 1, 3]) for (const consent of [false, true]) for (const permission of [false, true]) {
+for (const count of [0, 1, 3]) for (const smsReady of [false, true]) {
   assert.equal(vm.runInNewContext(banner, { Platform: { OS: 'android' }, contacts: Array(count),
-    smsConsent: consent, smsPermission: permission }), count > 0 && !(consent && permission));
+    smsReady }), count > 0 && !smsReady);
 }
 assert.ok(contacts.indexOf('SMS AUTOMATICI NON ATTIVI') < contacts.indexOf('Il mio codice SafeMeLink'));
 assert.match(contacts, /state === 'active' && isFocusedRef.current\) void loadSmsAuthorization\(\)/);
@@ -56,23 +56,26 @@ assert.match(contacts, /void loadSmsAuthorization\(\)/);
 async function authorization(permission, permanentlyDenied) {
   const start = contacts.indexOf('  const setAutomaticSmsEnabled =');
   const end = contacts.indexOf('\n  useEffect(', start);
-  const alerts = []; let consent = false, granted = false, calls = 0, settingsOpened = 0;
-  const context = { userId: 'fixture', activeUserIdRef: { current: 'fixture' }, smsAuthorizationPending: false,
-    setSmsAuthorizationPending() {}, setSmsConsent: v => { consent = v; }, setSmsPermission: v => { granted = v; },
-    setSmsSupported() {}, SOSAutomaticSmsService: { requestAuthorization: async () => {
-      calls++; return { consent: true, permission, supported: true, permanentlyDenied };
-    } }, Alert: { alert: (...args) => alerts.push(args) }, Linking: { openSettings: async () => { settingsOpened++; } } };
+  let snapshot, calls = 0;
+  const context = { userId: 'fixture', activeUserIdRef: { current: 'fixture' }, isFocusedRef: { current: true },
+    smsAuthorizationPendingRef: { current: false }, smsAuthorizationRevisionRef: { current: 0 }, smsAuthorizationActionRef: { current: null },
+    setSmsAuthorizationPending() {}, setSmsAuthorization: value => { snapshot = value; }, setSmsAuthorizationFeedback() {},
+    awaitSmsAuthorization: p => p, SOSAutomaticSmsService: { requestAuthorization: async () => {
+      calls++; return { consent: true, permission, supported: true, permanentlyDenied,
+        permissionState: permission ? 'granted' : permanentlyDenied ? 'blocked_or_restricted' : 'not_granted' };
+    } } };
   vm.runInNewContext(compile(`${contacts.slice(start, end)}; globalThis.activate = setAutomaticSmsEnabled;`), context);
   assert.equal(calls, 0);
   await context.activate(true);
-  assert.equal(calls, 1); assert.equal(consent, true); assert.equal(granted, permission);
-  if (!permission) assert.equal(alerts[0][0], 'SMS automatici non attivi');
-  if (permanentlyDenied) { alerts[0][2][1].onPress(); assert.equal(settingsOpened, 1); }
+  assert.equal(calls, 1); assert.equal(snapshot.state.consent, true); assert.equal(snapshot.state.permission, permission);
+  if (permanentlyDenied) assert.equal(snapshot.state.permissionState, 'blocked_or_restricted');
 }
 
 const noticeStart = home.indexOf('const getSOSDeliveryNotice =');
 const noticeEnd = home.indexOf('\n};', noticeStart) + 3;
-const context = { Platform: { OS: 'android' } };
+const feedbackExports = {};
+vm.runInNewContext(compile(fs.readFileSync('services/SOSAutomaticSmsFeedback.ts', 'utf8')), { exports: feedbackExports });
+const context = { Platform: { OS: 'android' }, automaticSmsFeedback: feedbackExports.automaticSmsFeedback };
 vm.runInNewContext(compile(`${home.slice(noticeStart, noticeEnd)}; globalThis.notice = getSOSDeliveryNotice;`), context);
 for (const reason of ['no_eligible_recipients', 'no_linked_recipients']) {
   for (const status of ['consent_required', 'permission_required']) {
@@ -83,7 +86,7 @@ for (const reason of ['no_eligible_recipients', 'no_linked_recipients']) {
   }
 }
 const accepted = context.notice({ notificationsSent: 1 }, {}, { status: 'sent', sentCount: 2 });
-assert.match(accepted, /affidati al sistema: 2/);
+assert.match(accepted, /Invio SMS confermato da Android: 2/);
 assert.doesNotMatch(accepted, /consegnati/);
 assert.match(home, /Nessun contatto fidato configurato/);
 assert.match(home, /Hai \$\{contacts.length\} contatti fidati, ma gli SMS automatici non sono attivi/);

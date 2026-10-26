@@ -5,7 +5,7 @@ const ts = require('typescript');
 
 function fixture() {
   const calls = [];
-  const state = { granted: false, canAskAgain: true, channel: null, gps: false, exact: false, fail: false };
+  const state = { granted: false, canAskAgain: true, channel: null, gps: false, exact: false, fail: false, readiness: 'model_status_unknown' };
   const permission = async () => {
     if (state.fail) throw new Error('unavailable');
     return { granted: state.granted, canAskAgain: state.canAskAgain };
@@ -33,6 +33,7 @@ function fixture() {
       openOperationalChannelSettings: record('channel-settings'),
     },
     '@/services/VoiceProtectionService': { VoiceProtectionService: { openBatterySettings: record('battery-settings') } },
+    '@/services/VoiceRecognitionCapabilities': { getVoiceRecognitionReadiness: async () => state.readiness, voiceReadinessMessage: () => '' },
   };
   const exports = {};
   const code = ts.transpileModule(fs.readFileSync('services/SecuritySetup.ts', 'utf8'), {
@@ -51,6 +52,11 @@ function fixture() {
   result = await f.api.readSecuritySetup();
   for (const id of ['notifications', 'channel', 'location', 'background', 'microphone', 'alarms', 'gps']) assert.equal(result[id], 'ready', id);
   assert.equal(result.visibility, 'unknown'); assert.equal(result.battery, 'unknown');
+  assert.equal(result.recognizer, 'unknown'); assert.equal(result.microphonePrivacy, 'unknown');
+  for (const readiness of ['android_version_unsupported', 'recognition_unavailable', 'on_device_unavailable', 'italian_model_missing']) {
+    f.state.readiness = readiness; assert.equal((await f.api.readSecuritySetup()).recognizer, 'missing');
+  }
+  f.state.readiness = 'ready'; assert.equal((await f.api.readSecuritySetup()).recognizer, 'ready');
   assert.deepEqual(f.calls, [], 'already configured inspection remains read-only');
   f.state.granted = false;
   assert.equal((await f.api.readSecuritySetup()).notifications, 'missing', 'revocation detected by fresh inspection');
