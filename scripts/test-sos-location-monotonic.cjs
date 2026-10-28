@@ -28,12 +28,18 @@ function clientFixture(response, networkError = false) {
   let calls = 0;
   const modules = {
     '@/backend/errors/BackendError': { BackendError: class extends Error {} },
-    '@/backend/supabaseClient': { requireSupabaseClient: () => ({ rpc: async (name, args) => {
+    '@/backend/supabaseClient': { requireSupabaseClient: () => ({ rpc: (name, args) => {
       assert.equal(name, 'update_my_active_sos_location_result'); assert.equal(args.target_sos_id, 'remote');
       calls++;
-      if (networkError) throw new TypeError('synthetic network');
-      return { data: typeof response === 'function' ? await response() : response, error: null };
+      const promise = (async () => {
+        if (networkError) throw new TypeError('synthetic network');
+        return { data: typeof response === 'function' ? await response() : response, error: null };
+      })();
+      promise.abortSignal = () => promise;
+      return promise;
     } }) },
+    'react-native': { AppState: { addEventListener: () => ({ remove() {} }) } },
+    '@/backend/repositories/SOSLifecycleRepository': { SOSLifecycleRepository: {} },
     '@/backend/auth/AuthService': { AuthService: { getSession: async () => ({ user: { id: 'A' } }) } },
     '@/storage/SOSLiveLocationStorage': { SOSLiveLocationStorage: { get: async () => ({ sosId: 'remote' }), clear: async () => {} } },
     'expo-location': { hasStartedLocationUpdatesAsync: async () => false },
@@ -42,11 +48,12 @@ function clientFixture(response, networkError = false) {
   const load = file => {
     const exports = {};
     vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText,
-      { exports, require: name => { assert.ok(modules[name], name); return modules[name]; }, Date, Math, setTimeout, clearTimeout,
+      { exports, require: name => { assert.ok(modules[name], name); return modules[name]; }, Date, Math, setTimeout, clearTimeout, AbortController,
         console: { info() {}, warn() {} } });
     return exports;
   };
   modules['@/backend/repositories/SOSLiveLocationRepository'] = load('backend/repositories/SOSLiveLocationRepository.ts');
+  modules['@/services/SOSLiveLocationRequest'] = load('services/SOSLiveLocationRequest.ts');
   modules['@/services/SOSLiveLocationService'] = load('services/SOSLiveLocationService.ts');
   const stopTracking = modules['@/services/SOSLiveLocationService'].SOSLiveLocationService.stop;
   let stops = 0;
@@ -73,8 +80,8 @@ const cases = [
     assert.doesNotMatch(sql, /alter table|create policy|grant.*\bselect\b|grant.*\bupdate\b|grant.*to anon/i);
     assert.ok(sql.trim().startsWith('begin;')); assert.ok(sql.trim().endsWith('commit;'));
   }],
-  ['STATIC: background dispatch and old migrations remain byte-for-byte unchanged', async () => {
-    for (const file of ['services/SOSLiveLocationBackgroundTask.ts', 'supabase/migrations/20260902120000_sos_delivery_all_nearby_and_live_location.sql',
+  ['STATIC: old migrations remain byte-for-byte unchanged', async () => {
+    for (const file of ['supabase/migrations/20260902120000_sos_delivery_all_nearby_and_live_location.sql',
       'supabase/migrations/20260918123000_fix_safety_sos_location_timestamp.sql']) {
       const base = execFileSync('git', ['show', `fa4644a861732b30d2c7096b2582095374cc8f98:${file}`], { encoding: 'utf8' });
       assert.equal(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), base.replace(/\r\n/g, '\n'));
@@ -119,7 +126,7 @@ const cases = [
     const pending = f.run();
     while (!f.calls) await Promise.resolve();
     await f.stopTracking('A'); release('updated'); await pending;
-    await f.run(); assert.equal(f.calls, 2);
+    await f.run(); assert.equal(f.calls, 1); // explicit stop prevents new background publications
   }],
   ['REAL CLIENT / mocked backend: malformed response is an error, not confirmation or inactivity', async () => {
     for (const value of [true, false, null, 'unexpected']) {
