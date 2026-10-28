@@ -105,4 +105,12 @@ try {
 const source = fs.readFileSync('components/ReceivedSOSMap.tsx', 'utf8');
 assert.doesNotMatch(source, /expo-location|setInterval|fetch\(|AsyncStorage|console\.|googleMapId|mapId|sender_display_name|sos_id/);
 console.log('PASS dynamic Android-only key configuration; no extra GPS, polling, metadata or sensitive logging');
+const workflow = fs.readFileSync('.github/workflows/android-test-apk.yml', 'utf8');
+const prebuild = workflow.split('- name: Generate the ephemeral Android project')[1]?.split('- name:')[0];
+const bundle = workflow.split('- name: Build standalone test APK')[1]?.split('- name:')[0];
+for (const step of [prebuild, bundle]) {
+  assert.ok(step);
+  assert.match(step, /SAFEMELINK_ANDROID_MAPS_API_KEY: \$\{\{ secrets\.SAFEMELINK_ANDROID_MAPS_API_KEY \}\}/);
+}
+console.log('PASS optional Maps key reaches native generation AND JS config evaluation, never embedded in source');
 console.log('Native rendering, gestures, tiles and API-key acceptance remain NOT VERIFIED without a real APK/device.');

@@ -841,6 +841,10 @@ export type Database = {
           event_time: string;
         }[];
       };
+      update_my_active_sos_location_result: {
+        Args: Database['public']['Functions']['update_my_active_sos_location']['Args'];
+        Returns: 'updated' | 'stale' | 'inactive';
+      };
       update_my_active_sos_location: {
         Args: {
           target_sos_id: string;

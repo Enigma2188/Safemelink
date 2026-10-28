@@ -47,7 +47,10 @@ const publishLocation = async (
   location: Location.LocationObject,
 ) => {
   const accuracy = location.coords.accuracy;
-  if (accuracy === null || accuracy < 0 || accuracy > SOS_LIVE_MAX_ACCURACY_METERS) {
+  if (accuracy === null || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > SOS_LIVE_MAX_ACCURACY_METERS ||
+    !Number.isFinite(location.timestamp) ||
+    !Number.isFinite(location.coords.latitude) || Math.abs(location.coords.latitude) > 90 ||
+    !Number.isFinite(location.coords.longitude) || Math.abs(location.coords.longitude) > 180) {
     console.info('[SafeMeLink SOS] LIVE_LOCATION_SKIPPED', { category: 'accuracy' });
     return 'ignored' as const;
   }
@@ -70,23 +73,27 @@ const publishLocation = async (
   if (lastPublished && now - lastPublished.at < minimumInterval) return 'ignored' as const;
   if (updateInFlight) return 'ignored' as const;
   updateInFlight = true;
+  const generation = lifecycleGeneration;
   try {
     const session = await AuthService.getSession();
-    if (session?.user.id !== userId) return 'ignored' as const;
-    const updated = await SOSLiveLocationRepository.update(sosId, {
+    if (session?.user.id !== userId || generation !== lifecycleGeneration) return 'ignored' as const;
+    const outcome = await SOSLiveLocationRepository.update(sosId, {
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
       accuracy,
       observedAt: new Date(location.timestamp).toISOString(),
     });
-    if (updated) {
+    // An old response must not throttle a successor session. A stale fix was
+    // NOT saved and must not consume its next opportunity to publish a fresh fix.
+    if (generation !== lifecycleGeneration) return 'ignored' as const;
+    if (outcome === 'updated') {
       lastPublished = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
         at: now,
       };
     }
-    return updated ? ('updated' as const) : ('inactive' as const);
+    return outcome;
   } finally {
     updateInFlight = false;
   }

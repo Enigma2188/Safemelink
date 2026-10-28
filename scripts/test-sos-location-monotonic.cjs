@@ -25,12 +25,14 @@ function model() {
   return { row, update };
 }
 function clientFixture(response, networkError = false) {
+  let calls = 0;
   const modules = {
     '@/backend/errors/BackendError': { BackendError: class extends Error {} },
     '@/backend/supabaseClient': { requireSupabaseClient: () => ({ rpc: async (name, args) => {
-      assert.equal(name, 'update_my_active_sos_location'); assert.equal(args.target_sos_id, 'remote');
+      assert.equal(name, 'update_my_active_sos_location_result'); assert.equal(args.target_sos_id, 'remote');
+      calls++;
       if (networkError) throw new TypeError('synthetic network');
-      return { data: response, error: null };
+      return { data: typeof response === 'function' ? await response() : response, error: null };
     } }) },
     '@/backend/auth/AuthService': { AuthService: { getSession: async () => ({ user: { id: 'A' } }) } },
     '@/storage/SOSLiveLocationStorage': { SOSLiveLocationStorage: { get: async () => ({ sosId: 'remote' }), clear: async () => {} } },
@@ -46,11 +48,14 @@ function clientFixture(response, networkError = false) {
   };
   modules['@/backend/repositories/SOSLiveLocationRepository'] = load('backend/repositories/SOSLiveLocationRepository.ts');
   modules['@/services/SOSLiveLocationService'] = load('services/SOSLiveLocationService.ts');
+  const stopTracking = modules['@/services/SOSLiveLocationService'].SOSLiveLocationService.stop;
   let stops = 0;
   modules['@/services/SOSLiveLocationService'].SOSLiveLocationService.stop = async () => { stops++; };
   load('services/SOSLiveLocationBackgroundTask.ts');
   return { run: () => modules.task({ data: { locations: [{ timestamp: NOW, coords: { latitude: 1, longitude: 2, accuracy: 10, speed: 2 } }] } }),
     repository: modules['@/backend/repositories/SOSLiveLocationRepository'].SOSLiveLocationRepository,
+    stopTracking, get calls() { return calls; },
+    publish: modules['@/services/SOSLiveLocationService'].SOSLiveLocationService.publishBackgroundLocation,
     get stops() { return stops; } };
 }
 const cases = [
@@ -68,9 +73,8 @@ const cases = [
     assert.doesNotMatch(sql, /alter table|create policy|grant.*\bselect\b|grant.*\bupdate\b|grant.*to anon/i);
     assert.ok(sql.trim().startsWith('begin;')); assert.ok(sql.trim().endsWith('commit;'));
   }],
-  ['STATIC: installed client, old migration and tracker remain byte-for-byte unchanged', async () => {
-    for (const file of ['backend/repositories/SOSLiveLocationRepository.ts', 'services/SOSLiveLocationService.ts',
-      'services/SOSLiveLocationBackgroundTask.ts', 'supabase/migrations/20260902120000_sos_delivery_all_nearby_and_live_location.sql',
+  ['STATIC: background dispatch and old migrations remain byte-for-byte unchanged', async () => {
+    for (const file of ['services/SOSLiveLocationBackgroundTask.ts', 'supabase/migrations/20260902120000_sos_delivery_all_nearby_and_live_location.sql',
       'supabase/migrations/20260918123000_fix_safety_sos_location_timestamp.sql']) {
       const base = execFileSync('git', ['show', `fa4644a861732b30d2c7096b2582095374cc8f98:${file}`], { encoding: 'utf8' });
       assert.equal(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), base.replace(/\r\n/g, '\n'));
@@ -101,11 +105,41 @@ const cases = [
     m.row.status = 'closed'; assert.equal(await m.update('A', NOW + 120_000, 9), 'inactive');
     assert.equal(m.row.latitude, 1);
   }],
-  ['REAL CLIENT / mocked backend: stale-compatible true never stops background tracking', async () => {
-    const f = clientFixture(true); await f.run(); assert.equal(f.stops, 0);
+  ['REAL CLIENT / mocked backend: stale never stops or throttles the next fresh fix', async () => {
+    let count = 0;
+    const f = clientFixture(() => ++count === 1 ? 'stale' : 'updated');
+    await f.run(); await f.run(); assert.equal(f.stops, 0); assert.equal(f.calls, 2);
+    await f.run(); assert.equal(f.calls, 2); // confirmed update DOES throttle
   }],
-  ['REAL CLIENT / mocked backend: inactive false stops; network error does not fake inactivity', async () => {
-    const inactive = clientFixture(false); await inactive.run(); assert.equal(inactive.stops, 1);
+  ['REAL CLIENT / mocked backend: old response after stop cannot throttle recovery', async () => {
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let first = true;
+    const f = clientFixture(() => { if (first) { first = false; return held; } return 'updated'; });
+    const pending = f.run();
+    while (!f.calls) await Promise.resolve();
+    await f.stopTracking('A'); release('updated'); await pending;
+    await f.run(); assert.equal(f.calls, 2);
+  }],
+  ['REAL CLIENT / mocked backend: malformed response is an error, not confirmation or inactivity', async () => {
+    for (const value of [true, false, null, 'unexpected']) {
+      const f = clientFixture(value); await f.run(); assert.equal(f.stops, 0);
+      await assert.rejects(f.repository.update('remote', { latitude: 1, longitude: 2, accuracy: 10, observedAt: new Date(NOW).toISOString() }));
+    }
+  }],
+  ['REAL CLIENT / mocked backend: invalid coordinates, timestamp and accuracy never reach RPC', async () => {
+    const f = clientFixture('updated');
+    const point = { timestamp: NOW, coords: { latitude: 1, longitude: 2, accuracy: 10, speed: 2 } };
+    for (const invalid of [
+      { ...point, timestamp: NaN },
+      { ...point, coords: { ...point.coords, accuracy: NaN } },
+      { ...point, coords: { ...point.coords, latitude: 91 } },
+      { ...point, coords: { ...point.coords, longitude: Infinity } },
+    ]) assert.equal(await f.publish('A', 'remote', invalid), 'ignored');
+    assert.equal(f.calls, 0);
+  }],
+  ['REAL CLIENT / mocked backend: inactive stops; network error does not fake inactivity', async () => {
+    const inactive = clientFixture('inactive'); await inactive.run(); assert.equal(inactive.stops, 1);
     const offline = clientFixture(null, true); await offline.run(); assert.equal(offline.stops, 0);
     await assert.rejects(offline.repository.update('remote', { latitude: 1, longitude: 2, accuracy: 10, observedAt: new Date(NOW).toISOString() }));
   }],

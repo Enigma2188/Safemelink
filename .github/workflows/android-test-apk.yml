@@ -194,6 +194,7 @@ jobs:
 
       - name: Generate the ephemeral Android project
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
@@ -222,6 +223,7 @@ jobs:
       - name: Build standalone test APK
         working-directory: android
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |

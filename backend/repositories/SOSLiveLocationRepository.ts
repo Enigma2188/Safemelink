@@ -12,7 +12,7 @@ export const SOSLiveLocationRepository = {
     },
   ) {
     const { data, error } = await requireSupabaseClient().rpc(
-      'update_my_active_sos_location',
+      'update_my_active_sos_location_result',
       {
         target_sos_id: sosId,
         position_latitude: position.latitude,
@@ -24,6 +24,9 @@ export const SOSLiveLocationRepository = {
     if (error) {
       throw new BackendError('Posizione SOS non aggiornata.', error);
     }
-    return data === true;
+    if (data !== 'updated' && data !== 'stale' && data !== 'inactive') {
+      throw new BackendError('Esito aggiornamento posizione SOS non verificato.');
+    }
+    return data;
   },
 };
