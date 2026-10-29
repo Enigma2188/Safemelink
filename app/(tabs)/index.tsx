@@ -101,7 +101,7 @@ const getSOSDeliveryNotice = (
   }
 
   const automaticFailureNotice = automaticSmsResult.failedCount > 0
-    ? `Invio automatico non avviato per ${automaticSmsResult.failedCount} contatti.`
+    ? `Invio automatico fallito per ${automaticSmsResult.failedCount} contatti.`
     : null;
   const interactiveFallbackNotice = localResult.status === 'sms_opened'
       ? 'Composer SMS aperto: controlla il destinatario e premi Invia.'
@@ -400,6 +400,13 @@ export default function HomeScreen() {
   const goHomeStorageQueueRef = useRef<Promise<void>>(Promise.resolve());
   const homeCaptureInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(userId);
+  const smsFallbackPendingRef = useRef(false);
+  const smsFallbackContextRef = useRef<{ userId: string | null; eventId: string | null } | null>(null);
+  smsFallbackContextRef.current = { userId, eventId: activeEvent?.id ?? null };
+  useEffect(() => {
+    smsFallbackContextRef.current = { userId, eventId: activeEvent?.id ?? null };
+    return () => { smsFallbackContextRef.current = null; };
+  }, [userId, activeEvent?.id]);
   const liveLocationOwnerUserIdRef = useRef<string | null>(userId);
   const statusRef = useRef<SOSStatus>('idle');
   const voiceCountdownPendingRef = useRef(false);
@@ -2418,15 +2425,44 @@ export default function HomeScreen() {
   };
 
   const shareActiveSOS = async () => {
-    if (!activeEvent) {
+    // Preserve the existing non-Android composer path.
+    if (Platform.OS !== 'android') {
+      if (!activeEvent) return;
+      try { await SOSService.sendSmsFallback(activeEvent, contacts); }
+      catch { Alert.alert('Condivisione SOS', 'Non riesco ad aprire il messaggio SMS.'); }
       return;
     }
-
+    if (!activeEvent || !userId || smsFallbackPendingRef.current) return;
+    const owner = userId;
+    const eventId = activeEvent.id;
+    const current = () => smsFallbackContextRef.current?.userId === owner &&
+      smsFallbackContextRef.current.eventId === eventId && statusRef.current === 'active';
+    const release = () => { smsFallbackPendingRef.current = false; };
+    const openComposer = async () => {
+      if (!current() || AppState.currentState !== 'active') { release(); return; }
+      try {
+        const result = await SOSService.sendSmsFallback(activeEvent, contacts);
+        if (!current()) return;
+        if (result.status === 'sms_opened') {
+          setPushDeliveryNotice(previous => [previous,
+            'Compositore SMS aperto: nessun invio manuale confermato. Controlla il destinatario; l’invio richiede la tua conferma nell’app SMS.',
+          ].filter(Boolean).join(' '));
+        } else {
+          Alert.alert('Condivisione SOS', 'Compositore SMS non aperto. Nessun invio manuale confermato.');
+        }
+      } catch {
+        if (current()) Alert.alert('Condivisione SOS', 'Non riesco ad aprire il messaggio SMS. Nessun invio manuale confermato.');
+      } finally { release(); }
+    };
+    smsFallbackPendingRef.current = true;
+    let selected = false;
     try {
-      await SOSService.sendSmsFallback(activeEvent, contacts);
-    } catch {
-      Alert.alert('Condivisione SOS', 'Non riesco ad aprire il messaggio SMS.');
-    }
+      Alert.alert('Possibili SMS duplicati',
+        'Uno o più SMS automatici potrebbero essere già partiti, anche se manca la conferma. Inviare manualmente può duplicarli. Verifica gli eventuali invii prima di continuare. Aprire il compositore non invia il messaggio.', [
+          { text: 'ANNULLA', style: 'cancel', onPress: () => { selected = true; release(); } },
+          { text: 'APRI COMPOSITORE', onPress: () => { if (selected) return; selected = true; void openComposer(); } },
+        ], { cancelable: true, onDismiss: () => { if (!selected) { selected = true; release(); } } });
+    } catch { release(); }
   };
 
   const toggleSOSNetwork = async () => {

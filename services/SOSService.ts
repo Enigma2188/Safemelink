@@ -18,6 +18,7 @@ import {
 } from '@/services/SOSAutomaticSmsService';
 import { SOSStorage } from '@/storage/SOSStorage';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import { requiresSmsFallbackConfirmation } from '@/services/SOSAutomaticSmsFeedback';
 import { SafetySOSOperationStorage } from '@/storage/SafetySOSOperationStorage';
 
 export type SOSTerminalStatus = Extract<SosStatus, 'closed' | 'cancelled'>;
@@ -255,7 +256,9 @@ export const SOSService = {
       status: 'not_needed',
       channel: null,
     };
-    if (allowInteractiveFallback && automaticSmsResult.status !== 'sent') {
+    // Do not await a dialog inside SOS completion. The explicit Home action
+    // confirms duplicate risk before opening a composer, including after reload.
+    if (allowInteractiveFallback && automaticSmsResult.status !== 'sent' && !requiresSmsFallbackConfirmation(automaticSmsResult)) {
       localDeliveryResult = await sendSosAlert(completedEvent, contacts).catch(() => {
         console.warn('[SafeMeLink SOS] Fallback locale non completato.', {
           category: 'local_fallback_unavailable',
