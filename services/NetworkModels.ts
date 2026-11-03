@@ -72,7 +72,7 @@ export const NETWORK_CATEGORIES: readonly {
 }[] = [
   { value: 'SUSPICIOUS_ACTIVITY', label: 'Attività sospetta' },
   { value: 'DISTURBANCE_OR_DANGER', label: 'Disturbo o situazione di pericolo' },
-  { value: 'UNSAFE_AREA', label: 'Zona poco sicura' },
+  { value: 'UNSAFE_AREA', label: 'Contesto urbano segnalato' },
   { value: 'URBAN_HAZARD', label: 'Pericolo urbano' },
   { value: 'OTHER_SAFETY', label: 'Altro problema di sicurezza' },
 ];

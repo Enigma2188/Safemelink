@@ -154,4 +154,6 @@ export const NetworkService = {
   resolve(reportId: string) {
     return NetworkRepository.resolve(reportId);
   },
+
+  reportContent: NetworkRepository.reportContent,
 };

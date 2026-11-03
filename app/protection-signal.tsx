@@ -8,6 +8,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import { ProtectionSignalService, type ProtectionSignalDraft } from '@/services/ProtectionSignalService';
 import { ProtectionSignalTrustedContactService } from '@/services/ProtectionSignalTrustedContactService';
 import { SOSLaunchRuntime } from '@/services/SOSLaunchRuntime';
+import { isPilotProtectionCategoryEnabled } from '@/services/NetworkPilotConfig';
 
 const steps = [
   { title: 'A chi sta succedendo?', values: [['SELF', 'A me'], ['WITNESSED', "L’ho visto"], ['TOLD', 'Me ne hanno parlato'], ['PREFER_NOT_TO_SAY', 'Preferisco non dirlo']] },
@@ -28,9 +29,9 @@ export default function ProtectionSignalScreen() {
   const [sendingContact, setSendingContact] = useState(false);
   const [areaAlerts, setAreaAlerts] = useState<{ context_label: string; period_label: string }[]>([]);
   const [saving, setSaving] = useState(false);
-  const current = steps[step];
+  const current = { ...steps[step], values: steps[step].values.filter(([value]) => isPilotProtectionCategoryEnabled(value)) };
   const online = draft.placeType === 'ONLINE';
-  const complete = useMemo(() => Boolean(draft.subjectRelation && draft.category && draft.frequency && draft.placeType), [draft]);
+  const complete = useMemo(() => Boolean(draft.subjectRelation && draft.category && isPilotProtectionCategoryEnabled(draft.category) && draft.frequency && draft.placeType), [draft]);
 
   useEffect(() => {
     void ContactsService.list().then((next) => setContacts(next.filter((contact) => Boolean(contact.remoteId)))).catch(() => undefined);
@@ -46,6 +47,7 @@ export default function ProtectionSignalScreen() {
 
   const select = (value: string) => {
     const key = ['subjectRelation', 'category', 'frequency', 'placeType'][step] as keyof ProtectionSignalDraft;
+    if (key === 'category' && !isPilotProtectionCategoryEnabled(value)) return;
     setDraft((previous) => ({ ...previous, [key]: value } as Partial<ProtectionSignalDraft>));
     setStep((previous) => previous + 1);
   };

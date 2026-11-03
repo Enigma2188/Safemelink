@@ -14,6 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/backend/auth/AuthProvider';
+import { NetworkExplorer } from '@/components/NetworkExplorer';
+import { NetworkReportPanel } from '@/components/NetworkReportPanel';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import type { NetworkConfirmationKind, NetworkReportCategory } from '@/backend/database.types';
 import { BackendError } from '@/backend/errors/BackendError';
@@ -29,9 +31,11 @@ import {
   NETWORK_FEED_RADIUS_METERS,
   NETWORK_FEED_RADIUS_OPTIONS,
   type NetworkFeedReport,
+  type NetworkFeedCursor,
   type NetworkOnboardingStatus,
 } from '@/services/NetworkModels';
 import { NetworkService } from '@/services/NetworkService';
+import { NETWORK_PILOT } from '@/services/NetworkPilotConfig';
 
 const friendlyError = (fallback: string) => (error: unknown) => {
   if (error instanceof LocationPermissionError) {
@@ -73,6 +77,9 @@ export function NetworkScreen() {
   const actionRef = useRef(false);
   const [onboarding, setOnboarding] = useState<NetworkOnboardingStatus | null>(null);
   const [reports, setReports] = useState<NetworkFeedReport[]>([]);
+  const [dataOwner, setDataOwner] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<NetworkFeedCursor | null>(null);
+  const [selectedReport, setSelectedReport] = useState<NetworkFeedReport | null>(null);
   const [feedRadius, setFeedRadius] = useState(NETWORK_FEED_RADIUS_METERS);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -109,6 +116,7 @@ export function NetworkScreen() {
       const status = await NetworkService.getMyNetworkOnboardingStatus();
       if (!isCurrent(expectedUser, generation, request)) return;
       setOnboarding(status);
+      setDataOwner(expectedUser);
       setLoadError(null);
       setFirstName(status.firstName ?? '');
       setLastName(status.lastName ?? '');
@@ -122,9 +130,10 @@ export function NetworkScreen() {
       if (!isCurrent(expectedUser, generation, request)) return;
       setFeedRadius(savedRadius);
       const feed = await NetworkService.loadFeed(savedRadius);
-      if (isCurrent(expectedUser, generation, request)) setReports(feed.reports);
+      if (isCurrent(expectedUser, generation, request)) { setReports(feed.reports); setNextCursor(feed.nextCursor); }
     } catch (error) {
       if (isCurrent(expectedUser, generation, request)) {
+        setReports([]); setNextCursor(null);
         setLoadError(friendlyError('Impossibile caricare NETWORK. Riprova tra poco.')(error));
       }
     } finally {
@@ -139,6 +148,7 @@ export function NetworkScreen() {
     actionRef.current = false;
     setOnboarding(null);
     setReports([]);
+    setDataOwner(null); setNextCursor(null); setSelectedReport(null); setComposerOpen(false); setDescription('');
     setFeedRadius(NETWORK_FEED_RADIUS_METERS);
     setMessage(null);
     setLoadError(null);
@@ -156,6 +166,22 @@ export function NetworkScreen() {
       actionRef.current = false;
     };
   }, [load]);
+
+  const loadMore = async () => {
+    if (!userId || !nextCursor || loading || actionRef.current || reports.length >= NETWORK_PILOT.maxLoadedReports) return;
+    const expectedUser = userId, generation = generationRef.current, request = ++requestRef.current;
+    actionRef.current = true; setBusy(true);
+    try {
+      const page = await NetworkService.loadFeed(feedRadius, nextCursor);
+      if (!isCurrent(expectedUser, generation, request)) return;
+      setReports(old => [...new Map([...old, ...page.reports].map(report => [report.id, report])).values()].slice(0, NETWORK_PILOT.maxLoadedReports));
+      setNextCursor(page.nextCursor); setLoadError(null);
+    } catch (error) {
+      if (isCurrent(expectedUser, generation, request)) { setReports([]); setNextCursor(null); setLoadError(friendlyError('Caricamento non riuscito. Aggiorna il feed.')(error)); }
+    } finally {
+      if (isCurrent(expectedUser, generation)) { actionRef.current = false; setBusy(false); }
+    }
+  };
 
   const runAction = useCallback(async (
     operation: () => Promise<unknown>,
@@ -251,14 +277,14 @@ export function NetworkScreen() {
         <Pressable accessibilityLabel="Torna indietro" hitSlop={12} onPress={() => (
           router.canGoBack() ? router.back() : router.replace('/(tabs)')
         )} style={styles.iconButton}>
-          <Ionicons color="#3656A3" name="arrow-back" size={24} />
+          <Ionicons color="#A9E4FF" name="arrow-back" size={24} />
         </Pressable>
         <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>NETWORK</Text>
-          <Text style={styles.headerSubtitle}>Segnalazioni di sicurezza vicino a te</Text>
+          <Text style={styles.headerTitle}>SafeMeLink <Text style={{ color: '#FF7489' }}>NETWORK</Text></Text>
+          <Text style={styles.headerSubtitle}>Comunità e territorio · Pilota Cavriago</Text>
         </View>
         <Pressable accessibilityLabel="Aggiorna NETWORK" disabled={busy || loading} hitSlop={12} onPress={() => void load()} style={styles.iconButton}>
-          <Ionicons color="#3656A3" name="refresh" size={22} />
+          <Ionicons color="#A9E4FF" name="refresh" size={22} />
         </Pressable>
       </View>
 
@@ -271,8 +297,9 @@ export function NetworkScreen() {
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} tintColor="#45B7FF" />}>
           <View style={styles.hero}>
             <Ionicons color="#45B7FF" name="shield-checkmark-outline" size={42} />
-            <Text style={styles.title}>Bacheca di sicurezza territoriale</Text>
-            <Text style={styles.body}>Condividi e consulta segnalazioni utili. La posizione mostrata è sempre approssimativa.</Text>
+            <Text style={styles.title}>Il territorio, raccontato da chi lo vive.</Text>
+            <Text style={styles.body}>Osserva. Condividi fatti utili. Segui gli aggiornamenti.</Text>
+            <Text style={styles.hint}>La posizione mostrata è sempre approssimativa. SafeMeLink è un prodotto indipendente, non l’app ufficiale del Comune. NETWORK e Rete di quartiere restano distinti.</Text>
           </View>
 
           {message ? (
@@ -293,7 +320,7 @@ export function NetworkScreen() {
             <View style={styles.card}><Text style={styles.cardTitle}>Accedi per usare NETWORK</Text><Text style={styles.body}>Le segnalazioni sono riservate agli account verificati.</Text></View>
           ) : null}
 
-          {userId && onboarding && !onboarding.eligible ? (
+          {userId && dataOwner === userId && onboarding && !onboarding.eligible ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Completa il tuo account</Text>
               <Requirement ok={onboarding.emailVerified} text="Email verificata" />
@@ -303,24 +330,24 @@ export function NetworkScreen() {
               <Requirement ok={onboarding.phonePresent} text="Numero di telefono inserito" />
               <Requirement ok={onboarding.termsAccepted} text="Condizioni NETWORK accettate" />
               <Text style={styles.hint}>Nome, cognome e telefono restano dati interni. Nel NETWORK viene mostrato soltanto il nickname.</Text>
-              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setFirstName} placeholder="Nome" placeholderTextColor="#71809B" style={styles.shortInput} value={firstName} />
-              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setLastName} placeholder="Cognome" placeholderTextColor="#71809B" style={styles.shortInput} value={lastName} />
-              <TextInput autoCapitalize="none" editable={!busy} maxLength={40} onChangeText={setNickname} placeholder="Nickname pubblico" placeholderTextColor="#71809B" style={styles.shortInput} value={nickname} />
-              <TextInput editable={!busy} keyboardType="phone-pad" maxLength={32} onChangeText={setPhone} placeholder="Numero di telefono" placeholderTextColor="#71809B" style={styles.shortInput} value={phone} />
+              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setFirstName} placeholder="Nome" placeholderTextColor="#BDD2EE" style={styles.shortInput} value={firstName} />
+              <TextInput autoCapitalize="words" editable={!busy} maxLength={60} onChangeText={setLastName} placeholder="Cognome" placeholderTextColor="#BDD2EE" style={styles.shortInput} value={lastName} />
+              <TextInput autoCapitalize="none" editable={!busy} maxLength={40} onChangeText={setNickname} placeholder="Nickname pubblico" placeholderTextColor="#BDD2EE" style={styles.shortInput} value={nickname} />
+              <TextInput editable={!busy} keyboardType="phone-pad" maxLength={32} onChangeText={setPhone} placeholder="Numero di telefono" placeholderTextColor="#BDD2EE" style={styles.shortInput} value={phone} />
               <PrimaryButton disabled={busy} label="SALVA DATI NETWORK" onPress={saveIdentity} />
               {!onboarding.termsAccepted ? <PrimaryButton disabled={busy} label="ACCETTA LE CONDIZIONI NETWORK" onPress={acceptTerms} /> : null}
               {!onboarding.phoneVerified ? <Text style={styles.hint}>La verifica SMS del telefono è facoltativa in questa versione.</Text> : null}
             </View>
           ) : null}
 
-          {onboarding?.eligible && onboarding.restrictionStatus === 'FULL_NETWORK_BLOCKED' ? (
+          {dataOwner === userId && onboarding?.eligible && onboarding.restrictionStatus === 'FULL_NETWORK_BLOCKED' ? (
             <View style={styles.card}><Text style={styles.cardTitle}>NETWORK non disponibile</Text><Text style={styles.body}>L’accesso alla rete è temporaneamente limitato per questo account.</Text></View>
           ) : null}
 
-          {onboarding?.eligible && onboarding.restrictionStatus !== 'FULL_NETWORK_BLOCKED' ? (
+          {dataOwner === userId && onboarding?.eligible && onboarding.restrictionStatus !== 'FULL_NETWORK_BLOCKED' ? (
             <>
               <View style={styles.actionRow}>
-                <Text style={styles.sectionTitle}>Segnalazioni vicine</Text>
+                <Text style={styles.sectionTitle}>Partecipa al NETWORK</Text>
                 <PrimaryButton
                   disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'PUBLISH_BLOCKED'}
                   label={composerOpen ? 'CHIUDI' : 'NUOVA SEGNALAZIONE'}
@@ -358,6 +385,7 @@ export function NetworkScreen() {
               {composerOpen ? (
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Nuova segnalazione</Text>
+                  <Text style={styles.hint}>Descrivi fatti osservabili. Non inserire nomi, targhe, indirizzi privati o accuse identificabili. Non usare NETWORK per un’emergenza in corso.</Text>
                   <View style={styles.chips}>{NETWORK_CATEGORIES.map((item) => (
                     <Pressable key={item.value} onPress={() => setCategory(item.value)} style={[styles.chip, category === item.value && styles.chipSelected]}>
                       <Text style={[styles.chipText, category === item.value && styles.chipTextSelected]}>{item.label}</Text>
@@ -372,7 +400,7 @@ export function NetworkScreen() {
                       setPublishMessage(null);
                     }}
                     placeholder="Descrivi brevemente la situazione…"
-                    placeholderTextColor="#71809B"
+                    placeholderTextColor="#BDD2EE"
                     style={styles.input}
                     value={description}
                   />
@@ -381,26 +409,20 @@ export function NetworkScreen() {
                 </View>
               ) : null}
 
-              {!loading && reports.length === 0 ? (
-                <View style={styles.emptyCard}>
-                  <Ionicons color="#3656A3" name="shield-checkmark-outline" size={30} />
-                  <Text style={styles.cardTitle}>Nessuna segnalazione attiva in questa zona</Text>
-                  <Text style={styles.body}>NETWORK mostra le segnalazioni condivise dalla community vicino a te.</Text>
-                </View>
-              ) : null}
-
-              {reports.map((report) => (
+              <NetworkExplorer key={userId} reports={reports} loading={loading} radiusMeters={feedRadius} radiusLabel={formatRadius(feedRadius)} renderReport={report => (
                 <View key={report.id} style={styles.card}>
                   <View style={styles.reportHeader}>
                     <View style={styles.categoryCopy}>
-                      <Ionicons color="#3656A3" name="shield-outline" size={18} />
+                      <Ionicons color="#8ADFFF" name="shield-outline" size={18} />
                       <Text style={styles.category}>{getNetworkCategoryLabel(report.category)}</Text>
                     </View>
                     <Text style={[styles.status, report.status !== 'ACTIVE' && styles.statusResolved]}>{report.status === 'ACTIVE' ? 'ATTIVA' : 'CONCLUSA'}</Text>
                   </View>
                   <Text style={styles.description}>{report.description}</Text>
-                  <Text style={styles.meta}>Zona approssimativa</Text>
+                  <Text style={styles.meta}>Zona approssimativa · {report.publicArea}</Text>
+                  <Text style={styles.meta}>{new Date(report.createdAt).toLocaleString('it-IT')}</Text>
                   <Text style={styles.meta}>Segnalata da {report.authorNickname}</Text>
+                  <SecondaryButton disabled={busy || loading} label="DETTAGLI E AGGIORNAMENTI" onPress={() => setSelectedReport(report)} selected={false} />
                   {report.status === 'RESOLVED' ? <Text style={styles.body}>Segnalazione conclusa</Text> : null}
                   {report.status === 'ACTIVE' ? (
                     <View style={styles.reportActions}>
@@ -415,11 +437,16 @@ export function NetworkScreen() {
                     </View>
                   ) : null}
                 </View>
-              ))}
+              )} />
+              {nextCursor && reports.length < NETWORK_PILOT.maxLoadedReports ? <PrimaryButton disabled={busy || loading} label={busy ? 'CARICAMENTO…' : 'CARICA ALTRE SEGNALAZIONI'} onPress={() => void loadMore()} /> : null}
+              {reports.length >= NETWORK_PILOT.maxLoadedReports ? <Text style={styles.hint}>Limite locale di {NETWORK_PILOT.maxLoadedReports} segnalazioni caricate. I conteggi non rappresentano il totale del Comune.</Text> : null}
+              <View style={styles.card}><Text style={styles.cardTitle}>Il pilot si costruisce insieme</Text><Text style={styles.body}>Raccogliamo problemi d’uso e suggerimenti, non valutazioni sulle persone. Un canale di feedback dedicato va ancora concordato: l’app non invia analytics del pilot.</Text></View>
             </>
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+      {userId && dataOwner === userId && selectedReport && onboarding?.eligible && onboarding.restrictionStatus !== 'FULL_NETWORK_BLOCKED' ? <NetworkReportPanel key={`${userId}:${selectedReport.id}`} report={selectedReport} ownerId={userId}
+        canPublish={!['READ_ONLY', 'PUBLISH_BLOCKED'].includes(onboarding.restrictionStatus)} canInteract={!['READ_ONLY', 'INTERACTIONS_BLOCKED'].includes(onboarding.restrictionStatus)} onClose={() => setSelectedReport(null)} /> : null}
     </SafeAreaView>
   );
 }
@@ -429,26 +456,26 @@ function Requirement({ ok, text }: { ok: boolean; text: string }) {
 }
 
 function PrimaryButton({ compact = false, disabled, label, onPress }: { compact?: boolean; disabled: boolean; label: string; onPress: () => void }) {
-  return <Pressable disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact && styles.compactButton, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact && styles.compactButton, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>;
 }
 
 function SecondaryButton({ disabled, label, onPress, selected }: { disabled: boolean; label: string; onPress: () => void; selected: boolean }) {
-  return <Pressable disabled={disabled} onPress={onPress} style={[styles.secondaryButton, selected && styles.secondarySelected, disabled && styles.disabled]}><Text style={styles.secondaryText}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={[styles.secondaryButton, selected && styles.secondarySelected, disabled && styles.disabled]}><Text style={styles.secondaryText}>{label}</Text></Pressable>;
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F7F9FC' }, flex: { flex: 1 },
-  header: { minHeight: 66, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, backgroundColor: '#FFFFFF', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E3E8F0' },
-  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, headerCopy: { flex: 1, paddingHorizontal: 8 }, headerTitle: { color: '#18243D', fontSize: 19, fontWeight: '800', letterSpacing: 1.2 }, headerSubtitle: { color: '#61708A', fontSize: 12, marginTop: 2 },
-  content: { padding: 16, paddingBottom: 96, gap: 14 }, hero: { alignItems: 'center', gap: 8, paddingVertical: 12 }, title: { color: '#18243D', fontSize: 23, fontWeight: '800', textAlign: 'center' },
-  body: { color: '#5E6D84', fontSize: 15, lineHeight: 21 }, card: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E1E6EF', borderRadius: 16, padding: 16, gap: 11 }, emptyCard: { alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCE5F2', borderRadius: 16, padding: 18, gap: 9 },
-  cardTitle: { color: '#18243D', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 13, backgroundColor: '#EEF3FF' }, messageText: { flex: 1, color: '#273A5A', lineHeight: 20 },
-  requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#34445F', fontSize: 15 }, hint: { color: '#6B7890', fontSize: 13, lineHeight: 18 },
-  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, sectionTitle: { color: '#18243D', fontSize: 19, fontWeight: '700', flexShrink: 1 },
-  primaryButton: { minHeight: 48, borderRadius: 13, backgroundColor: '#3656A3', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 }, compactButton: { minHeight: 44, flexShrink: 1 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', textAlign: 'center' }, disabled: { opacity: 0.45 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 16, paddingHorizontal: 11, paddingVertical: 8 }, chipSelected: { backgroundColor: '#E8EEFF', borderColor: '#6B83C5' }, chipText: { color: '#52627A', fontSize: 13 }, chipTextSelected: { color: '#263E78', fontWeight: '700' },
-  input: { minHeight: 112, borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 13, padding: 12, color: '#18243D', backgroundColor: '#FFFFFF', textAlignVertical: 'top', fontSize: 15 }, counter: { color: '#71809B', textAlign: 'right', fontSize: 12 },
-  shortInput: { minHeight: 48, borderWidth: 1, borderColor: '#CBD5E4', borderRadius: 13, paddingHorizontal: 12, color: '#18243D', backgroundColor: '#FFFFFF', fontSize: 15 },
-  reportHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, categoryCopy: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 }, category: { flexShrink: 1, color: '#3656A3', fontWeight: '700', fontSize: 15 }, status: { color: '#1B8A5A', fontSize: 11, fontWeight: '800' }, statusResolved: { color: '#71809B' }, description: { color: '#263650', fontSize: 16, lineHeight: 23 }, meta: { color: '#71809B', fontSize: 13 }, reportActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
-  secondaryButton: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#AEBBD0', borderRadius: 12, paddingHorizontal: 12 }, secondarySelected: { backgroundColor: '#E8EEFF', borderColor: '#6B83C5' }, secondaryText: { color: '#344B75', fontSize: 12, fontWeight: '700' },
+  screen: { flex: 1, backgroundColor: '#06182F' }, flex: { flex: 1 },
+  header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, backgroundColor: '#09264E', borderBottomWidth: 1, borderBottomColor: '#346A99' },
+  iconButton: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' }, headerCopy: { flex: 1, paddingHorizontal: 8 }, headerTitle: { color: '#F5FAFF', fontSize: 19, fontWeight: '800', letterSpacing: 0.3 }, headerSubtitle: { color: '#BDD2EE', fontSize: 12, marginTop: 4 },
+  content: { padding: 16, paddingBottom: 96, gap: 16 }, hero: { gap: 12, padding: 20, backgroundColor: '#103563', borderRadius: 24, borderWidth: 1, borderColor: '#378BC4' }, title: { color: '#F5FAFF', fontSize: 27, lineHeight: 34, fontWeight: '800' },
+  body: { color: '#DBE9FA', fontSize: 15, lineHeight: 22 }, card: { backgroundColor: '#0C274A', borderWidth: 1, borderColor: '#346A99', borderRadius: 20, padding: 17, gap: 12 }, emptyCard: { padding: 18, gap: 9 },
+  cardTitle: { color: '#F5FAFF', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 14, backgroundColor: '#DDEFFF' }, messageText: { flex: 1, color: '#122E50', lineHeight: 21 },
+  requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#F5FAFF', fontSize: 15 }, hint: { color: '#BDD2EE', fontSize: 13, lineHeight: 19 },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, sectionTitle: { color: '#F5FAFF', fontSize: 20, fontWeight: '700', flexShrink: 1 },
+  primaryButton: { minHeight: 50, borderRadius: 15, backgroundColor: '#C82746', borderWidth: 1, borderColor: '#FF8CA0', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, paddingVertical: 12 }, compactButton: { minHeight: 46, flexShrink: 1 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', textAlign: 'center' }, disabled: { opacity: 0.45 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#5CABDB', borderRadius: 22, paddingHorizontal: 13, paddingVertical: 11 }, chipSelected: { backgroundColor: '#8ADFFF', borderColor: '#B7F0FF' }, chipText: { color: '#F5FAFF', fontSize: 13 }, chipTextSelected: { color: '#08213E', fontWeight: '700' },
+  input: { minHeight: 112, borderWidth: 1, borderColor: '#69D5FF', borderRadius: 15, padding: 12, color: '#F5FAFF', backgroundColor: '#102E56', textAlignVertical: 'top', fontSize: 16 }, counter: { color: '#BDD2EE', textAlign: 'right', fontSize: 12 },
+  shortInput: { minHeight: 50, borderWidth: 1, borderColor: '#69D5FF', borderRadius: 15, paddingHorizontal: 12, color: '#F5FAFF', backgroundColor: '#102E56', fontSize: 16 },
+  reportHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, categoryCopy: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 }, category: { flexShrink: 1, color: '#8ADFFF', fontWeight: '700', fontSize: 15 }, status: { color: '#6FF0AD', fontSize: 12, fontWeight: '800' }, statusResolved: { color: '#BDD2EE' }, description: { color: '#F5FAFF', fontSize: 17, lineHeight: 25 }, meta: { color: '#BDD2EE', fontSize: 13, lineHeight: 19 }, reportActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
+  secondaryButton: { minHeight: 46, justifyContent: 'center', borderWidth: 1, borderColor: '#5CABDB', borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11 }, secondarySelected: { backgroundColor: '#23517C', borderColor: '#8ADFFF' }, secondaryText: { color: '#E1F6FF', fontSize: 12, fontWeight: '700' },
 });
