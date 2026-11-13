@@ -3,10 +3,15 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const source = fs.readFileSync('services/SOSService.ts', 'utf8');
+const smsFeedback = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('services/SOSAutomaticSmsFeedback.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: smsFeedback });
 async function scenario(network, nearby, count, denied) {
   let sms = 0, push = 0, fallback = 0;
   const contacts = Array.from({length: count}, (_, i) => ({id: `fixture-${i}`}));
   const modules = {
+    '@/services/SOSAutomaticSmsFeedback': smsFeedback,
     '@/services/ContactsService': {ContactsService: {list: async () => contacts, listCached: async () => contacts}},
     '@/backend/functions/SOSPushService': {SOSRemoteCreationTimeoutError: class extends Error {}, SOSPushService: {send: async () => {
       push++; return {sosCreated: true, sosId: 'fixture-sos', recipientCount: nearby, tokenCount: nearby, notificationsSent: nearby, notificationsFailed: 0, errors: [], reason: nearby ? 'sent' : 'no_recipients'};

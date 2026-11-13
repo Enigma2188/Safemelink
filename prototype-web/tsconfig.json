@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "paths": { "@/*": ["./*"] },
+    "moduleSuffixes": [".web", ""]
+  },
+  "include": ["index.tsx", "../screens/NetworkPrototypeScreen.tsx", "../components/NetworkPrototypeMap.web.tsx", "../services/NetworkPrototypeDemo.ts"]
+}

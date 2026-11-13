@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name": "SafeMeLink NETWORK — demo locale",
+    "slug": "safemelink-network-local-preview",
+    "sdkVersion": "54.0.0",
+    "web": { "bundler": "metro" }
+  }
+}

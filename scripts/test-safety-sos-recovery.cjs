@@ -16,7 +16,10 @@ function fixture() {
   const remote = new Map();
   const sms = new Set();
   const identities = [];
+  const smsFeedback = {};
+  vm.runInNewContext(compile('services/SOSAutomaticSmsFeedback.ts'), { exports: smsFeedback });
   const modules = {
+    '@/services/SOSAutomaticSmsFeedback': smsFeedback,
     '@/services/ContactsService': { ContactsService: { list: async () => [], listCached: async () => [] } },
     '@/services/LocationService': { LocationService: { getCurrentLocation: async () => {
       gpsReads += 1; if (!location) throw new Error('GPS unavailable'); return location;

@@ -161,7 +161,7 @@ alter table public.network_history_entries_v2 enable row level security;
 revoke all on table public.network_map_territories_v2, public.network_map_zones_v2,
   public.network_map_members_v2, public.network_map_sources_v2,
   public.network_map_publications_v2, public.network_map_publication_sources_v2,
-  public.network_history_entries_v2 from public, anon, authenticated;
+  public.network_history_entries_v2 from public, anon, authenticated, service_role;
 grant select, insert, update, delete on table public.network_map_territories_v2,
   public.network_map_zones_v2, public.network_map_members_v2, public.network_map_sources_v2,
   public.network_map_publications_v2, public.network_map_publication_sources_v2,
@@ -347,7 +347,7 @@ revoke all on function public.network_map_require_access_v2(uuid),
   public.network_map_candidates_v2(uuid,date,text), public.network_map_publication_safe_v2(uuid),
   public.get_network_territory_context_v2(uuid),
   public.list_network_map_cells_v2(uuid,integer,double precision,double precision,text),
-  public.list_network_zone_history_v2(uuid,uuid,integer,date,uuid) from public, anon, authenticated;
+  public.list_network_zone_history_v2(uuid,uuid,integer,date,uuid) from public, anon, authenticated, service_role;
 grant execute on function public.network_map_candidates_v2(uuid,date,text) to service_role;
 grant execute on function public.get_network_territory_context_v2(uuid),
   public.list_network_map_cells_v2(uuid,integer,double precision,double precision,text),

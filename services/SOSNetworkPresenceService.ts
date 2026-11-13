@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
-import { AuthService } from '@/backend/auth/AuthService';
+import { getSOSSessionWithTimeout } from '@/services/SOSSessionTimeout';
 import {
   SOSNetworkPresenceRepository,
   type SOSNetworkPresenceSource,
@@ -60,15 +60,29 @@ export type SOSNetworkNotificationPermissionState = {
   canAskAgain: boolean;
 };
 
+let lifecycleGeneration = 0;
+let presenceStopped = false;
+let lifecycleQueue: Promise<unknown> = Promise.resolve();
+const enqueueLifecycle = (operation: () => Promise<void>) => {
+  const result = lifecycleQueue.then(operation, operation);
+  lifecycleQueue = result.catch(() => undefined);
+  return result;
+};
 let publicationInFlight: { userId: string; promise: Promise<boolean> } | null = null;
 
 const publishLocation = async (
   location: Location.LocationObject,
   source: SOSNetworkPresenceSource,
   expectedUserId: string,
+  generation = lifecycleGeneration,
 ) => {
+  const current = () => !presenceStopped && generation === lifecycleGeneration;
+  if (!current()) return false;
   const accuracy = location.coords.accuracy;
   if (
+    !Number.isFinite(location.coords.latitude) || Math.abs(location.coords.latitude) > 90 ||
+    !Number.isFinite(location.coords.longitude) || Math.abs(location.coords.longitude) > 180 ||
+    !Number.isFinite(location.timestamp) || Date.now() - location.timestamp > 600_000 || Date.now() - location.timestamp < -120_000 ||
     accuracy === null ||
     !Number.isFinite(accuracy) ||
     accuracy < 0 ||
@@ -81,8 +95,8 @@ const publishLocation = async (
     return false;
   }
 
-  const session = await AuthService.getSession();
-  if (session?.user.id !== expectedUserId) {
+  const session = await getSOSSessionWithTimeout();
+  if (!current() || session?.user.id !== expectedUserId) {
     console.info('[SafeMeLink Rete SOS] Pubblicazione obsoleta ignorata.', {
       category: 'account_changed',
       source,
@@ -97,6 +111,7 @@ const publishLocation = async (
     observedAt: new Date(location.timestamp).toISOString(),
     source,
   });
+  if (!current() || (await getSOSSessionWithTimeout())?.user.id !== expectedUserId || !current()) return false;
   await SOSNetworkLocationStorage.save(expectedUserId, {
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
@@ -158,45 +173,58 @@ export const SOSNetworkPresenceService = {
     return foreground.status === 'granted' && background.status === 'granted';
   },
 
-  async startBackgroundUpdates() {
-    if (!(await TaskManager.isAvailableAsync())) {
-      throw new SOSNetworkBackgroundUnavailableError();
-    }
+  startBackgroundUpdates() {
+    const generation = ++lifecycleGeneration;
+    presenceStopped = false;
+    return enqueueLifecycle(async () => {
+      const current = () => generation === lifecycleGeneration && !presenceStopped;
+      if (!current()) return;
+      if (!(await TaskManager.isAvailableAsync())) {
+        throw new SOSNetworkBackgroundUnavailableError();
+      }
 
-    if (!(await this.hasRequiredPermissions())) {
-      throw new SOSNetworkPermissionError('background');
-    }
+      if (!current()) return;
+      if (!(await this.hasRequiredPermissions())) {
+        throw new SOSNetworkPermissionError('background');
+      }
 
-    if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
-      return;
-    }
+      if (!current()) return;
+      if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
+        return;
+      }
 
-    await Location.startLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK, {
-      accuracy: Location.Accuracy.Balanced,
-      activityType: Location.ActivityType.Other,
-      distanceInterval: BACKGROUND_UPDATE_DISTANCE_METERS,
-      timeInterval: BACKGROUND_UPDATE_INTERVAL_MS,
-      deferredUpdatesDistance: BACKGROUND_UPDATE_DISTANCE_METERS,
-      deferredUpdatesInterval: BACKGROUND_UPDATE_INTERVAL_MS,
-      pausesUpdatesAutomatically: true,
-      showsBackgroundLocationIndicator: true,
-      ...(Platform.OS === 'android'
-        ? {
-            foregroundService: {
-              notificationTitle: 'SafeMeLink — Rete SOS',
-              notificationBody: 'Disponibilità occasionale alle emergenze nelle vicinanze attiva.',
-              notificationColor: '#45B7FF',
-              killServiceOnDestroy: false,
-            },
-          }
-        : {}),
+      if (!current()) return;
+      await Location.startLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK, {
+        accuracy: Location.Accuracy.Balanced,
+        activityType: Location.ActivityType.Other,
+        distanceInterval: BACKGROUND_UPDATE_DISTANCE_METERS,
+        timeInterval: BACKGROUND_UPDATE_INTERVAL_MS,
+        deferredUpdatesDistance: BACKGROUND_UPDATE_DISTANCE_METERS,
+        deferredUpdatesInterval: BACKGROUND_UPDATE_INTERVAL_MS,
+        pausesUpdatesAutomatically: true,
+        showsBackgroundLocationIndicator: true,
+        ...(Platform.OS === 'android'
+          ? {
+              foregroundService: {
+                notificationTitle: 'SafeMeLink — Rete SOS',
+                notificationBody: 'Disponibilità occasionale alle emergenze nelle vicinanze attiva.',
+                notificationColor: '#45B7FF',
+                killServiceOnDestroy: false,
+              },
+            }
+          : {}),
+      });
     });
   },
 
-  async stopBackgroundUpdates() {
-    if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
-      await Location.stopLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK);
-    }
+  stopBackgroundUpdates() {
+    lifecycleGeneration += 1;
+    presenceStopped = true;
+    return enqueueLifecycle(async () => {
+      if (await Location.hasStartedLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK)) {
+        await Location.stopLocationUpdatesAsync(SOS_NETWORK_LOCATION_TASK);
+      }
+    });
   },
 
   publishForegroundPresence(expectedUserId: string): Promise<boolean> {
@@ -209,6 +237,7 @@ export const SOSNetworkPresenceService = {
         .then(() => this.publishForegroundPresence(expectedUserId));
     }
 
+    const generation = lifecycleGeneration;
     const request = (async () => {
       console.info('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_ATTEMPT', {
         source: 'foreground',
@@ -242,7 +271,7 @@ export const SOSNetworkPresenceService = {
         }
       }
       try {
-        return await publishLocation(location, 'foreground', expectedUserId);
+        return await publishLocation(location, 'foreground', expectedUserId, generation);
       } catch (error: unknown) {
         console.warn('[SafeMeLink Rete SOS] SOS_NETWORK_PRESENCE_FAILURE', {
           category: error instanceof Error ? error.name : 'unknown',

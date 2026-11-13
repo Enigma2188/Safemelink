@@ -2,6 +2,12 @@ name: Build SafeMeLink Android test APK
 
 on:
   workflow_dispatch:
+    inputs:
+      network_v2:
+        description: 'NETWORK V2 Development test only (requires validated backend and Maps configuration)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +23,7 @@ jobs:
     timeout-minutes: 50
     env:
       CI: "true"
+      EXPO_PUBLIC_NETWORK_V2_ENABLED: ${{ inputs.network_v2 && 'true' || 'false' }}
       EXPO_PUBLIC_CHECKPOINT_DIAGNOSTICS: "true"
 
     steps:
@@ -192,8 +199,23 @@ jobs:
           node scripts/audit-static-checks.cjs
           node scripts/validate-android-ci.cjs
 
+      - name: Check requested NETWORK map configuration
+        env:
+          MAPS_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
+        run: |
+          node <<'NODE'
+          if (process.env.EXPO_PUBLIC_NETWORK_V2_ENABLED === 'true') {
+            const key = (process.env.MAPS_KEY || '').trim();
+            if (!key || /process\.env|\$\{|[\r\n]/.test(key)) {
+              console.error('::error::NETWORK V2 requires SAFEMELINK_ANDROID_MAPS_API_KEY.');
+              process.exitCode = 1;
+            }
+          }
+          NODE
+
       - name: Generate the ephemeral Android project
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
@@ -222,6 +244,7 @@ jobs:
       - name: Build standalone test APK
         working-directory: android
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |

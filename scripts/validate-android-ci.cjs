@@ -23,7 +23,12 @@ const candidateValidatorPath = path.join(
 assert.doesNotMatch(workflow, /\t/, 'Il workflow YAML contiene tab non valide.');
 assert.match(workflow, /^name:\s+.+$/m);
 assert.match(workflow, /^on:\s*\r?\n\s{2}workflow_dispatch:\s*$/m);
-assert.doesNotMatch(workflow, /source_ref|inputs\.|default:\s*main/);
+assert.doesNotMatch(workflow, /source_ref|default:\s*main/);
+// Only the release gate is configurable; source selection remains github.sha.
+for (const match of workflow.matchAll(/inputs\.([A-Za-z0-9_]+)/g)) {
+  assert.equal(match[1], 'network_v2', 'Unexpected workflow input reference');
+}
+assert.match(workflow, /network_v2:[\s\S]*?type: boolean[\s\S]*?default: false/);
 assert.match(workflow, /name:\s+Checkout selected SafeMeLink source/);
 assert.match(workflow, /^\s{10}ref:\s+\$\{\{ github\.sha \}\}\s*$/m);
 assert.match(workflow, /persist-credentials:\s+false/);

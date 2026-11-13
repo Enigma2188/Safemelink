@@ -204,6 +204,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
         } catch (startError: unknown) {
           backgroundError = startError;
         }
+        if (!isOperationCurrent()) return;
         const published = await SOSNetworkPresenceService.publishForegroundPresence(
           expectedUserId,
         );
@@ -326,6 +327,7 @@ export function SOSNetworkPresenceProvider({ children }: PropsWithChildren) {
               });
             }
           }
+          if (activeUserIdRef.current !== expectedUserId) return;
           const published = await SOSNetworkPresenceService.publishForegroundPresence(
             expectedUserId,
           );

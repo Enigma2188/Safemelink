@@ -28,7 +28,7 @@ TaskManager.defineTask<{ locations?: Location.LocationObject[] }>(
         location,
       );
       if (outcome === 'inactive') {
-        await SOSLiveLocationService.stop(session.user.id);
+        await SOSLiveLocationService.stop(session.user.id, active.sosId);
       }
     } catch (taskError: unknown) {
       console.warn('[SafeMeLink SOS] LIVE_LOCATION_TASK_FAILED', {

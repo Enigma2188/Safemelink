@@ -23,14 +23,14 @@ async function authorization(result, alreadyGranted = false) {
   assert.equal(state.permanentlyDenied, !alreadyGranted && result === 'never');
   assert.equal(requests, alreadyGranted ? 0 : 1);
 }
-async function offFirstTap() {
+async function offFirstTap(changeAccount = false) {
   const source = read('app/voice-protection.tsx');
   const body = source.slice(source.indexOf('  const deactivateProtection ='), source.indexOf('  const requestItalianModelDownload ='));
   let stopped = false, enabled = true;
   const pending = [];
   const slow = () => new Promise(resolve => pending.push(resolve));
   const context = {
-    userId: 'fixture', activationCancellationRef: {current:0}, activationInFlightRef:{current:false},
+    userId: 'fixture', activeUserIdRef: {current:'fixture'}, activationCancellationRef: {current:0}, activationInFlightRef:{current:false},
     deactivationInFlightRef:{current:false}, refreshGenerationRef:{current:0}, settingsRefreshPendingRef:{current:false},
     settingsRef:{current:{enabled:true}}, setIsSaving(){}, setActivationFeedback(){}, setMessage(){}, setMicrophoneState(){},
     setSettings: s => {enabled=s.enabled;},
@@ -44,13 +44,15 @@ async function offFirstTap() {
   assert.equal(stopped,true); assert.equal(enabled,false,'OFF UI must precede persistence/native completion');
   await context.off(); await context.off();
   assert.equal(pending.length,2,'repeated OFF must not duplicate teardown or persistence');
+  if(changeAccount){context.activeUserIdRef.current='other';enabled=true;}
   pending.forEach(resolve=>resolve()); await first;
-  assert.equal(enabled,false); assert.equal(context.activationInFlightRef.current,false);
+  assert.equal(enabled,changeAccount,'late OFF completion must not change successor account UI'); assert.equal(context.activationInFlightRef.current,false);
 }
 (async()=>{
   for(const result of ['granted','denied','never']) await authorization(result);
   await authorization('granted',true);
   for(let i=0;i<20;i++) await offFirstTap();
+  await offFirstTap(true);
   const contacts=read('screens/TrustedContactsScreen.tsx');
   assert.match(contacts,/contacts.length === 0 && nextContacts.length > 0 && !smsConsent && smsSupported/);
   assert.match(contacts,/text: 'NON ORA', style: 'cancel'/);

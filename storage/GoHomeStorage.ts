@@ -19,6 +19,21 @@ export type HomeLocation = {
 
 export type GoHomeTransportMode = 'walking' | 'cycling' | 'driving';
 
+export type GoHomeTripDestination = {
+  latitude: number;
+  longitude: number;
+  label: string;
+};
+
+const readTripDestination = (value: unknown): GoHomeTripDestination | undefined => {
+  if (!value || typeof value !== 'object') return undefined;
+  const destination = value as Partial<GoHomeTripDestination>;
+  if (typeof destination.latitude !== 'number' || !Number.isFinite(destination.latitude) || Math.abs(destination.latitude) > 90 ||
+      typeof destination.longitude !== 'number' || !Number.isFinite(destination.longitude) || Math.abs(destination.longitude) > 180 ||
+      typeof destination.label !== 'string' || !destination.label.trim() || destination.label.length > 200) return undefined;
+  return { latitude: destination.latitude, longitude: destination.longitude, label: destination.label.trim() };
+};
+
 const isGoHomeTransportMode = (value: string): value is GoHomeTransportMode =>
   value === 'walking' || value === 'cycling' || value === 'driving';
 
@@ -33,6 +48,8 @@ export type GoHomeSession = {
   distanceKm: number;
   estimatedMinutes: number;
   transportMode: GoHomeTransportMode;
+  // Active-trip metadata, not an address book or the user's current GPS.
+  destination?: GoHomeTripDestination;
 };
 
 export type ActiveGoHomeSession = Omit<GoHomeSession, 'homeLocation' | 'startLocation'> & {
@@ -89,7 +106,9 @@ export const GoHomeStorage = {
 
     try {
       const parsedSession: unknown = JSON.parse(storedSession);
-      return isActiveGoHomeSession(parsedSession) ? parsedSession : null;
+      if (!isActiveGoHomeSession(parsedSession)) return null;
+      // Missing/corrupt optional metadata must not cancel legacy armed timers.
+      return { ...parsedSession, destination: readTripDestination(parsedSession.destination) };
     } catch {
       return null;
     }
@@ -99,7 +118,7 @@ export const GoHomeStorage = {
     await setAccountStorageItem(
       userId,
       'go-home-active',
-      JSON.stringify(session),
+      JSON.stringify({ ...session, destination: readTripDestination(session.destination) }),
       [ACTIVE_GO_HOME_STORAGE_KEY],
     );
   },
@@ -199,10 +218,12 @@ export const GoHomeStorage = {
 
   async saveCompleted(userId: string, session: ActiveGoHomeSession | GoHomeSession) {
     const events = await GoHomeStorage.listEvents(userId);
+    const historySession = { ...session };
+    delete historySession.destination;
     const event: GoHomeEvent = {
       id: `${Date.now()}`,
       createdAt: new Date().toISOString(),
-      session,
+      session: historySession,
       status: 'completed',
     };
     const nextEvents = [event, ...events].slice(0, MAX_STORED_EVENTS);

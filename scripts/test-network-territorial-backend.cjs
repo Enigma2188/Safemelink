@@ -26,7 +26,7 @@ check('RLS and direct table access denied for every new table', () => {
     assert.ok(sql.slice(sql.indexOf('revoke all on table')).includes(`public.${table}`));
   }
   assert.doesNotMatch(sql, /create policy/i);
-  assert.match(sql, /from public, anon, authenticated;/);
+  assert.match(sql, /from public, anon, authenticated, service_role;/);
 });
 check('definers and invoker trigger pin search_path; helpers not granted to client', () => {
   for (const fn of functions) {

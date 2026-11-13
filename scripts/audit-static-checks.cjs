@@ -1192,7 +1192,7 @@ check('SOS push and trusted automatic SMS run independently with bounded fallbac
   assert.doesNotMatch(sosService, /notificationsSent === 0[\s\S]{0,200}sendForSOS/);
   assert.match(
     sosService,
-    /if \(allowInteractiveFallback && automaticSmsResult\.status !== 'sent'\)/,
+    /if \(allowInteractiveFallback && automaticSmsResult\.status !== 'sent' && !requiresSmsFallbackConfirmation\(automaticSmsResult\)\)/,
   );
   assert.match(sosService, /localDeliveryResult = await sendSosAlert/);
   assert.match(sosAlertService, /LOCAL_FALLBACK_DEADLINE_MS = 12_000/);

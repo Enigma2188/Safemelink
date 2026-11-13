@@ -1,5 +1,5 @@
 import * as Contacts from 'expo-contacts';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, FlatList, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardSafeTextInput } from '@/components/KeyboardSafeForm';
@@ -17,24 +17,30 @@ export function ContactPickerButton({ disabled, onPick }: {
   const generation = useRef(0);
   const active = useRef(true);
   const inFlight = useRef(false);
-  const close = () => {
+  const disabledRef = useRef(disabled); disabledRef.current = disabled;
+  const pickRef = useRef(onPick); pickRef.current = onPick;
+  const close = useCallback(() => {
     generation.current++; inFlight.current = false;
     setVisible(false); setBusy(false); setRows([]); setQuery(''); setSelected(null);
-  };
+  }, []);
   useEffect(() => {
     active.current = true;
     const requestGeneration = generation;
     const listener = AppState.addEventListener('change', state => {
+      const run = generation.current;
       if (state === 'active') void Contacts.getPermissionsAsync().then(permission => {
-        if (active.current) setMessage(permission.granted ? 'Rubrica autorizzata. Premi SCEGLI DALLA RUBRICA.' : 'Rubrica non autorizzata. Inserimento manuale disponibile.');
+        if (!active.current || generation.current !== run) return;
+        if (!permission.granted) close();
+        setMessage(permission.granted ? 'Rubrica autorizzata. Premi SCEGLI DALLA RUBRICA.' : 'Rubrica non autorizzata. Inserimento manuale disponibile.');
       }).catch(() => {});
     });
     return () => { active.current = false; requestGeneration.current++; listener.remove(); };
-  }, []);
+  }, [close]);
+  useEffect(() => { if (disabled) close(); }, [disabled, close]);
   const choose = async () => {
     if (disabled || inFlight.current) return;
     const run = ++generation.current;
-    const current = () => active.current && generation.current === run;
+    const current = () => active.current && !disabledRef.current && generation.current === run;
     inFlight.current = true; setBusy(true); setMessage('');
     try {
       let permission = await Contacts.getPermissionsAsync();
@@ -71,7 +77,7 @@ export function ContactPickerButton({ disabled, onPick }: {
     const run = generation.current;
     Alert.alert('Usare questo contatto?', 'Nome e numero compileranno il modulo. Controlla il prefisso e premi Salva per aggiungerlo.', [
       { text: 'Annulla', style: 'cancel' }, { text: 'USA CONTATTO', onPress: () => {
-        if (active.current && generation.current === run) { onPick(contact.name, phone); close(); }
+        if (active.current && !disabledRef.current && generation.current === run) { pickRef.current(contact.name, phone); close(); }
       } },
     ]);
   };

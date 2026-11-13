@@ -125,9 +125,17 @@ function nativeContracts() {
   assert.match(store, /setAlarmClock/);
   assert.match(store, /if \(record.optBoolean\("claimed"\)\) \{\s*recoveryAlarm\(context, record\)\s*return true/);
   assert.match(store, /@Synchronized fun publishConfirmation/);
-  assert.match(store, /show\(context, current\)\s*current.put\("firstFired", true\)/);
+  // Publication now has an explicit failure branch before consuming T1.
+  // Keep checking the contract rather than requiring adjacent source lines.
+  const publication = store.slice(store.indexOf('@Synchronized fun publishConfirmation'));
+  const posted = publication.indexOf('show(context, current)');
+  const consumed = publication.indexOf('current.put("firstFired", true)');
+  assert.ok(posted >= 0 && consumed > posted, 'T1 is consumed only after publication');
+  assert.match(publication.slice(posted, consumed), /catch \(error: Exception\)/);
+  assert.match(publication.slice(posted, consumed), /throw error/);
   assert.match(store, /stage == 1 && record.optBoolean\("firstFired"\)/);
-  assert.match(store, /manager.notify\(NOTICE_ID, notice\)/);
+  assert.match(store, /requestNotification\(context, NOTICE_ID, notice\)/);
+  assert.match(store, /as NotificationManager\)\.notify\(id, notice\)/);
   assert.match(store, /FIRST_NOTICE_ATTEMPT/); assert.match(store, /FIRST_NOTICE_POSTED/);
   assert.match(receiver, /SafetyDeadlineStore.publishConfirmation/);
 }

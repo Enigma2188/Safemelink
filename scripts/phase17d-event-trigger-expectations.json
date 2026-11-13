@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "status": "SCOPED_EXPECTATIONS_RECORDED",
+  "provenance": "Values supplied by Tiziano from Phase17C READ ONLY evidence; not remotely reverified here",
+  "projectRef": "lwkxufnbjrpsehdkfmgy",
+  "referenceVersion": "17.6.1.166",
+  "executionApproval": "NOT_GRANTED_BY_THIS_PREPARATION",
+  "normalizedBaseSha256": "bbdc6ce02d7ea9fcb9623211e00bbd0ca4f2d7beab912262b9639d5895d18797",
+  "migrations": [
+    {
+      "name": "20261103120000_network_territorial_map_history.sql",
+      "sha256": "729d45bfc1854fa48a74fe1f2f1e398e27db1d7fc3151f4e9e8a31ee8277d50d"
+    },
+    {
+      "name": "20261107120000_network_event_markers_v2.sql",
+      "sha256": "4cb5effe0d9db9d15e720a1f6f8dd345c84da09a28b323aaee16412eb8c2daa2"
+    },
+    {
+      "name": "20261108120000_network_social_v2.sql",
+      "sha256": "1d21e5b32dc39287a9ac16562ac476f29850a610f794a6b5f0a7c1a4d7f464f0"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "issue_graphql_placeholder",
+      "event": "sql_drop",
+      "tags": [
+        "DROP EXTENSION"
+      ],
+      "functionName": "set_graphql_placeholder",
+      "triggerMetadataSha256": "1014a33d8d1ae6d0498a1bb95e7e679e5f2f8b149a848a868857bba58a8ec89b",
+      "sourceMatchesReference": false,
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "TAG_DISJOINT_BODY_NOT_APPROVED"
+    },
+    {
+      "name": "issue_pg_cron_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "functionName": "grant_pg_cron_access",
+      "triggerMetadataSha256": "41b39672664e6f5ce3909a68d0bd07a5fd1fc3f002a426d0f9f76fb5b8d87e32",
+      "sourceMatchesReference": true,
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "TAG_DISJOINT_BODY_NOT_APPROVED"
+    },
+    {
+      "name": "issue_pg_graphql_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "functionName": "grant_pg_graphql_access",
+      "triggerMetadataSha256": "72f5bdd11d713205a34c3b9bd264fc839e0bcc34231cb7376154e663f83493e3",
+      "sourceMatchesReference": false,
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "TAG_DISJOINT_BODY_NOT_APPROVED"
+    },
+    {
+      "name": "issue_pg_net_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "functionName": "grant_pg_net_access",
+      "triggerMetadataSha256": "89f2d152c59c6a8e9f6eafbb5e6a9465f0c6d0f8ce8c2747299d26f66074d83b",
+      "sourceMatchesReference": false,
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "TAG_DISJOINT_BODY_NOT_APPROVED"
+    },
+    {
+      "name": "pgrst_ddl_watch",
+      "event": "ddl_command_end",
+      "tags": null,
+      "functionName": "pgrst_ddl_watch",
+      "triggerMetadataSha256": "a33f412e0e6d91a3c2f767c2351b9c384da79f0232cddab6dfe9bc96c1580d02",
+      "sourceMatchesReference": true,
+      "definitionSha256": "2b4b5d702ddf70fbd1a05c9825f9f9016d5c0ef97dd3df5f5b012ea23d9b94b1",
+      "functionMetadataSha256": "9536519f0fab341e81ed0c025cf9e9fd5a15c951398c27b389cdcd1dbe16b7ac",
+      "sourceSha256": "de987df746eb39647098459e7993bd8595e592969b0cd647828a3d13d37cffe0",
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "PINNED_FUNCTION"
+    },
+    {
+      "name": "pgrst_drop_watch",
+      "event": "sql_drop",
+      "tags": null,
+      "functionName": "pgrst_drop_watch",
+      "triggerMetadataSha256": "60fab6854743dc47c3067f96efd8fcd65f6479348ceb3f9f8d8a0bc306f7ce50",
+      "sourceMatchesReference": true,
+      "definitionSha256": "3a2696133853e17a0456cbfbb233a03815f50895492143e84df983b558d76593",
+      "functionMetadataSha256": "418838646fabeec80e98bf188dd5a72bd32afffea89ae42e009eec638bcb3ae3",
+      "sourceSha256": "791b41f0632fc86e0fc86a303ec0fd710c4e2ecf947a23422dae2b7a2c122f1d",
+      "owner": "supabase_admin",
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "mode": "PINNED_FUNCTION"
+    }
+  ]
+}

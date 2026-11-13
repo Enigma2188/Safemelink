@@ -1,1 +1,1 @@
-export { NetworkScreen as default } from '@/screens/NetworkScreen';
+export { NetworkAppScreen as default } from '@/screens/NetworkAppScreen';

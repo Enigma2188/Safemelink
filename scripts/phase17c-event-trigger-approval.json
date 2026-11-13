@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "approvalStatus": "PENDING_EVIDENCE",
+  "approvalRef": null,
+  "reviewedAt": null,
+  "reference": {
+    "url": "https://raw.githubusercontent.com/supabase/postgres/17.6.1.166/migrations/schema-17.sql",
+    "version": "17.6.1.166",
+    "sha256": "cf4a78fc7f6a61e0914c495320b320554785423bc1567da08770dc0230e34913",
+    "targetBuildMatch": "NOT_VERIFIED"
+  },
+  "triggers": [
+    {
+      "name": "issue_graphql_placeholder",
+      "event": "sql_drop",
+      "tags": [
+        "DROP EXTENSION"
+      ],
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "set_graphql_placeholder",
+      "expectedSourceSha256": "19e858a99cf5698c4730343fb43cdad4ab2f0717a8ded8a691a0e2786b859708",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    },
+    {
+      "name": "issue_pg_cron_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "grant_pg_cron_access",
+      "expectedSourceSha256": "00db212b76cecd4b0794b2f20c414ab4988d675959747cd12d3eb4c6d6736f38",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    },
+    {
+      "name": "issue_pg_graphql_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "grant_pg_graphql_access",
+      "expectedSourceSha256": "fb5a80e6d30734718db960270a5f0eac0d655e238e8128ba56803b74a052bc1e",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    },
+    {
+      "name": "issue_pg_net_access",
+      "event": "ddl_command_end",
+      "tags": [
+        "CREATE EXTENSION"
+      ],
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "grant_pg_net_access",
+      "expectedSourceSha256": "55abda380efd46b37b26d3c6e4f3b514e28b7c7c1df44f5ae0315ece4052370d",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    },
+    {
+      "name": "pgrst_ddl_watch",
+      "event": "ddl_command_end",
+      "tags": null,
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "pgrst_ddl_watch",
+      "expectedSourceSha256": "de987df746eb39647098459e7993bd8595e592969b0cd647828a3d13d37cffe0",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    },
+    {
+      "name": "pgrst_drop_watch",
+      "event": "sql_drop",
+      "tags": null,
+      "enabled": "O",
+      "functionSchema": "extensions",
+      "functionName": "pgrst_drop_watch",
+      "expectedSourceSha256": "791b41f0632fc86e0fc86a303ec0fd710c4e2ecf947a23422dae2b7a2c122f1d",
+      "approvedDefinitionSha256": null,
+      "approvedFunctionMetadataSha256": null,
+      "approvedTriggerMetadataSha256": null
+    }
+  ]
+}

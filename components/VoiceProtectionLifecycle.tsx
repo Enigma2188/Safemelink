@@ -124,7 +124,7 @@ export function VoiceProtectionLifecycle() {
     const generation = recognitionGenerationRef.current;
 
     try {
-      await VoiceProtectionService.stop();
+      await VoiceProtectionService.stop(targetUserId);
       if (generation !== recognitionGenerationRef.current || activeUserIdRef.current !== targetUserId) return;
       const storedSettings = await VoiceProtectionStorage.get(targetUserId);
       if (generation !== recognitionGenerationRef.current || activeUserIdRef.current !== targetUserId) return;
@@ -141,6 +141,14 @@ export function VoiceProtectionLifecycle() {
     }
 
     console.warn('[VoiceProtection] protezione disattivata automaticamente', { category });
+  }, [stopRecognition]);
+
+  const reportMissingService = useCallback((targetUserId: string) => {
+    if (activeUserIdRef.current !== targetUserId || !shouldListenRef.current ||
+      VoiceProtectionRuntime.isRecognitionStopped(targetUserId)) return;
+    stopRecognition();
+    VoiceProtectionRuntime.setRecognitionFailure(targetUserId, 'start');
+    VoiceProtectionRuntime.setRecognitionState(targetUserId, 'error');
   }, [stopRecognition]);
 
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
@@ -253,12 +261,8 @@ export function VoiceProtectionLifecycle() {
     const readiness = recognitionReadyRef.current
       ? 'ready'
       : await VoiceProtectionService.getRecognitionReadiness('it-IT').catch(() => 'recognition_unavailable' as const);
-    if (
-      !current() ||
-      !VoiceProtectionService.isRunning()
-    ) {
-      return;
-    }
+    if (!current()) return;
+    if (!VoiceProtectionService.isRunning()) { reportMissingService(targetUserId); return; }
     if (readiness !== 'ready' && readiness !== 'model_status_unknown') {
       console.warn('[VoiceProtection] ascolto locale non disponibile', { readiness });
       void disableProtection(targetUserId, 'readiness');
@@ -275,9 +279,10 @@ export function VoiceProtectionLifecycle() {
       void disableProtection(targetUserId, 'permission');
       return;
     }
-    if (!current() || !shouldListenRef.current || !VoiceProtectionService.isRunning()) {
+    if (!current() || !shouldListenRef.current) {
       return;
     }
+    if (!VoiceProtectionService.isRunning()) { reportMissingService(targetUserId); return; }
     if (!permission.granted) {
       console.warn('[VoiceProtection] permesso microfono non disponibile');
       void disableProtection(targetUserId, 'permission');
@@ -319,16 +324,16 @@ export function VoiceProtectionLifecycle() {
       });
       void disableProtection(targetUserId, 'start');
     }
-  }, [disableProtection, stopRecognition]);
+  }, [disableProtection, reportMissingService, stopRecognition]);
 
   const scheduleRestart = useCallback((rapidTermination: boolean, technicalError = false) => {
     const currentUserId = activeUserIdRef.current;
     clearRestartTimer();
-    if (
-      !currentUserId ||
-      !shouldListenRef.current ||
-      !VoiceProtectionService.isRunning()
-    ) {
+    if (!currentUserId || !shouldListenRef.current) {
+      return;
+    }
+    if (!VoiceProtectionService.isRunning()) {
+      reportMissingService(currentUserId);
       return;
     }
 
@@ -352,10 +357,21 @@ export function VoiceProtectionLifecycle() {
       restartTimerRef.current = null;
       void startRecognition(currentUserId, false);
     }, delayMs);
-  }, [clearRestartTimer, disableProtection, startRecognition]);
+  }, [clearRestartTimer, disableProtection, reportMissingService, startRecognition]);
+
+  const rejectMissingService = () => {
+    const currentUserId = activeUserIdRef.current;
+    if (!currentUserId || !shouldListenRef.current || VoiceProtectionService.isRunning()) return false;
+    // A queued native callback is not proof that Android still owns the service.
+    // Preserve the saved ON intent for a verified foreground recovery, but never
+    // display listening or accept a phrase while the required service is gone.
+    reportMissingService(currentUserId);
+    return true;
+  };
 
   useSpeechRecognitionEvent('start', (event) => {
     if (!isCurrentNativeEvent(event, 'start')) return;
+    if (rejectMissingService()) return;
     recognitionStartedAtRef.current = Date.now();
     const currentUserId = activeUserIdRef.current;
     if (currentUserId && VoiceProtectionRuntime.isRecognitionStopped(currentUserId)) {
@@ -373,6 +389,7 @@ export function VoiceProtectionLifecycle() {
 
   useSpeechRecognitionEvent('result', (event) => {
     if (!isCurrentNativeEvent(event, 'result')) return;
+    if (rejectMissingService()) return;
     if (
       !shouldListenRef.current ||
       !recognitionConfirmedRef.current ||
@@ -468,7 +485,7 @@ export function VoiceProtectionLifecycle() {
 
     accountCleanupPromiseRef.current = (async () => {
       try {
-        await VoiceProtectionService.stop();
+        await VoiceProtectionService.stop(previousUserId);
         if (activeUserIdRef.current === previousUserId) return;
         const previousSettings = await VoiceProtectionStorage.get(previousUserId);
         if (activeUserIdRef.current === previousUserId) return;
@@ -568,7 +585,9 @@ export function VoiceProtectionLifecycle() {
       (nextState: AppStateStatus) => {
         if (nextState !== 'active') {
           if (!VoiceProtectionService.isRunning()) {
-            stopRecognition();
+            const owner = activeUserIdRef.current;
+            if (owner) reportMissingService(owner);
+            else stopRecognition();
           }
           return;
         }
@@ -609,7 +628,7 @@ export function VoiceProtectionLifecycle() {
       stopRecognition();
       VoiceProtectionRuntime.setRecognitionState(userId, 'off');
     };
-  }, [clearPostSOSRecoveryTimer, disableProtection, isInitializing, startRecognition, stopRecognition, userId]);
+  }, [clearPostSOSRecoveryTimer, disableProtection, isInitializing, reportMissingService, startRecognition, stopRecognition, userId]);
 
   return null;
 }

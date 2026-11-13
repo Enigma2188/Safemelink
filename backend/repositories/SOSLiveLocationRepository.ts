@@ -10,9 +10,10 @@ export const SOSLiveLocationRepository = {
       accuracy: number;
       observedAt: string;
     },
+    signal?: AbortSignal,
   ) {
-    const { data, error } = await requireSupabaseClient().rpc(
-      'update_my_active_sos_location',
+    let query = requireSupabaseClient().rpc(
+      'update_my_active_sos_location_result',
       {
         target_sos_id: sosId,
         position_latitude: position.latitude,
@@ -21,9 +22,14 @@ export const SOSLiveLocationRepository = {
         position_observed_at: position.observedAt,
       },
     );
+    if (signal) query = query.abortSignal(signal);
+    const { data, error, status } = await query;
     if (error) {
-      throw new BackendError('Posizione SOS non aggiornata.', error);
+      throw new BackendError('Posizione SOS non aggiornata.', { ...error, status });
     }
-    return data === true;
+    if (data !== 'updated' && data !== 'stale' && data !== 'inactive') {
+      throw new BackendError('Esito aggiornamento posizione SOS non verificato.');
+    }
+    return data;
   },
 };

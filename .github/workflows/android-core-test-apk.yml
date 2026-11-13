@@ -1,0 +1,280 @@
+name: Build SafeMeLink Android CORE test APK (NETWORK V2 OFF)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: safemelink-android-core-test-apk
+  cancel-in-progress: false
+
+jobs:
+  build-android-test-apk:
+    name: Validate and build standalone test APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CI: "true"
+      EXPO_PUBLIC_NETWORK_V2_ENABLED: "false"
+      EXPO_PUBLIC_CHECKPOINT_DIAGNOSTICS: "true"
+
+    steps:
+      - name: Checkout selected SafeMeLink source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: VERIFY CHECKED OUT SOURCE
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          echo "github.ref=$DISPATCH_REF"
+          echo "github.ref_name=$DISPATCH_REF_NAME"
+          echo "github.sha=$DISPATCH_SHA"
+          git rev-parse HEAD
+          git branch --show-current
+          git log -1 --oneline
+          git status --short --branch
+
+          checked_out_sha="$(git rev-parse HEAD)"
+
+          if [ "$checked_out_sha" != "$DISPATCH_SHA" ]; then
+            echo "::error::Checked out commit differs from workflow dispatch SHA."
+            exit 1
+          fi
+
+          build_sha="$(git rev-parse --short HEAD)"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "EXPO_PUBLIC_BUILD_SHA=$build_sha" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_BUILD_RUN=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_BUILD_DATE=$build_date" >> "$GITHUB_ENV"
+          echo "Build fingerprint: $build_sha / run $GITHUB_RUN_NUMBER / $build_date"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.1
+          cache: npm
+
+      - name: Verify Development URL and client API key (fail closed)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          node <<'NODE'
+          const { randomBytes } = require('node:crypto');
+          class DevelopmentVerificationError extends Error {}
+          async function verifyDevelopment() {
+            const expectedRef = 'lwkxufnbjrpsehdkfmgy';
+            const expectedUrl = `https://${expectedRef}.supabase.co`;
+            const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+            const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+            if (url !== expectedUrl) throw new DevelopmentVerificationError('Development URL mismatch or missing.');
+            if (!key || key !== key.trim() || key.length > 4096) {
+              throw new DevelopmentVerificationError('Client API key missing or malformed.');
+            }
+            if (!/^sb_publishable_[A-Za-z0-9_-]{16,}$/.test(key)) {
+              const parts = key.split('.');
+              if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) {
+                throw new DevelopmentVerificationError('Only a publishable key or legacy anon JWT is allowed.');
+              }
+              let claims;
+              try { claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); }
+              catch { throw new DevelopmentVerificationError('Invalid client JWT payload.'); }
+              const now = Math.floor(Date.now() / 1000);
+              if (!claims || claims.role !== 'anon' || claims.ref !== expectedRef ||
+                  !Number.isFinite(claims.exp) || claims.exp <= now ||
+                  (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > now))) {
+                throw new DevelopmentVerificationError('Client JWT project, role or validity mismatch.');
+              }
+            }
+            // Decoded claims alone are NOT authentication. Both requests go only
+            // to the fixed Development Auth settings endpoint, with no user data.
+            // No redirects, retries, SQL, login or application RPCs are allowed.
+            const readSettings = apiKey => fetch(`${expectedUrl}/auth/v1/settings`, {
+              method: 'GET', redirect: 'error', signal: AbortSignal.timeout(15000),
+              headers: { apikey: apiKey, Accept: 'application/json' },
+            });
+            const invalidKey = `sb_publishable_${randomBytes(32).toString('hex')}`;
+            let negative;
+            try { negative = await readSettings(invalidKey); }
+            catch { throw new DevelopmentVerificationError('Development API negative control unavailable.'); }
+            const negativeStatus = negative.status;
+            await negative.body?.cancel();
+            if (![401, 403].includes(negativeStatus)) {
+              throw new DevelopmentVerificationError('Development endpoint did not reject the invalid-key control.');
+            }
+            let response;
+            let settings;
+            try {
+              response = await readSettings(key);
+              if (response.status !== 200 ||
+                  !response.headers.get('content-type')?.includes('application/json')) {
+                await response.body?.cancel();
+                throw new Error('Rejected response.');
+              }
+              settings = await response.json();
+            } catch { throw new DevelopmentVerificationError('Development client key was not verified by the API.'); }
+            if (!settings || typeof settings !== 'object' || Array.isArray(settings) ||
+                !settings.external || typeof settings.external !== 'object' || Array.isArray(settings.external)) {
+              throw new DevelopmentVerificationError('Unexpected Development Auth settings response.');
+            }
+            console.log('PASS: exact Development URL, public client key accepted, invalid key rejected.');
+          }
+          verifyDevelopment().catch(error => {
+            // Only fixed diagnostic messages; never log credentials or responses.
+            console.error(`::error::${error instanceof DevelopmentVerificationError ? error.message : 'Unexpected Development verification failure.'}`);
+            process.exitCode = 1;
+          });
+          NODE
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Install pinned Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate required build configuration
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ]; then
+            echo "::error::Required secret EXPO_PUBLIC_SUPABASE_URL is not configured."
+            exit 1
+          fi
+          if [ -z "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Required secret EXPO_PUBLIC_SUPABASE_ANON_KEY is not configured."
+            exit 1
+          fi
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "::error::Required secret ANDROID_GOOGLE_SERVICES_JSON_BASE64 is not configured."
+            exit 1
+          fi
+
+      - name: Reconstruct google-services.json
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -o pipefail
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > google-services.json
+          chmod 600 google-services.json
+          node -e "const f=require('./google-services.json'); const p=f.client?.some(c=>c.client_info?.android_client_info?.package_name==='com.tiziano.safemelink'); if(!p) throw new Error('google-services.json non contiene il package Android SafeMeLink.');"
+
+      - name: Verify selected candidate index.tsx
+        run: node scripts/verify-android-test-candidate.cjs
+
+      - name: Core recovered regressions and SMS Java harness
+        run: |
+          node scripts/test-voice-activation-owner.cjs
+          node scripts/test-voice-service-loss.cjs
+          node scripts/test-voice-service-restore.cjs
+          node scripts/test-voice-storage-validation.cjs
+          node scripts/test-primary-action-ux.cjs
+          node scripts/test-contacts-cache-races.cjs
+          node scripts/test-contacts-picker.cjs
+          node scripts/test-presence-lifecycle-races.cjs
+          node scripts/test-go-home-session-destination.cjs
+          node scripts/test-sms-fallback-safety.cjs
+          node scripts/test-sos-sms-confirmation.cjs
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npx eslint app backend components hooks screens services storage supabase/functions scripts --ext .ts,.tsx,.cjs
+
+      - name: Static security and configuration checks
+        run: |
+          node scripts/test-android-core-candidate.cjs
+          node scripts/test-go-home-session-destination.cjs
+          node scripts/test-sms-fallback-safety.cjs
+          node scripts/test-sos-live-reliability.cjs
+          node scripts/audit-static-checks.cjs
+          node scripts/validate-android-ci.cjs
+
+      - name: Generate the ephemeral Android project
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -o pipefail
+          npx expo prebuild --platform android --clean --no-install 2>&1 | tee expo-prebuild.log
+
+      - name: Validate generated Android configuration
+        run: node scripts/validate-generated-android.cjs
+
+      - name: Diagnose Safety React Android compile classpath
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          echo "React Native npm version: $(node -p 'require("../node_modules/react-native/package.json").version')"
+          ./gradlew :safemelink-safety:dependencyInsight \
+            --configuration releaseCompileClasspath \
+            --dependency com.facebook.react:react-android \
+            --no-daemon
+
+      - name: Compile Safety Kotlin before APK build
+        working-directory: android
+        run: |
+          set -o pipefail
+          ./gradlew :safemelink-safety:compileReleaseKotlin --no-daemon --stacktrace 2>&1 | tee ../safety-kotlin-build.log
+
+      - name: Build standalone test APK
+        working-directory: android
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          echo "Generate current release JS bundle, then assemble APK"
+          ./gradlew :app:createBundleReleaseJsAndAssets :app:assembleRelease --console=plain --no-daemon --stacktrace --warning-mode all 2>&1 | tee ../gradle-build.log
+
+      - name: Prepare named APK artifact
+        run: |
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk artifacts/safemelink-core-test.apk
+
+      - name: Remove ephemeral Firebase configuration
+        if: always()
+        run: rm -f google-services.json android/app/google-services.json
+
+      - name: Upload SafeMeLink test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: safemelink-android-core-test-apk
+          path: artifacts/safemelink-core-test.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safemelink-android-build-logs
+          path: |
+            expo-prebuild.log
+            gradle-build.log
+            safety-kotlin-build.log
+            android/app/build/reports
+          if-no-files-found: ignore
+          retention-days: 14

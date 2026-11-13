@@ -24,10 +24,18 @@ const runRequest = async <T,>(
   operation: (signal: AbortSignal) => PromiseLike<T>,
 ): Promise<T> => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    return await operation(controller.signal);
+    return await Promise.race([
+      operation(controller.signal),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new SOSNetworkPresenceTimeoutError());
+        }, REQUEST_TIMEOUT_MS);
+      }),
+    ]);
   } catch (error) {
     if (controller.signal.aborted) {
       throw new SOSNetworkPresenceTimeoutError();

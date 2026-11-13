@@ -60,8 +60,17 @@ const normalizeContacts = (contacts: StoredContact[]) => {
   return [...uniqueContacts.values()];
 };
 
+const pendingWrites = new Map<string, Promise<unknown>>();
+function ordered(userId: string, operation: () => Promise<void>) {
+  const result = (pendingWrites.get(userId) ?? Promise.resolve()).catch(() => undefined).then(operation);
+  pendingWrites.set(userId, result);
+  const release = () => { if (pendingWrites.get(userId) === result) pendingWrites.delete(userId); };
+  void result.then(release, release);
+  return result;
+}
 export const ContactsStorage = {
   async getContacts(userId: string): Promise<TrustedContact[]> {
+    await pendingWrites.get(userId)?.catch(() => undefined);
     const storedContacts = await getAccountStorageItem(
       userId,
       'trusted-contacts',
@@ -72,18 +81,23 @@ export const ContactsStorage = {
       return [];
     }
 
-    const contacts = normalizeContacts(JSON.parse(storedContacts) as StoredContact[]);
-    await ContactsStorage.saveContacts(userId, contacts);
-
-    return contacts;
+    const parsed: unknown = JSON.parse(storedContacts);
+    if (!Array.isArray(parsed) || parsed.some(contact => !contact || typeof contact !== 'object' || typeof contact.name !== 'string' ||
+      (contact.phone !== undefined && typeof contact.phone !== 'string') ||
+      (contact.number !== undefined && typeof contact.number !== 'string'))) {
+      throw new Error('Contatti salvati non leggibili. Nessun dato è stato cancellato.');
+    }
+    // A read must never write its old snapshot over a newer explicit save.
+    return normalizeContacts(parsed as StoredContact[]);
   },
 
   async saveContacts(userId: string, contacts: TrustedContact[]) {
-    await setAccountStorageItem(
+    const snapshot = JSON.stringify(contacts);
+    return ordered(userId, () => setAccountStorageItem(
       userId,
       'trusted-contacts',
-      JSON.stringify(contacts),
+      snapshot,
       [CONTACTS_STORAGE_KEY, LEGACY_CONTACTS_STORAGE_KEY],
-    );
+    ));
   },
 };

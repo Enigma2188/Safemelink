@@ -51,6 +51,7 @@ function fixture() {
   return {
     api, flush, restore: () => api.restoreListeningService('A', () => current),
     background() { dependencies['react-native'].AppState.currentState = 'background'; },
+    disableVoice() { settings.enabled = false; },
     get starts() { return starts; }, get stops() { return stops; }, get saves() { return saves; },
     get expiry() { return expiry; }, get options() { return options; },
     off() { blocked = true; settings.enabled = false; }, sos() { sos = true; },
@@ -61,6 +62,43 @@ function fixture() {
   };
 }
 const cases = [
+  ['cancelled queued activation never creates a native task', async () => {
+    const f = fixture();
+    await assert.rejects(f.api.start('A', 60, () => false), /annullata/);
+    assert.equal(f.starts, 0);
+  }],
+  ['account changes during explicit native startup drain the old activation', async () => {
+    const f = fixture(); let current = true; f.deferStart();
+    const pending = f.api.start('A', 60, () => current);
+    await f.flush(); current = false; f.releaseStart();
+    await assert.rejects(pending, /annullata/);
+    assert.equal(f.api.isRunning(), false);
+  }],
+  ['late account-scoped stop cannot tear down another account service', async () => {
+    const f = fixture(); await f.restore(); const stops = f.stops;
+    await f.api.stop('B');
+    assert.equal(f.stops, stops); assert.equal(f.api.isRunning(), true);
+    await f.api.stop('A'); assert.equal(f.api.isRunning(), false);
+  }],
+  ['safety-only monitoring remains available without requesting the microphone', async () => {
+    const f = fixture(); f.disableVoice(); f.background();
+    await f.api.ensureSafetyMonitoring('A');
+    assert.equal(f.starts, 1);
+    assert.equal(f.options.parameters.voiceRequested, false);
+    assert.deepEqual(Array.from(f.options.foregroundServiceType), ['specialUse']);
+    await f.api.stop();
+  }],
+  ['foreground safety startup declares its microphone requirement when voice is enabled', async () => {
+    const f = fixture(); await f.api.ensureSafetyMonitoring('A');
+    assert.equal(f.starts, 1);
+    assert.equal(f.options.parameters.voiceRequested, true);
+    await f.api.stop();
+  }],
+  ['safety monitoring cannot bypass the foreground guard when requesting the microphone', async () => {
+    const f = fixture(); f.background();
+    await assert.rejects(f.api.ensureSafetyMonitoring('A'), /primo piano/);
+    assert.equal(f.starts, 0);
+  }],
   ['background restore never starts a missing microphone foreground service', async () => {
     const f = fixture(); f.background(); await assert.rejects(f.restore(), /primo piano/); assert.equal(f.starts, 0);
   }],

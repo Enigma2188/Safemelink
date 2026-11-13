@@ -2,13 +2,27 @@ import { NeighborhoodNetworkRepository } from '@/backend/repositories/Neighborho
 import { AuthService } from '@/backend/auth/AuthService';
 import { LocationService } from '@/services/LocationService';
 
+const preferenceRevisions = new Map<string, number>();
+const preferenceQueues = new Map<string, Promise<unknown>>();
+const revision = (userId: string) => preferenceRevisions.get(userId) ?? 0;
+const orderedPreference = (userId: string, operation: () => Promise<void>) => {
+  const result = (preferenceQueues.get(userId) ?? Promise.resolve()).catch(() => undefined).then(operation);
+  preferenceQueues.set(userId, result);
+  const release = () => { if (preferenceQueues.get(userId) === result) preferenceQueues.delete(userId); };
+  void result.then(release, release);
+  return result;
+};
 const INVITE_TOKEN_PATTERN = /^NQ-[0-9A-F]{32}$/;
 
 const freshLocationFor = async (userId: string) => {
   const location = await LocationService.getCurrentLocation({ timeoutMs: 15_000, accuracy: 'high' });
   const session = await AuthService.getSession();
   if (!session || session.user.id !== userId) throw new Error('Sessione cambiata. Riprova.');
-  if (location.source !== 'fresh' || location.accuracy === null || location.accuracy < 0 || location.accuracy > 100 || !location.observedAt) {
+  const age = Date.now() - Date.parse(location.observedAt ?? '');
+  if (!Number.isFinite(location.latitude) || Math.abs(location.latitude) > 90 ||
+    !Number.isFinite(location.longitude) || Math.abs(location.longitude) > 180 ||
+    !Number.isFinite(age) || age < -30_000 || age > 120_000 ||
+    location.source !== 'fresh' || location.accuracy === null || !Number.isFinite(location.accuracy) || location.accuracy < 0 || location.accuracy > 100 || !location.observedAt) {
     throw new Error('Posizione troppo imprecisa. Attiva il GPS e riprova.');
   }
   return { latitude: location.latitude, longitude: location.longitude, accuracy: location.accuracy, observedAt: location.observedAt };
@@ -30,14 +44,25 @@ export const NeighborhoodNetworkService = {
   },
 
   async setDiscoveryPreference(userId: string, enabled: boolean) {
-    if (!enabled) return NeighborhoodNetworkRepository.setDiscoveryPreference(userId, false);
+    const expected = revision(userId) + 1;
+    preferenceRevisions.set(userId, expected);
+    if (!enabled) return orderedPreference(userId, async () => {
+      await NeighborhoodNetworkRepository.setDiscoveryPreference(userId, false);
+    });
     const location = await freshLocationFor(userId);
-    await NeighborhoodNetworkRepository.setDiscoveryPreference(userId, true);
-    await NeighborhoodNetworkRepository.publishDiscoveryPresence(userId, location);
+    if (revision(userId) !== expected) return;
+    return orderedPreference(userId, async () => {
+      if (revision(userId) !== expected) return;
+      await NeighborhoodNetworkRepository.setDiscoveryPreference(userId, true);
+      if (revision(userId) !== expected) return;
+      await NeighborhoodNetworkRepository.publishDiscoveryPresence(userId, location);
+    });
   },
 
   async refreshDiscoveryPresence(userId: string) {
+    const expected = revision(userId);
     const location = await freshLocationFor(userId);
+    if (revision(userId) !== expected) return;
     await NeighborhoodNetworkRepository.publishDiscoveryPresence(userId, location);
   },
 

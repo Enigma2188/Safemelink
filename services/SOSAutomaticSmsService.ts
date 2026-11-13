@@ -18,6 +18,7 @@ export type SOSAutomaticSmsResult = {
     | 'native_send_failed'
     | 'native_result_unknown'
     | 'session_changed';
+  previouslyAttemptedCount?: number;
   requestedCount?: number;
   unknownCount?: number;
   errorReasons?: string[];
@@ -221,10 +222,11 @@ export const SOSAutomaticSmsService = {
     let failedCount = 0;
     let unknownCount = 0;
     let requestedCount = 0;
+    let previouslyAttemptedCount = 0;
     const errorReasons: string[] = [];
 
     for (const phone of phones) {
-      if (attempted.has(phone)) continue;
+      if (attempted.has(phone)) { previouslyAttemptedCount++; continue; }
       const sessionMatches = async () => (await getSOSSessionWithTimeout().catch(() => null))?.user.id === userId;
       const stoppedForAccountChange = (): SOSAutomaticSmsResult => ({
         status: 'failed', reason: 'session_changed', sentCount, failedCount, unknownCount, requestedCount, errorReasons,
@@ -232,7 +234,7 @@ export const SOSAutomaticSmsService = {
       });
       if (!(await sessionMatches())) return stoppedForAccountChange();
       // Persist the attempt first: an uncertain native result must never duplicate an emergency SMS.
-      if (await SOSAutomaticSmsStorage.markAttempted(userId, event.id, phone) === false) continue;
+      if (await SOSAutomaticSmsStorage.markAttempted(userId, event.id, phone) === false) { previouslyAttemptedCount++; continue; }
       // Marker persistence may overlap logout/account switch. Do not hand off A's SMS as B.
       if (!(await sessionMatches())) return stoppedForAccountChange();
       try {
@@ -282,6 +284,7 @@ export const SOSAutomaticSmsService = {
       skippedCount,
       unknownCount,
       requestedCount,
+      previouslyAttemptedCount,
       errorReasons,
     };
   },

@@ -226,8 +226,10 @@ export const VoiceProtectionService = {
     return ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({ locale: 'it-IT' });
   },
 
-  async start(userId: string, durationMinutes: VoiceProtectionDurationMinutes) {
+  async start(userId: string, durationMinutes: VoiceProtectionDurationMinutes, isCurrent: () => boolean = () => true) {
     return serializeService(async () => {
+    const assertCurrent = () => { if (!isCurrent()) throw new Error('Attivazione annullata.'); };
+    assertCurrent();
     if (Platform.OS !== 'android') {
       throw new Error('Protezione Vocale continua non disponibile su questa piattaforma.');
     }
@@ -238,6 +240,7 @@ export const VoiceProtectionService = {
     if (BackgroundService.isRunning()) {
       await stopNativeTask();
     }
+    assertCurrent();
     if (activeTaskUserId && activeTaskUserId !== userId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }
@@ -261,6 +264,11 @@ export const VoiceProtectionService = {
       },
     });
     activeTaskUserId = userId;
+    if (!isCurrent()) {
+      await stopNativeTask();
+      activeTaskUserId = null;
+      throw new Error('Attivazione annullata.');
+    }
 
     return {
       enabledAt: new Date().toISOString(),
@@ -340,6 +348,7 @@ export const VoiceProtectionService = {
       parameters: {
         expiresAt: voiceEnabled ? voiceSettings.expiresAt : null,
         userId,
+        voiceRequested: voiceEnabled,
       },
     });
     activeTaskUserId = userId;
@@ -365,9 +374,10 @@ export const VoiceProtectionService = {
     });
   },
 
-  async stop() {
+  async stop(userId?: string) {
     return serializeService(async () => {
     if (Platform.OS !== 'android') return;
+    if (userId !== undefined && activeTaskUserId !== userId) return;
     if (activeTaskUserId) {
       VoiceProtectionRuntime.cancelScheduledSOS(activeTaskUserId);
     }
