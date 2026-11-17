@@ -8,7 +8,11 @@ def labEnabled = System.getenv('SAFEMELINK_VOSK_LAB') == 'true'
 android {
   namespace 'com.tiziano.safemelink.vosklab'
   buildFeatures { buildConfig true }
-  defaultConfig { buildConfigField 'boolean', 'VOSK_LAB', labEnabled ? 'true' : 'false' }
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+    buildConfigField 'boolean', 'VOSK_LAB', labEnabled ? 'true' : 'false'
+  }
   if (labEnabled) {
     defaultConfig { consumerProguardFiles 'consumer-rules.pro' }
     sourceSets.main.java.srcDir 'src/enabled/java'
