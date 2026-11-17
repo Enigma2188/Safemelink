@@ -106,7 +106,7 @@ export function VoiceProtectionLifecycle() {
 
   // Layout cleanup invalidates a queued native start before passive account effects.
   useLayoutEffect(() => {
-    return () => { shouldListenRef.current = false; stopRecognition(); };
+    return () => { VoiceProtectionRuntime.invalidateVoiceLab?.(); shouldListenRef.current = false; stopRecognition(); };
   }, [userId, stopRecognition]);
 
   const disableProtection = useCallback(async (
@@ -153,6 +153,7 @@ export function VoiceProtectionLifecycle() {
 
   const startRecognition = useCallback(async (targetUserId: string, refreshConfiguration = false) => {
     if (Platform.OS !== 'android') return;
+    if (VoiceProtectionRuntime.isMicrophoneReservedForLab?.()) return;
     if (activeUserIdRef.current !== targetUserId) return;
     if (VoiceProtectionRuntime.isRecognitionStopped(targetUserId)) {
       shouldListenRef.current = false;
@@ -292,6 +293,7 @@ export function VoiceProtectionLifecycle() {
       return;
     }
 
+    if (VoiceProtectionRuntime.isMicrophoneReservedForLab?.()) return;
     recognitionStartedRef.current = true;
     recognitionAccountRef.current = targetUserId;
     recognitionConfirmedRef.current = false;

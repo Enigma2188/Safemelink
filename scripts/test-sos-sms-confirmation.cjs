@@ -57,7 +57,12 @@ function fixture(outcome, reason = 'send_failed') {
   assert.match(kotlin, /settled.compareAndSet\(false, true\)/);
   assert.match(kotlin, /unregisterReceiver/); assert.match(kotlin, /intents.forEach/);
   assert.match(kotlin, /intent\?\.action != action/);
-  assert.match(kotlin, /getDefaultSmsSubscriptionId/); assert.match(kotlin, /getSlotIndex/);
+  const compatibility = fs.readFileSync('modules/safemelink-sms/android/src/main/java/com/tiziano/safemelink/sms/SmsCompatibility.kt', 'utf8');
+  assert.match(kotlin, /SmsCompatibility.subscriptionId/);
+  assert.match(compatibility, /SmsManager.getDefaultSmsSubscriptionId/);
+  assert.match(compatibility, /getSlotIndex/);
+  assert.match(compatibility, /Build.VERSION.SDK_INT >= 31/);
+  assert.match(compatibility, /createForSubscriptionId/);
   assert.doesNotMatch(kotlin, /READ_PHONE_STATE|READ_SMS|Log\.|println\(|phoneNumber|delivery_confirmed/);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'safemelink-sms-test-'));
   assert.ok(path.resolve(temp).startsWith(path.resolve(os.tmpdir()) + path.sep));

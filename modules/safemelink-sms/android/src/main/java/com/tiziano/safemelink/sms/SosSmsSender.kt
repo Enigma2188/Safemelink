@@ -14,7 +14,6 @@ import android.os.Looper
 import android.os.Build
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.Promise
 import java.util.UUID
@@ -38,31 +37,18 @@ internal object SosSmsSender {
     if (!phone.matches(Regex("^\\+[1-9]\\d{6,14}$")) || message.isBlank()) {
       rejectBeforeSend("invalid_input"); return
     }
-    if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) {
+    if (!SmsCompatibility.hasMessaging(context)) {
       rejectBeforeSend("telephony_unavailable"); return
     }
     val manager: SmsManager
     val parts: ArrayList<String>
     try {
-      val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-      val subscription = SubscriptionManager.getDefaultSmsSubscriptionId()
-      // Never inspect only slot 0 on a dual-SIM phone: the selected SMS SIM
-      // may be in another slot. Older multi-SIM devices use the sent callback.
-      val slot = if (Build.VERSION.SDK_INT >= 29 && SubscriptionManager.isValidSubscriptionId(subscription))
-        SubscriptionManager.getSlotIndex(subscription) else -1
-      @Suppress("DEPRECATION")
-      val state = if (Build.VERSION.SDK_INT >= 29 && slot >= 0) telephony?.getSimState(slot)
-        else if (telephony?.phoneCount == 1) telephony?.simState else null
-      if (state == TelephonyManager.SIM_STATE_ABSENT) { rejectBeforeSend("sim_absent"); return }
-      if (state != null && state != TelephonyManager.SIM_STATE_READY && state != TelephonyManager.SIM_STATE_UNKNOWN) {
-        rejectBeforeSend("sim_not_ready"); return
-      }
+      val subscription = SmsCompatibility.subscriptionId()
       if (!SubscriptionManager.isValidSubscriptionId(subscription)) {
         rejectBeforeSend("default_sim_missing"); return
       }
-      @Suppress("DEPRECATION")
-      val selected = SmsManager.getSmsManagerForSubscriptionId(subscription)
-      manager = selected
+      SmsCompatibility.simProblem(context, subscription)?.let { rejectBeforeSend(it); return }
+      manager = SmsCompatibility.manager(context, subscription)
       parts = manager.divideMessage(message)
     } catch (_: SecurityException) { rejectBeforeSend("sim_check_unavailable"); return }
     catch (_: Exception) { rejectBeforeSend("telephony_unavailable"); return }

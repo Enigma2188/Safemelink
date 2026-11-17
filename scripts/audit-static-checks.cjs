@@ -1248,7 +1248,7 @@ check('Automatic trusted SMS requires account consent and Android SEND_SMS permi
   assert.match(contactsScreen, /onPress=\{\(\) => void setAutomaticSmsEnabled\(true\)\}[^\n]*ATTIVA SMS AUTOMATICI/);
   assert.match(contactsScreen, /contacts\.length > 0 && !smsReady/);
   assert.match(contactsScreen, /Con il tuo consenso/);
-  assert.match(contactsScreen, /smsReady \? contacts.length > 0 \? 'SMS automatici attivi'/);
+  assert.match(contactsScreen, /smsReady \? contacts.length > 0 \? 'SMS autorizzati — invio e consegna da verificare'/);
   assert.match(contactsScreen, /SOSAutomaticSmsService\.requestAuthorization\(expectedUserId, current\)/);
   assert.match(contactsScreen, /consentVerified === true && authorization.consent/);
   assert.match(contactsScreen, /permissionVerified === true && authorization.permission/);

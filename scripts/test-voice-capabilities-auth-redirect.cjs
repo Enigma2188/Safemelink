@@ -9,16 +9,22 @@ function load(file, modules) {
   return exports;
 }
 async function run() {
-  let general = true, local = true, locales = ['it-IT'], fail = false, queries = 0;
+  let general = true, local = true, locales = ['it-IT'], fail = false, generalFail = false, localFail = false, queries = 0;
   const platform = { OS: 'android', Version: 33 };
   const voice = load('services/VoiceRecognitionCapabilities.ts', {
     'react-native': { Platform: platform },
     'expo-speech-recognition': { ExpoSpeechRecognitionModule: {
-      isRecognitionAvailable: () => general, supportsOnDeviceRecognition: () => local,
+      isRecognitionAvailable: () => { if (generalFail) throw Error('private generic error'); return general; }, supportsOnDeviceRecognition: () => { if (localFail) throw Error('private local error'); return local; },
       getSupportedLocales: async () => { queries++; if (fail) throw Error('private native error'); return { installedLocales: locales }; },
     } },
   });
   assert.equal(await voice.getVoiceRecognitionReadiness(), 'ready');
+  generalFail = true;
+  assert.equal(await voice.getVoiceRecognitionReadiness(), 'ready', 'generic discovery error must not hide verified local engine');
+  localFail = true;
+  assert.equal(await voice.getVoiceRecognitionReadiness(), 'capability_check_failed');
+  assert.match(voice.voiceReadinessMessage('capability_check_failed'), /protezione non è attiva/);
+  localFail = false; generalFail = false;
   general = false;
   assert.equal(await voice.getVoiceRecognitionReadiness(), 'ready', 'local recognizer independent of generic');
   local = false;
@@ -27,6 +33,9 @@ async function run() {
   assert.equal(await voice.getVoiceRecognitionReadiness(), 'on_device_unavailable');
   local = true; platform.Version = 30;
   assert.equal(await voice.getVoiceRecognitionReadiness(), 'android_version_unsupported');
+  localFail = true;
+  assert.equal(await voice.getVoiceRecognitionReadiness(), 'android_version_unsupported', 'version checked before unavailable API');
+  localFail = false;
   const before = queries;
   for (const api of [31, 32]) { platform.Version = api; assert.equal(await voice.getVoiceRecognitionReadiness(), 'model_status_unknown'); }
   assert.equal(queries, before);

@@ -6,7 +6,7 @@ const ts = require('typescript');
 function fixture() {
   let running = false, starts = 0, stops = 0, saves = 0, blocked = false, sos = false;
   let wake, wakePending = false, nativeRelease, current = true;
-  let deferStart = false, deferRead = false, readRelease;
+  let deferStart = false, deferRead = false, readRelease, labReserved = false;
   const expiry = new Date(Date.now() + 600_000).toISOString();
   let settings = { enabled: true, passphrase: 'synthetic', expiresAt: expiry };
   let options;
@@ -29,7 +29,7 @@ function fixture() {
     } },
     '@/services/SafetyOperation': { withSafetyTimeout: value => value, reportSafetyError() {} },
     '@/services/VoiceProtectionRuntime': { VoiceProtectionRuntime: {
-      isRecognitionStopped: () => blocked, isSOSSuspended: () => sos,
+      isMicrophoneReservedForLab: () => labReserved, isRecognitionStopped: () => blocked, isSOSSuspended: () => sos,
       claimDueSOS: () => false, getScheduledSOS: () => null, cancelScheduledSOS() {},
       wakeBackgroundTask: signal, getBackgroundWaitMs: () => 60_000,
       waitForBackgroundWake: () => wakePending ? (wakePending = false, Promise.resolve()) : new Promise(resolve => { wake = resolve; }),
@@ -50,6 +50,7 @@ function fixture() {
   const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
   return {
     api, flush, restore: () => api.restoreListeningService('A', () => current),
+    reserveLab() { labReserved = true; },
     background() { dependencies['react-native'].AppState.currentState = 'background'; },
     disableVoice() { settings.enabled = false; },
     get starts() { return starts; }, get stops() { return stops; }, get saves() { return saves; },
@@ -62,6 +63,11 @@ function fixture() {
   };
 }
 const cases = [
+  ['lab reservation blocks pending voice native start, safety-only work remains possible', async () => {
+    const f = fixture(); f.reserveLab(); await assert.rejects(f.restore(), /laboratorio/); assert.equal(f.starts, 0);
+    const g = fixture(); g.reserveLab(); g.disableVoice(); await g.api.ensureSafetyMonitoring('A'); assert.equal(g.starts, 1);
+    await g.api.stop('A');
+  }],
   ['cancelled queued activation never creates a native task', async () => {
     const f = fixture();
     await assert.rejects(f.api.start('A', 60, () => false), /annullata/);

@@ -13,6 +13,15 @@ class SafeMeLinkSmsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("SafeMeLinkSms")
 
+    AsyncFunction("getDeviceState") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SmsCompatibility.inspect(context, appContext.currentActivity)
+    }
+    AsyncFunction("notePermissionRequest") {
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      SmsCompatibility.notePermissionRequest(context)
+    }
+
     AsyncFunction("sendSosSmsWithResult") { phone: String, message: String, promise: Promise ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       SosSmsSender.send(context, phone, message, promise)
@@ -34,7 +43,10 @@ class SafeMeLinkSmsModule : Module() {
       }
 
       @Suppress("DEPRECATION")
-      val smsManager = SmsManager.getDefault()
+      check(SmsCompatibility.hasMessaging(context)) { "telephony_unavailable" }
+      val subscription = SmsCompatibility.subscriptionId()
+      check(android.telephony.SubscriptionManager.isValidSubscriptionId(subscription)) { "default_sim_missing" }
+      val smsManager = SmsCompatibility.manager(context, subscription)
       val parts = smsManager.divideMessage(message)
       if (parts.size > 1) {
         smsManager.sendMultipartTextMessage(phone, null, parts, null, null)

@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useFocusEffect } from 'expo-router';
+import { Link, useFocusEffect } from 'expo-router';
+import { voiceLabEnabled } from '@/services/VoiceLabCoordinator';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -856,6 +857,7 @@ export default function VoiceProtectionScreen() {
           </Text>
         </View>
 
+        {voiceLabEnabled() ? <Link href={'/voice-lab' as never} accessibilityLabel="Apri prova motore vocale senza allarmi" style={{ color: '#BDE9FF', padding: 16 }}>Prova motore vocale · nessun allarme</Link> : null}
         <View style={[styles.card, settings.enabled && styles.cardActive]}>
           <View style={styles.switchRow}>
             <View style={styles.switchCopy}>

@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Alert, AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NetworkMapConnected } from '@/components/network/NetworkMapConnected.native';
 import { NetworkEventSocial, type NetworkV2SocialSlots } from '@/components/network/NetworkEventSocial.native';
@@ -14,6 +15,7 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getState, runtime.getState);
   const { height, width } = useWindowDimensions(); const wide = width >= 1024;
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(200), [stageHeight, setStageHeight] = useState(height), [listLimit, setListLimit] = useState(30);
   useEffect(() => {
     runtime.start(); const subscription = AppState.addEventListener('change', value => { if (value === 'active') void runtime.onForeground(); });
@@ -24,7 +26,7 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
   const draft = state.draft, locked = draft?.state === 'SUBMITTING' || draft?.state === 'UNKNOWN';
   const choosingPoint = state.panel === 'DRAFT' && !!draft && !draft.locked;
   const expanded = state.panel !== 'NONE' || !state.territory;
-  const panelHeight = expanded ? Math.max(140, Math.min(choosingPoint && !draft?.confirmed ? 190 : wide ? 620 : stageHeight * 0.54, stageHeight - headerHeight - 20)) : 100;
+  const panelHeight = expanded ? Math.max(140, Math.min(choosingPoint && !draft?.confirmed ? 190 : wide ? 620 : stageHeight * 0.54, Math.max(100, stageHeight - headerHeight - 20))) : 136;
   const rows = state.feed.snapshot.markers.filter((marker): marker is NetworkOperationalMarkerV2 => marker.kind === 'OPERATIONAL_EVENT' && state.clusterIds.includes(marker.publicId));
   const button = (label: string, action: () => void, disabled = false) => <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled}
     onPress={action} style={[s.button, disabled && s.disabled]}><Text style={s.buttonText}>{label}</Text></Pressable>;
@@ -38,30 +40,48 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
         contentInsets={{ top: headerHeight + 8, bottom: wide ? 16 : panelHeight + 16, right: wide ? 440 : 8, left: 8 }}
         onViewportChange={region => runtime.setViewport(region)} onSelect={selection => { setListLimit(30); runtime.showEvents(selection); }}
         eventDraft={choosingPoint ? { point: draft?.point ?? null, onChoose: point => runtime.chooseEventPoint(point) } : undefined} />
-      <View style={[s.header, wide && s.headerWide]} onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}>
-        <View style={s.row}><View style={s.flex}><Text style={s.title}>SafeMeLink NETWORK</Text><Text style={s.muted}>{state.territory?.label ?? 'Scegli un territorio autorizzato'}</Text></View>
-          {onClose ? button('Chiudi', onClose) : null}</View>
-        <Text style={s.muted}>Luoghi degli eventi generalizzati dal server · NETWORK non sostituisce il SOS</Text>
-        <View style={s.row}>{button('Cerca territori qui', () => { void runtime.discover(); }, !state.authenticated || state.territoryStatus === 'LOADING' || locked)}
-          {button('Aggiorna', () => { if (state.panel === 'OWN') void runtime.showOwn(); else if (state.panel === 'HISTORY') void runtime.showHistory(); else void runtime.refresh(); }, state.panel !== 'OWN' && (!state.territory || state.feed.status === 'LOADING'))}
-          {button('I miei invii', () => { void runtime.showOwn(); }, !state.authenticated || locked)}
-          {button('Segnala', () => runtime.beginDraft(), !state.territory || !state.authenticated)}</View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
-          {[1000, 2500, 5000, 10000].map(radius => <Pressable key={radius} accessibilityRole="button" accessibilityLabel={`Raggio ${radius / 1000} km`}
-            accessibilityState={{ selected: state.radius === radius }} onPress={() => { void runtime.setFilters({ radius: radius as 1000 | 2500 | 5000 | 10000 }); }} style={[s.chip, state.radius === radius && s.selected]}>
-            <Text style={s.body}>{radius === 2500 ? '2,5' : radius / 1000} km</Text></Pressable>)}
-          {button('Attive', () => { void runtime.setFilters({ status: 'ACTIVE' }); })}{button('Concluse', () => { void runtime.setFilters({ status: 'RESOLVED' }); })}
-          {button('Storico revisionato', () => { void runtime.showHistory(); }, !state.territory || locked)}
-        </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
-          {button('Tutte', () => { void runtime.setFilters({ categoryId: null }); })}
-          {NETWORK_CATEGORY_IDS_V2.map(id => <Pressable key={id} accessibilityRole="button" accessibilityState={{ selected: state.categoryId === id }}
-            onPress={() => { void runtime.setFilters({ categoryId: state.categoryId === id ? null : id }); }} style={[s.chip, { borderColor: NETWORK_CATEGORY_REGISTRY_V2[id].color }, state.categoryId === id && s.selected]}>
-            <Text style={[s.body, { color: NETWORK_CATEGORY_REGISTRY_V2[id].color }]}>{NETWORK_CATEGORY_REGISTRY_V2[id].label}</Text></Pressable>)}
+      <View style={[s.header, wide && s.headerWide, { maxHeight: stageHeight * 0.45 }]} onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.headerContent}>
+          <View style={s.row}><View style={s.flex}><Text style={s.brand}>SafeMeLink <Text style={s.brandAccent}>NETWORK</Text></Text>
+            <Text style={s.muted}>{state.territory?.label ?? 'Esplora il territorio'}</Text></View>
+            {onClose ? button('Chiudi', onClose) : null}</View>
+          <View style={s.row}>
+            {button('Esplora qui', () => { void runtime.discover(); }, !state.authenticated || state.territoryStatus === 'LOADING' || locked)}
+            <Pressable accessibilityRole="button" accessibilityLabel="Filtri territoriali" accessibilityState={{ expanded: filtersOpen }}
+              onPress={() => setFiltersOpen(value => !value)} style={s.secondaryButton}><Ionicons name="options-outline" size={18} color="#BDE9FF" /><Text style={s.body}>Filtri</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Nuova segnalazione" accessibilityState={{ disabled: !state.territory || !state.authenticated || locked }}
+              disabled={!state.territory || !state.authenticated || locked} onPress={() => runtime.beginDraft()}
+              style={[s.reportButton, (!state.territory || !state.authenticated || locked) && s.disabled]}>
+              <Ionicons name="add" size={22} color="#FFFFFF" /><Text style={s.reportText}>Segnala</Text></Pressable>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: state.categoryId === null }} onPress={() => { void runtime.setFilters({ categoryId: null }); }}
+              style={[s.chip, state.categoryId === null && s.selected]}><Text style={s.body}>Tutte</Text></Pressable>
+            {NETWORK_CATEGORY_IDS_V2.map(id => <Pressable key={id} accessibilityRole="button" accessibilityState={{ selected: state.categoryId === id }}
+              onPress={() => { void runtime.setFilters({ categoryId: state.categoryId === id ? null : id }); }} style={[s.chip, { borderColor: NETWORK_CATEGORY_REGISTRY_V2[id].color }, state.categoryId === id && s.selected]}>
+              <Ionicons name={categoryIcons[NETWORK_CATEGORY_REGISTRY_V2[id].iconId]} size={18} color={NETWORK_CATEGORY_REGISTRY_V2[id].color} />
+              <Text style={[s.body, { color: NETWORK_CATEGORY_REGISTRY_V2[id].color }]}>{NETWORK_CATEGORY_REGISTRY_V2[id].label}</Text></Pressable>)}
+          </ScrollView>
+          {filtersOpen ? <>
+            <Text style={s.muted}>Raggio dalla zona esplorata</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
+              {[1000, 2500, 5000, 10000].map(radius => <Pressable key={radius} accessibilityRole="button" accessibilityLabel={`Raggio ${radius / 1000} km`}
+                accessibilityState={{ selected: state.radius === radius }} onPress={() => { void runtime.setFilters({ radius: radius as 1000 | 2500 | 5000 | 10000 }); }} style={[s.chip, state.radius === radius && s.selected]}>
+                <Text style={s.body}>{radius === 2500 ? '2,5' : radius / 1000} km</Text></Pressable>)}
+            </ScrollView>
+            <View style={s.row}>{(['ACTIVE', 'RESOLVED'] as const).map(status => <Pressable key={status} accessibilityRole="button"
+              accessibilityState={{ selected: state.status === status }} onPress={() => { void runtime.setFilters({ status }); }} style={[s.chip, state.status === status && s.selected]}>
+              <Text style={s.body}>{status === 'ACTIVE' ? 'Attive' : 'Concluse'}</Text></Pressable>)}</View>
+            <View style={s.row}>{button('I miei invii', () => { void runtime.showOwn(); }, !state.authenticated || locked)}
+              {button('Storico revisionato', () => { void runtime.showHistory(); }, !state.territory || locked)}
+              {button('Informazioni', () => Alert.alert('NETWORK · Comunità e territorio', 'SafeMeLink è un progetto indipendente. I colori distinguono le categorie, non il livello di pericolo. I marker mostrano il luogo generalizzato dell’evento, non la posizione dell’autore. Poche segnalazioni non indicano una zona sicura. NETWORK non sostituisce il SOS.'))}</View>
+          </> : null}
         </ScrollView>
       </View>
       <View accessibilityLabel="Pannello NETWORK V2" style={[s.panel, wide ? s.panelWide : s.panelMobile, { height: panelHeight }]}>
+        <View style={s.handle} accessible={false} />
         <View style={s.row}><Text style={[s.title, s.flex]}>{state.panel === 'DRAFT' ? 'Nuova segnalazione' : state.panel === 'DETAIL' ? 'Dettaglio' : state.panel === 'LIST' ? 'Segnalazioni' : state.panel === 'HISTORY' ? 'Storico revisionato' : state.panel === 'OWN' ? 'I miei invii' : 'Territorio'}</Text>
+          {state.panel !== 'NONE' ? button('Aggiorna', () => { if (state.panel === 'OWN') void runtime.showOwn(); else if (state.panel === 'HISTORY') void runtime.showHistory(); else void runtime.refresh(); }, state.feed.status === 'LOADING') : null}
           {expanded && (state.territory || state.panel !== 'NONE') ? button('Mappa', () => runtime.closePanel()) : null}</View>
         <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={s.content}>
           {!state.authenticated ? <Text style={s.body}>Sessione assente o non verificata. Nessun dato NETWORK viene caricato.</Text> : null}
@@ -141,19 +161,25 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
             </Pressable>)}
             {state.hasMoreTerritories ? button('Altri territori', () => { void runtime.discover(true); }) : null}
           </> : <View style={s.row}><Text style={[s.body, s.flex]}>{state.feed.status === 'LOADING' ? 'Caricamento segnalazioni…' : `${state.feed.snapshot.markers.length} segnalazioni disponibili`}</Text>
-            {button('Elenco', () => { setListLimit(30); runtime.showEvents(); })}</View>}
+            {button('Elenco', () => { setListLimit(30); runtime.showEvents(); })}
+            {button('Aggiorna', () => { void runtime.refresh(); }, state.feed.status === 'LOADING')}</View>}
         </ScrollView>
       </View>
     </View>
   </KeyboardAvoidingView></SafeAreaView>;
 }
+const categoryIcons = { shield: 'shield-checkmark-outline', road: 'car-outline', lightbulb: 'bulb-outline', leaf: 'leaf-outline', information: 'information-circle-outline' } as const;
 const s = StyleSheet.create({ root: { flex: 1, backgroundColor: '#061B36' }, stage: { flex: 1, overflow: 'hidden' }, flex: { flex: 1, minWidth: 0 },
-  header: { position: 'absolute', top: 8, left: 12, right: 12, padding: 10, borderRadius: 18, gap: 7, backgroundColor: '#08233FF2' }, headerWide: { right: 440 },
+  header: { position: 'absolute', top: 8, left: 12, right: 12, padding: 10, borderRadius: 20, backgroundColor: '#08233FF2', borderWidth: 1, borderColor: '#315C80' }, headerWide: { right: 440 },
+  headerContent: { gap: 8 }, brand: { color: '#F4F8FD', fontSize: 19, fontWeight: '800' }, brandAccent: { color: '#FF6474' },
+  secondaryButton: { minHeight: 44, flexDirection: 'row', gap: 6, alignItems: 'center', paddingHorizontal: 12, borderRadius: 14, borderWidth: 1, borderColor: '#527B9D' },
+  reportButton: { minHeight: 44, flexDirection: 'row', gap: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, borderRadius: 14, backgroundColor: '#BC2548' }, reportText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#79B8FF', alignSelf: 'center', marginBottom: 8 },
   row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }, wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   title: { color: '#F4F8FD', fontSize: 18, fontWeight: '800', lineHeight: 25 }, body: { color: '#E2ECF6', fontSize: 15, lineHeight: 23 }, muted: { color: '#B8CBE0', fontSize: 12, lineHeight: 18 },
   button: { minHeight: 44, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#BDE9FF' },
   buttonText: { color: '#061B36', fontSize: 13, fontWeight: '700' }, disabled: { opacity: 0.5 }, chips: { gap: 7 },
-  chip: { minHeight: 44, padding: 10, borderWidth: 1, borderColor: '#527B9D', borderRadius: 16, justifyContent: 'center', backgroundColor: '#123957' }, selected: { borderColor: '#FFFFFF', borderWidth: 2 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, padding: 10, borderWidth: 1, borderColor: '#527B9D', borderRadius: 16, justifyContent: 'center', backgroundColor: '#123957' }, selected: { borderColor: '#FFFFFF', borderWidth: 2 },
   panel: { position: 'absolute', padding: 12, borderRadius: 18, backgroundColor: '#08233FF5', borderWidth: 1, borderColor: '#527B9D' }, panelMobile: { left: 10, right: 10, bottom: 8 }, panelWide: { right: 20, bottom: 20, width: 400 },
   content: { gap: 12, paddingTop: 10, paddingBottom: 20 }, warning: { color: '#FFE2A3', fontSize: 14, lineHeight: 21 },
   card: { padding: 12, gap: 6, borderRadius: 12, backgroundColor: '#123957', minHeight: 64 },

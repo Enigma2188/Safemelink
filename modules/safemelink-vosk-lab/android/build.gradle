@@ -1,0 +1,48 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.tiziano.safemelink.vosklab'
+version = '0.1.0'
+def labEnabled = System.getenv('SAFEMELINK_VOSK_LAB') == 'true'
+android {
+  namespace 'com.tiziano.safemelink.vosklab'
+  buildFeatures { buildConfig true }
+  defaultConfig { buildConfigField 'boolean', 'VOSK_LAB', labEnabled ? 'true' : 'false' }
+  if (labEnabled) {
+    defaultConfig { consumerProguardFiles 'consumer-rules.pro' }
+    sourceSets.main.java.srcDir 'src/enabled/java'
+    sourceSets.main.manifest.srcFile 'src/enabled/AndroidManifest.xml'
+    sourceSets.main.assets.srcDir 'src/enabled/assets'
+  }
+}
+dependencies {
+  if (labEnabled) {
+    implementation 'com.alphacephei:vosk-android:0.3.75@aar'
+    implementation 'net.java.dev.jna:jna:5.18.1@aar'
+  }
+}
+if (labEnabled && !file('src/enabled/assets/vosk-it/am/final.mdl').isFile()) {
+  throw new GradleException('Vosk lab model missing: run the offline preparation script first.')
+}
+
+if (labEnabled) {
+  def modelDir = file('src/enabled/assets/vosk-it')
+  def inventory = new groovy.json.JsonSlurper().parse(new File(modelDir, 'SAFEMELINK_MODEL_SHA256.json'))
+  if (!(inventory instanceof Map) || inventory.size() != 14 || inventory.keySet().any { it.contains('\\') }) {
+    throw new GradleException('Pinned portable Vosk model inventory required')
+  }
+  def canonical = groovy.json.JsonOutput.toJson(new TreeMap(inventory))
+  def inventoryHash = java.security.MessageDigest.getInstance('SHA-256').digest(canonical.getBytes('UTF-8')).encodeHex().toString()
+  if (inventoryHash != 'cee894090699f651cd93ffbac4ea5af514a3b3537039ae105b5591e195d7a921') {
+    throw new GradleException('Unexpected Vosk model inventory')
+  }
+  inventory.each { relative, expected ->
+    def entry = new File(modelDir, relative)
+    if (!entry.canonicalPath.startsWith(modelDir.canonicalPath + File.separator) || !entry.isFile()) {
+      throw new GradleException('Invalid Vosk model inventory')
+    }
+    def actual = java.security.MessageDigest.getInstance('SHA-256').digest(entry.bytes).encodeHex().toString()
+    if (actual != expected) throw new GradleException('Vosk model integrity failed')
+  }
+}

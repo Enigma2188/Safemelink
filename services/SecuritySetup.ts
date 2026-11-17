@@ -31,7 +31,7 @@ export async function readSecuritySetup(): Promise<SetupSnapshot> {
     inspect(async () => SafeMeLinkSafety ? (SafeMeLinkSafety.canScheduleExactAlarms() ? 'ready' : 'missing') : 'unknown'),
   ]);
   const readiness = await getVoiceRecognitionReadiness().catch(() => 'model_status_unknown' as const);
-  const recognizer = readiness === 'ready' ? 'ready' : readiness === 'model_status_unknown' ? 'unknown' : 'missing';
+  const recognizer = readiness === 'ready' ? 'ready' : (readiness === 'model_status_unknown' || readiness === 'capability_check_failed') ? 'unknown' : 'missing';
   return { notifications, channel, location, gps, background, microphone, alarms, recognizer,
     microphonePrivacy: 'unknown', visibility: 'unknown', battery: 'unknown',
     recognitionDetail: voiceReadinessMessage(readiness) || (readiness === 'model_status_unknown'

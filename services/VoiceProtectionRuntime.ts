@@ -34,6 +34,8 @@ let scheduledSOS: { userId: string; expiresAt: number } | null = null;
 let sosExecutionInFlight = false;
 const activeVoiceEmergencies = new Map<string, VoiceSOSAttempt>();
 let attemptSequence = 0;
+let labMicrophoneOwner: symbol | null = null;
+let labSafetyStop: (() => void) | null = null;
 const persistAttempt = (userId: string) => VoiceSOSRecoveryStorage.save(userId, activeVoiceEmergencies.get(userId) ?? null);
 
 const signalBackgroundTask = () => {
@@ -41,17 +43,32 @@ const signalBackgroundTask = () => {
 };
 
 export const VoiceProtectionRuntime = {
+  setLabSafetyStop(handler: () => void) { labSafetyStop = handler; },
+  invalidateVoiceLab() { try { labSafetyStop?.(); } catch { /* Lab failure cannot block an emergency. */ } },
+  isMicrophoneReservedForLab() { return labMicrophoneOwner !== null; },
+  reserveMicrophoneForLab() {
+    if (labMicrophoneOwner || sosExecutionInFlight || scheduledSOS || activeVoiceEmergencies.size ||
+        (recognitionStatus && !['off', 'error'].includes(recognitionStatus.state))) return null;
+    labMicrophoneOwner = Symbol('voice-lab');
+    return labMicrophoneOwner;
+  },
+  releaseMicrophoneForLab(owner: symbol) {
+    if (labMicrophoneOwner === owner) labMicrophoneOwner = null;
+  },
   isSOSSuspended(userId: string) { return activeVoiceEmergencies.has(userId); },
   getSOSAttempt(userId: string) { const value = activeVoiceEmergencies.get(userId); return value ? {...value} : null; },
   restoreSOSAttempt(userId: string, attempt: VoiceSOSAttempt) {
+    VoiceProtectionRuntime.invalidateVoiceLab();
     if (!activeVoiceEmergencies.has(userId)) activeVoiceEmergencies.set(userId, {...attempt});
   },
   adoptVerifiedActive(userId: string, remoteId: string) {
+    VoiceProtectionRuntime.invalidateVoiceLab();
     if (activeVoiceEmergencies.has(userId)) return;
     activeVoiceEmergencies.set(userId, {attemptId:`remote:${remoteId}`,eventId:null,remoteId,phase:'active'});
     void persistAttempt(userId).catch(() => console.warn('[VoiceProtection] recovery journal unavailable'));
   },
   restoreSOSSuspension(userId: string, eventId: string) {
+    VoiceProtectionRuntime.invalidateVoiceLab();
     if (!activeVoiceEmergencies.has(userId)) activeVoiceEmergencies.set(userId, {attemptId:`restored:${eventId}`,eventId,remoteId:null,phase:'active'});
   },
   async clearVerifiedSuspension(userId: string, attemptId: string | null) {
@@ -158,6 +175,7 @@ export const VoiceProtectionRuntime = {
   },
 
   requestSOS(userId: string) {
+    VoiceProtectionRuntime.invalidateVoiceLab();
     const now = Date.now();
     if (now < sosRequestLockedUntil || activeVoiceEmergencies.has(userId) || sosExecutionInFlight) {
       console.info('[VoiceProtection] richiesta SOS duplicata ignorata');
@@ -268,6 +286,7 @@ export const VoiceProtectionRuntime = {
   },
 
   notifySOSExecutionStarted(userId: string) {
+    VoiceProtectionRuntime.invalidateVoiceLab();
     const attemptId = `voice:${Date.now()}:${++attemptSequence}:${Math.random().toString(36).slice(2)}`;
     activeVoiceEmergencies.set(userId, {attemptId,eventId:null,remoteId:null,phase:'pending'});
     VoiceProtectionRuntime.setRecognitionState(userId, 'sos_active');

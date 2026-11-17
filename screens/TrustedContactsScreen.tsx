@@ -20,7 +20,7 @@ import { useAuth } from '@/backend/auth/AuthProvider';
 import { KeyboardSafeScrollView as ScrollView, KeyboardSafeTextInput as TextInput } from '@/components/KeyboardSafeForm';
 import { ContactsService, type TrustedContact } from '@/services/ContactsService';
 import type { PreferredSosChannel } from '@/services/SafeMeLinkContact';
-import { awaitSmsAuthorization, smsAuthorizationMessage, SOSAutomaticSmsService, type SmsAuthorizationState } from '@/services/SOSAutomaticSmsService';
+import { awaitSmsAuthorization, smsAuthorizationMessage, smsDeviceMessage, SOSAutomaticSmsService, type SmsAuthorizationState } from '@/services/SOSAutomaticSmsService';
 import {
   TrustedLinksService,
   type TrustedLinkRequest,
@@ -842,12 +842,13 @@ export function TrustedContactsScreen() {
           <View style={styles.smsConsentCopy}>
             <Text style={styles.sectionTitle}>SMS automatici di emergenza</Text>
             <Text style={styles.sectionHelp}>
-              {smsAuthorizationPending ? 'Verifica in corso…' : smsReady ? contacts.length > 0 ? 'SMS automatici attivi' : 'SMS autorizzati — nessun contatto fidato configurato' : authorization?.verified ? 'SMS automatici NON ATTIVI' : 'Stato SMS da verificare'}
+              {smsAuthorizationPending ? 'Verifica in corso…' : smsReady ? contacts.length > 0 ? 'SMS autorizzati — invio e consegna da verificare' : 'SMS autorizzati — nessun contatto fidato configurato' : authorization?.verified ? 'SMS automatici NON ATTIVI' : 'Stato SMS da verificare'}
             </Text>
             <Text style={styles.sectionHelp}>
               Con il tuo consenso, SafeMeLink invia direttamente un SMS ai numeri fidati quando parte un SOS.
             </Text>
             <Text style={styles.sectionHelp}>{Platform.OS === 'android' ? smsAuthorizationMessage(authorization) : 'Funzione disponibile soltanto su Android.'}</Text>
+            {Platform.OS === 'android' ? <Text style={styles.sectionHelp}>{smsDeviceMessage(authorization)}</Text> : null}
             {!!smsAuthorizationFeedback && <Text accessibilityRole="alert" style={styles.legacyPhoneWarning}>{smsAuthorizationFeedback}</Text>}
           </View>
           <Switch
@@ -862,7 +863,7 @@ export function TrustedContactsScreen() {
         {Platform.OS === 'android' ? <Pressable accessibilityRole="button" disabled={!userId || smsAuthorizationPending} onPress={() => void loadSmsAuthorization()}>
           <Text style={styles.secondaryButtonText}>VERIFICA STATO SMS</Text>
         </Pressable> : null}
-        {Platform.OS === 'android' && authorization?.permissionState === 'blocked_or_restricted' ? <Pressable accessibilityRole="button"
+        {Platform.OS === 'android' && !smsPermission ? <Pressable accessibilityRole="button"
           onPress={() => void Linking.openSettings().catch(() => setSmsAuthorizationFeedback('Impossibile aprire le impostazioni. Apri Impostazioni Android → App → SafeMeLink → Autorizzazioni.'))}>
           <Text style={styles.secondaryButtonText}>Apri impostazioni</Text>
         </Pressable> : null}

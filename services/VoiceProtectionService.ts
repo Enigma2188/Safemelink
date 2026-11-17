@@ -153,6 +153,9 @@ const runVoiceProtectionTask = async (taskData?: VoiceProtectionTaskData) => {
 const startNativeTask = async (
   options: Parameters<typeof BackgroundService.start<VoiceProtectionTaskData>>[1],
 ) => {
+  if (options.parameters?.voiceRequested && VoiceProtectionRuntime.isMicrophoneReservedForLab?.()) {
+    throw new Error('Chiudi il laboratorio vocale prima di avviare la protezione.');
+  }
   // Microphone while-in-use authorization is not sufficient for a new service
   // created in background. This guard does not affect safety-only monitoring.
   if (options.parameters?.voiceRequested && AppState.currentState !== 'active') {
@@ -191,6 +194,7 @@ const calculateExpiresAt = (durationMinutes: VoiceProtectionDurationMinutes) =>
     : new Date(Date.now() + durationMinutes * 60 * 1000).toISOString();
 
 export const VoiceProtectionService = {
+  canOpenVoiceLab() { return !nativeStartUnsettled && !BackgroundService.isRunning(); },
   isRunning() {
     return Platform.OS === 'android' && BackgroundService.isRunning();
   },

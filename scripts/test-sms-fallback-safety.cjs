@@ -37,16 +37,19 @@ async function automaticFallback(result, allowed = true) {
     completedEvent: {}, contacts: [], console: { warn() {}, info() {} } });
   const value = await exports.run(result, allowed); return { opens, value };
 }
-function automaticFixture(outcomes) {
+function automaticFixture(outcomes, hold = null, switchAfterFirst = false) {
+  let account = 'A';
   const calls = [], markers = new Set();
   const modules = {
     'react-native': { Platform: { OS: 'android' }, PermissionsAndroid: { PERMISSIONS: { SEND_SMS: 'sms' }, check: async () => true } },
     'safemelink-sms': { SafeMeLinkSms: { sendSosSmsWithResult: async () => {
       const status = outcomes[calls.length]; calls.push(status);
+      if (switchAfterFirst && calls.length === 1) account = 'B';
+      if (hold) await hold.promise;
       return { attemptId: '11111111-1111-4111-8111-111111111111', status, reason: 'send_failed', requested: true, delivery: 'not_verified' };
     } } },
     '@/services/PhoneIdentity': { getPhoneIdentityKey: p => p },
-    '@/services/SOSSessionTimeout': { getSOSSessionWithTimeout: async () => ({ user: { id: 'A' } }) },
+    '@/services/SOSSessionTimeout': { getSOSSessionWithTimeout: async () => ({ user: { id: account } }) },
     '@/storage/SOSAutomaticSmsStorage': { SOSAutomaticSmsStorage: {
       hasConsent: async () => true, getAttemptedRecipients: async () => markers,
       markAttempted: async (_u, _e, p) => { if (markers.has(p)) return false; markers.add(p); return true; },
@@ -96,6 +99,19 @@ function automaticFixture(outcomes) {
     assert.equal(f.notices.length, 0); assert.match(f.dialogs[1][1], /Nessun invio manuale confermato/);
   }
   console.log('PASS cancel/dismiss, stale account/event/unmount, closed SOS, background and composer failures');
+  let release; const held = { promise: new Promise(resolve => { release = resolve; }) };
+  const delayed = automaticFixture(['sent', 'sent', 'sent'], held);
+  let finished = false; const delayedResult = delayed.send().then(value => { finished = true; return value; });
+  for (let i = 0; i < 200; i++) await Promise.resolve();
+  assert.equal(delayed.calls.length, 3, 'all bounded recipients are handed off without waiting for the first modem confirmation');
+  assert.equal(finished, false, 'handoff alone must not be reported as sent');
+  release(); assert.equal((await delayedResult).sentCount, 3);
+  await delayed.send(); assert.equal(delayed.calls.length, 3, 'concurrent sends preserve the persistent duplicate guard');
+  console.log('PASS delayed native confirmations: three bounded recipients observed concurrently, no invented success or replay');
+  const accountChange = automaticFixture(['sent', 'sent', 'sent'], null, true);
+  const interrupted = await accountChange.send();
+  assert.equal(accountChange.calls.length, 1, 'account change prevents remaining recipients being handed off');
+  assert.equal(interrupted.reason, 'session_changed'); assert.equal(interrupted.sentCount, 1);
   const mixed = automaticFixture(['sent', 'failed', 'unknown']); const result = await mixed.send();
   assert.equal(result.sentCount, 1); assert.equal(result.failedCount, 1); assert.equal(result.unknownCount, 1);
   const message = feedback.automaticSmsFeedback(result); assert.match(message, /Esito SMS parziale/); assert.match(message, /consegna ai destinatari non è verificata/);

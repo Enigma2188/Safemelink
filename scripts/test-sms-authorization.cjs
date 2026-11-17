@@ -57,12 +57,52 @@ function uiFixture(service, wait = p => p) {
     assert.equal(value.permissionState, result === 'granted' ? 'granted' : result === 'never' ? 'blocked_or_restricted' : 'not_granted');
     assert.ok(f.state.checks >= 2, 'permission is rechecked after the dialog');
     if (result === 'never') {
-      assert.match(f.smsAuthorizationMessage(value), /sistema\/installer/);
+      assert.match(f.smsAuthorizationMessage(value), /sistema o dell’installatore/);
       f.data.permission = true;
       const resumed = await f.api.getAuthorizationState('A');
       assert.equal(resumed.permissionState, 'granted'); assert.equal(resumed.permanentlyDenied, false);
     }
   }
+  // Native diagnostics never send or request a new sensitive permission.
+  const device = { sdk: 36, messagingSupported: true, permissionGranted: false,
+    requestPreviouslyMade: true, shouldShowRationale: false, readiness: 'ready' };
+  const persistedHint = serviceFixture();
+  persistedHint.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device });
+  let hint = await persistedHint.api.getAuthorizationState('A');
+  assert.equal(hint.permissionState, 'blocked_or_restricted', 'request history survives JS restart');
+  assert.match(persistedHint.smsDeviceMessage(hint), /Android 16/);
+  assert.equal(persistedHint.state.requests, 0);
+  persistedHint.data.permission = true;
+  hint = await persistedHint.api.getAuthorizationState('A');
+  assert.equal(hint.verified, false, 'conflicting native reads are unknown, never ready');
+  persistedHint.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device, permissionGranted: true });
+  hint = await persistedHint.api.getAuthorizationState('A');
+  assert.equal(hint.permissionState, 'granted'); assert.doesNotMatch(persistedHint.smsDeviceMessage(hint), /Android 16/);
+  const noMessaging = serviceFixture();
+  noMessaging.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device, messagingSupported: false, readiness: 'telephony_unavailable' });
+  assert.equal((await noMessaging.api.requestAuthorization('A')).supported, false);
+  assert.equal(noMessaging.state.requests, 0); assert.equal(noMessaging.state.writes, 0);
+  const unknownDevice = serviceFixture();
+  unknownDevice.native.SafeMeLinkSms.getDeviceState = async () => { throw Error('OEM read failure'); };
+  assert.equal((await unknownDevice.api.getAuthorizationState('A')).device, undefined);
+  assert.equal((await unknownDevice.api.getAuthorizationState('A')).permissionState, 'not_granted');
+  for (const malformed of [null, {}, { ...device, readiness: 'invented' }, { ...device, shouldShowRationale: 'no' }]) {
+    unknownDevice.native.SafeMeLinkSms.getDeviceState = async () => malformed;
+    assert.equal((await unknownDevice.api.getAuthorizationState('A')).device, undefined);
+  }
+  for (const sdk of [24, 25, 28, 29, 30, 31, 33, 34, 35, 36]) {
+    const oldAndroid = serviceFixture();
+    oldAndroid.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device, sdk, requestPreviouslyMade: false, readiness: 'default_sim_missing' });
+    const snapshot = await oldAndroid.api.getAuthorizationState('A');
+    assert.equal(snapshot.permissionState, 'not_granted', 'first request is never inferred blocked');
+    assert.match(oldAndroid.smsDeviceMessage(snapshot), /SIM predefinita/);
+    assert.equal(oldAndroid.smsDeviceMessage(snapshot).includes('Android 16'), sdk >= 36);
+  }
+  const historyFail = serviceFixture(); let historyCalls = 0;
+  historyFail.native.SafeMeLinkSms.notePermissionRequest = async () => { historyCalls++; throw Error('disk'); };
+  assert.equal((await historyFail.api.requestAuthorization('A')).permission, true);
+  assert.equal(historyCalls, 1, 'history write failure must not prevent the permission dialog');
+  console.log('PASS native diagnostic integration: restart history, conflicting reads, no telephony, malformed/unavailable bridge, Android 7–16 guidance and non-blocking history');
   const revokedDuringCallback = serviceFixture(); revokedDuringCallback.state.grantOnResult = false;
   assert.equal((await revokedDuringCallback.api.requestAuthorization('A')).permission, false, 'GRANTED callback alone never enables SMS');
   const readFailure = serviceFixture({ consent: { A: true }, permission: true }); readFailure.state.failRead = true;

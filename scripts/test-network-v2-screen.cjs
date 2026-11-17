@@ -132,6 +132,7 @@ const test = async (name, run) => { await run(); passed++; console.log(`PASS ${n
       Platform: { OS: 'android' }, useWindowDimensions: () => dimensions, StyleSheet: { create: value => value }, AppState: { addEventListener: () => ({ remove() {} }) } };
     const social = load('components/network/NetworkEventSocial.native.tsx', { react, 'react/jsx-runtime': jsx, 'react-native': rn });
     const screen = load('screens/NetworkV2Screen.native.tsx', { react, 'react/jsx-runtime': jsx, 'react-native': rn,
+      '@expo/vector-icons': { Ionicons: 'Icon' },
       'react-native-safe-area-context': { SafeAreaView: 'SafeArea' }, '@/components/network/NetworkMapConnected.native': { NetworkMapConnected: 'ConnectedMap' },
       '@/components/network/NetworkEventSocial.native': social, '@/services/NetworkCategoryRegistryV2': registry }).NetworkV2Screen;
     const nodes = tree => !tree || typeof tree !== 'object' ? [] : Array.isArray(tree) ? tree.flatMap(nodes) : [tree, ...nodes(tree.props?.children)];
@@ -140,7 +141,16 @@ const test = async (name, run) => { await run(); passed++; console.log(`PASS ${n
       dimensions.width = width; const h = await initialized(), r = h.runtime; const state = { i: 0, values: [] };
       let closed = 0;
       const render = () => { hooks = state; state.i = 0; return screen({ runtime: r, configuration: 'MISSING', onClose: () => closed++ }); };
-      let tree = render(); assert.ok(nodes(tree).some(n => n.type === 'ConnectedMap')); assert.ok(text(tree).includes('Storico revisionato'));
+      let tree = render(); assert.ok(nodes(tree).some(n => n.type === 'ConnectedMap'));
+      const filters = nodes(tree).find(n => n.props?.accessibilityLabel === 'Filtri territoriali');
+      assert.ok(filters); assert.equal(filters.props.accessibilityState.expanded, false);
+      assert.equal(text(tree).includes('Storico revisionato'), false);
+      filters.props.onPress(); tree = render();
+      assert.equal(nodes(tree).find(n => n.props?.accessibilityLabel === 'Filtri territoriali').props.accessibilityState.expanded, true);
+      assert.ok(text(tree).includes('Storico revisionato'));
+      for (const name of ['shield-checkmark-outline', 'car-outline', 'bulb-outline', 'leaf-outline', 'information-circle-outline']) {
+        assert.ok(nodes(tree).some(n => n.type === 'Icon' && n.props.name === name), `Category icon missing: ${name}`);
+      }
       r.beginDraft(); tree = render(); const map = nodes(tree).find(n => n.type === 'ConnectedMap'); assert.ok(map.props.eventDraft);
       map.props.eventDraft.onChoose({ latitude: 0.25, longitude: 0.25 }); r.confirmEventPoint(); tree = render();
       assert.ok(nodes(tree).find(n => n.type === 'Input' && n.props.accessibilityLabel === 'Descrizione della segnalazione'));

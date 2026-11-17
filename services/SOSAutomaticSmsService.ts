@@ -1,5 +1,5 @@
 import { PermissionsAndroid, Platform } from 'react-native';
-import { SafeMeLinkSms } from 'safemelink-sms';
+import { SafeMeLinkSms, type SmsDeviceState } from 'safemelink-sms';
 
 import type { TrustedContact } from '@/services/ContactsService';
 import { getPhoneIdentityKey } from '@/services/PhoneIdentity';
@@ -35,6 +35,7 @@ const createEmergencySms = (event: ActiveSOSEvent) =>
 const MAX_AUTOMATIC_SMS_RECIPIENTS = 3;
 
 export type SmsAuthorizationState = {
+  device?: SmsDeviceState;
   consent: boolean;
   permission: boolean;
   supported: boolean;
@@ -66,13 +67,44 @@ export async function awaitSmsAuthorization<T>(promise: Promise<T>, timeoutMs = 
   } finally { if (timer) clearTimeout(timer); }
 }
 
+// Read-only: no permission request, SIM chooser, identifiers or sending.
+async function readSmsDeviceState(): Promise<SmsDeviceState | undefined> {
+  if (Platform.OS !== 'android' || !SafeMeLinkSms?.getDeviceState) return undefined;
+  try {
+    const value = await awaitSmsAuthorization(SafeMeLinkSms.getDeviceState(), 2_000);
+    if (!value || !Number.isInteger(value.sdk) || value.sdk < 24 ||
+        typeof value.messagingSupported !== 'boolean' || typeof value.permissionGranted !== 'boolean' ||
+        typeof value.requestPreviouslyMade !== 'boolean' ||
+        (value.shouldShowRationale !== null && typeof value.shouldShowRationale !== 'boolean') ||
+        !['ready', 'default_sim_missing', 'sim_absent', 'sim_not_ready', 'telephony_unavailable', 'unknown'].includes(value.readiness)) return undefined;
+    return value;
+  } catch { return undefined; }
+}
+
+export function smsDeviceMessage(state: SmsAuthorizationState | null): string {
+  const device = state?.device;
+  if (!device) return 'Verifica telefonica non disponibile in questa installazione. Il permesso da solo non conferma la disponibilità di SIM e rete.';
+  const detail = {
+    ready: 'Configurazione SIM SMS rilevata. Rete, credito ed esito di invio richiedono una verifica separata.',
+    default_sim_missing: 'SIM per gli SMS non determinabile: nelle impostazioni Android scegli la SIM predefinita per gli SMS. Con due SIM evita “Chiedi ogni volta”.',
+    sim_absent: 'SIM assente: inserisci o attiva una SIM abilitata agli SMS.',
+    sim_not_ready: 'SIM non pronta: controlla lo sblocco PIN e lo stato della SIM.',
+    telephony_unavailable: 'Il dispositivo non dichiara il supporto agli SMS telefonici.',
+    unknown: 'Configurazione SIM non verificabile. Non è una prova di assenza della SIM.',
+  }[device.readiness];
+  const restriction = !state?.permission && device.sdk >= 36
+    ? ' Su Android 16 o successivo, un’app installata da file può richiedere anche “Consenti impostazioni limitate” nella pagina informazioni dell’app, se la voce è presente. Questo non supera tutte le restrizioni dell’installatore.' : '';
+  return detail + restriction;
+}
+
 export function smsAuthorizationMessage(state: SmsAuthorizationState | null): string {
   if (!state) return 'Stato SMS da verificare.';
+  if (state.device?.messagingSupported === false) return 'Questo dispositivo non dichiara il supporto agli SMS telefonici. Nessuna attivazione automatica disponibile.';
   if (!state.supported) return 'Modulo SMS automatici non disponibile in questa installazione. Il composer manuale resta disponibile.';
   if (state.problem === 'consent_write') return 'Consenso non salvato: verifica non completata. Nessuna attivazione confermata; riprova la verifica.';
   if (state.problem || !state.verified) return 'Non è stato possibile verificare consenso e permesso SMS. Lo stato è incerto, non equivale a un permesso negato. Riprova la verifica.';
-  if (state.consent && state.permission) return 'Consenso salvato e permesso SMS Android verificato. La consegna dei messaggi viene valutata separatamente.';
-  if (state.permissionState === 'blocked_or_restricted') return 'Android non consente una nuova richiesta SMS. Può dipendere da un diniego non più richiedibile o da restrizioni del sistema/installer. Controlla le impostazioni: potrebbero non permettere la concessione. Il composer manuale richiede la tua conferma.';
+  if (state.consent && state.permission) return 'Consenso salvato e permesso SMS Android verificato. SIM, rete, invio e consegna vengono valutati separatamente.';
+  if (state.permissionState === 'blocked_or_restricted') return 'Il permesso SMS non è concesso e la richiesta Android risulta non riproponibile. Questo esito non distingue un diniego da una restrizione del sistema o dell’installatore. Apri le impostazioni dell’app per controllare il permesso, poi torna qui per verificarlo. Se la voce SMS manca o è bloccata, il pulsante non può sbloccarla. Il composer manuale richiede la tua conferma.';
   if (!state.consent) return 'Il consenso all’invio automatico non è attivo. Puoi abilitarlo esplicitamente, anche prima di aggiungere un contatto.';
   return 'Consenso salvato, ma il permesso SMS Android non è concesso. Premi ATTIVA SMS AUTOMATICI per richiederlo. Il composer manuale richiede la tua conferma.';
 }
@@ -103,16 +135,20 @@ export const SOSAutomaticSmsService = {
   },
 
   async getAuthorizationState(userId: string): Promise<SmsAuthorizationState> {
-    const [consentResult, permissionResult] = await Promise.all([
+    const [consentResult, permissionResult, device] = await Promise.all([
       awaitSmsAuthorization(SOSAutomaticSmsStorage.hasConsent(userId), 5_000).then(value => ({ value, known: true }), () => ({ value: false, known: false })),
       awaitSmsAuthorization(Platform.OS === 'android'
         ? PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS) : Promise.resolve(false), 5_000)
         .then(value => ({ value, known: true }), () => ({ value: false, known: false })),
+      readSmsDeviceState(),
     ]);
+    // Disagreement between two native reads is a race/unknown state, never readiness.
+    if (device && permissionResult.known && device.permissionGranted !== permissionResult.value) permissionResult.known = false;
     if (permissionResult.known && permissionResult.value) lastPermissionBlocked = false;
+    const notRequestableHint = device?.requestPreviouslyMade === true && device.shouldShowRationale === false;
     const permissionState = !permissionResult.known ? 'unknown' : permissionResult.value ? 'granted'
-      : lastPermissionBlocked ? 'blocked_or_restricted' : 'not_granted';
-    return { consent: consentResult.value, permission: permissionResult.value, supported: this.isSupported(),
+      : (lastPermissionBlocked || notRequestableHint) ? 'blocked_or_restricted' : 'not_granted';
+    return { consent: consentResult.value, permission: permissionResult.value, supported: this.isSupported() && device?.messagingSupported !== false, device,
       consentVerified: consentResult.known, permissionVerified: permissionResult.known,
       verified: consentResult.known && permissionResult.known, permissionState,
       permanentlyDenied: permissionState === 'blocked_or_restricted', requestInProgress: authorizationRequest !== null,
@@ -126,6 +162,8 @@ export const SOSAutomaticSmsService = {
     }
     const request = (async (): Promise<SmsAuthorizationState> => {
       if (!this.isSupported()) return this.getAuthorizationState(userId);
+      const before = await this.getAuthorizationState(userId);
+      if (!before.supported) return before;
       const cancelled = async () => ({ ...await this.getAuthorizationState(userId), problem: 'account_changed' as const });
       if (!isCurrent()) return cancelled();
       try { await writeSmsConsent(userId, true); }
@@ -135,6 +173,11 @@ export const SOSAutomaticSmsService = {
         const granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS);
         if (!isCurrent()) return cancelled();
         if (!granted) {
+          // Persist only request history. Failure must not block the system request.
+          if (SafeMeLinkSms?.notePermissionRequest) {
+            await awaitSmsAuthorization(SafeMeLinkSms.notePermissionRequest(), 2_000).catch(() => undefined);
+          }
+          if (!isCurrent()) return cancelled();
           const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.SEND_SMS, {
             title: 'SMS di emergenza',
             message: 'SafeMeLink può inviare automaticamente un SMS ai contatti fidati quando attivi un SOS.',
@@ -224,6 +267,10 @@ export const SOSAutomaticSmsService = {
     let requestedCount = 0;
     let previouslyAttemptedCount = 0;
     const errorReasons: string[] = [];
+    // At most three sends. Prepare recipients serially for consent/account/dedupe,
+    // then observe native results concurrently so slow modem callbacks do not
+    // consume three consecutive wait windows or delay push delivery.
+    const pendingResults: Promise<void>[] = [];
 
     for (const phone of phones) {
       if (attempted.has(phone)) { previouslyAttemptedCount++; continue; }
@@ -232,34 +279,37 @@ export const SOSAutomaticSmsService = {
         status: 'failed', reason: 'session_changed', sentCount, failedCount, unknownCount, requestedCount, errorReasons,
         skippedCount: skippedCount + phones.length - sentCount - failedCount - unknownCount,
       });
-      if (!(await sessionMatches())) return stoppedForAccountChange();
+      if (!(await sessionMatches())) { await Promise.all(pendingResults); return stoppedForAccountChange(); }
       // Persist the attempt first: an uncertain native result must never duplicate an emergency SMS.
       if (await SOSAutomaticSmsStorage.markAttempted(userId, event.id, phone) === false) { previouslyAttemptedCount++; continue; }
       // Marker persistence may overlap logout/account switch. Do not hand off A's SMS as B.
-      if (!(await sessionMatches())) return stoppedForAccountChange();
-      try {
-        console.info('[SafeMeLink SOS] SMS_NATIVE_ATTEMPT');
-        const result = await SafeMeLinkSms!.sendSosSmsWithResult(phone, message);
-        if (!result || !/^[0-9a-f-]{36}$/i.test(result.attemptId) || result.delivery !== 'not_verified' ||
-          !['sent', 'failed', 'unknown'].includes(result.status) || typeof result.requested !== 'boolean' ||
-          (result.status === 'sent' && !result.requested)) throw new Error('invalid_native_result');
-        if (result.requested) requestedCount++;
-        const safeReason = ['permission_missing', 'invalid_input', 'telephony_unavailable', 'sim_absent',
-          'sim_not_ready', 'default_sim_missing', 'sim_check_unavailable', 'radio_off', 'no_service',
-          'limit_exceeded', 'send_failed', 'sent_confirmation_timeout', 'native_result_unknown', 'setup_failed'].includes(result.reason)
-          ? result.reason : 'native_result_unknown';
-        if (result.status === 'sent') sentCount++;
-        else { if (result.status === 'failed') failedCount++; else unknownCount++; errorReasons.push(safeReason); }
-        console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: result.status });
-        await SOSAutomaticSmsStorage.markResult(userId, event.id, phone,
-          result.status === 'sent' ? 'sent_confirmed' : result.status === 'failed' ? 'failed' : 'unknown').catch(() => undefined);
-      } catch {
-        console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: 'unknown' });
-        unknownCount += 1;
-        errorReasons.push('native_result_unknown');
-        await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'unknown').catch(() => undefined);
-      }
+      if (!(await sessionMatches())) { await Promise.all(pendingResults); return stoppedForAccountChange(); }
+      pendingResults.push((async () => {
+        try {
+          console.info('[SafeMeLink SOS] SMS_NATIVE_ATTEMPT');
+          const result = await SafeMeLinkSms!.sendSosSmsWithResult(phone, message);
+          if (!result || !/^[0-9a-f-]{36}$/i.test(result.attemptId) || result.delivery !== 'not_verified' ||
+            !['sent', 'failed', 'unknown'].includes(result.status) || typeof result.requested !== 'boolean' ||
+            (result.status === 'sent' && !result.requested)) throw new Error('invalid_native_result');
+          if (result.requested) requestedCount++;
+          const safeReason = ['permission_missing', 'invalid_input', 'telephony_unavailable', 'sim_absent',
+            'sim_not_ready', 'default_sim_missing', 'sim_check_unavailable', 'radio_off', 'no_service',
+            'limit_exceeded', 'send_failed', 'sent_confirmation_timeout', 'native_result_unknown', 'setup_failed'].includes(result.reason)
+            ? result.reason : 'native_result_unknown';
+          if (result.status === 'sent') sentCount++;
+          else { if (result.status === 'failed') failedCount++; else unknownCount++; errorReasons.push(safeReason); }
+          console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: result.status });
+          await SOSAutomaticSmsStorage.markResult(userId, event.id, phone,
+            result.status === 'sent' ? 'sent_confirmed' : result.status === 'failed' ? 'failed' : 'unknown').catch(() => undefined);
+        } catch {
+          console.info('[SafeMeLink SOS] SMS_NATIVE_RESULT', { outcome: 'unknown' });
+          unknownCount += 1;
+          errorReasons.push('native_result_unknown');
+          await SOSAutomaticSmsStorage.markResult(userId, event.id, phone, 'unknown').catch(() => undefined);
+        }
+      })());
     }
+    await Promise.all(pendingResults);
 
     console.info('[SafeMeLink SOS] SMS automatici elaborati.', {
       outcome: unknownCount > 0 ? 'unknown' : sentCount > 0 ? 'sent_confirmed' : failedCount > 0 ? 'failed' : 'not_requested',

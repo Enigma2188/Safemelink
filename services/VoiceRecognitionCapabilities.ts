@@ -1,11 +1,12 @@
 import { ExpoSpeechRecognitionModule as Speech } from 'expo-speech-recognition';
 import { Platform } from 'react-native';
 
-export type VoiceRecognitionReadiness = 'ready' | 'recognition_unavailable' | 'on_device_unavailable' | 'italian_model_missing' | 'model_status_unknown' | 'android_version_unsupported';
+export type VoiceRecognitionReadiness = 'ready' | 'recognition_unavailable' | 'on_device_unavailable' | 'italian_model_missing' | 'model_status_unknown' | 'android_version_unsupported' | 'capability_check_failed';
 
 export const voiceReadinessMessage = (state: VoiceRecognitionReadiness): string => {
   switch (state) {
     case 'android_version_unsupported': return 'Per garantire il riconoscimento solo sul telefono serve Android 12 o successivo. Non viene usato il riconoscimento online.';
+    case 'capability_check_failed': return 'Verifica del servizio vocale non riuscita. Non è confermata l’assenza del servizio e la protezione non è attiva. Riprova l’attivazione; nessun riconoscimento online viene abilitato.';
     case 'recognition_unavailable': return 'Servizio vocale non disponibile. Nelle impostazioni Android controlla che un servizio di riconoscimento sia installato, aggiornato e abilitato.';
     case 'on_device_unavailable': return 'Il servizio vocale locale non è disponibile al momento. Aggiorna o abilita il servizio vocale nelle impostazioni Android e controlla le lingue offline. Il riconoscimento online non viene usato.';
     case 'italian_model_missing': return 'Il motore non elenca il modello italiano installato. Scarica la lingua italiana offline e riprova.';
@@ -26,9 +27,10 @@ export async function getVoiceRecognitionReadiness(locale = 'it-IT'): Promise<Vo
   let result: VoiceRecognitionReadiness = 'model_status_unknown';
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    general = Speech.isRecognitionAvailable();
-    onDevice = Speech.supportsOnDeviceRecognition();
     if (apiLevel !== null && apiLevel < 31) return (result = 'android_version_unsupported');
+    // Generic provider discovery is advisory: its failure must not hide a working local engine.
+    try { general = Speech.isRecognitionAvailable(); } catch { general = null; }
+    onDevice = Speech.supportsOnDeviceRecognition();
     // The on-device recognizer does not require a default generic recognizer.
     if (!onDevice) return (result = general ? 'on_device_unavailable' : 'recognition_unavailable');
     if (Platform.OS !== 'android') return (result = 'ready');
@@ -47,7 +49,7 @@ export async function getVoiceRecognitionReadiness(locale = 'it-IT'): Promise<Vo
     return result;
   } catch {
     // Capability query failure must never enable a potentially remote recognizer.
-    result = onDevice === true ? 'model_status_unknown' : 'on_device_unavailable';
+    result = onDevice === true ? 'model_status_unknown' : 'capability_check_failed';
     return result;
   } finally {
     if (timer) clearTimeout(timer);
