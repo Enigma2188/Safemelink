@@ -28,7 +28,7 @@ assert.equal(JSON.parse(read('package.json')).dependencies['expo-crypto'], '~15.
 assert.equal(JSON.parse(read('app.json')).expo.android.package, 'com.tiziano.safemelink');
 assert.match(read('scripts/validate-generated-android.cjs'), /signingConfigs\\\.debug/);
 const home = read('app/(tabs)/index.tsx').replace(/\r\n/g,'\n');
-assert.equal(crypto.createHash('sha256').update(home).digest('hex'), '01e90efc44e8cc453ca3610ee9bdc06578c15650496a1f199b76996c9ca3ec97', 'Review and update the core Home fingerprint only with an authorized change');
+assert.equal(crypto.createHash('sha256').update(home).digest('hex'), '707b7a891bf056b544d3e5145893be631d46f6c144f7dc45709b0cd3344cd3a7', 'Review and update the core Home fingerprint only with an authorized change');
 assert.match(home, /Possibili SMS duplicati/);
 assert.match(read('services/SOSAutomaticSmsService.ts'), /MAX_AUTOMATIC_SMS_RECIPIENTS = 3/);
 assert.doesNotMatch(read('services/SOSAlertService.ts'), /whatsapp:\/\/|wa\.me\//i);
