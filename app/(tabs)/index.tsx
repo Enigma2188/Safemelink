@@ -29,6 +29,10 @@ import {
   SOSLifecycleService,
 } from '@/services/SOSLifecycleService';
 import { SOSLiveLocationService } from '@/services/SOSLiveLocationService';
+import {
+  SOSNetworkLocationServicesDisabledError,
+  SOSNetworkPermissionError,
+} from '@/services/SOSNetworkPresenceService';
 import { automaticSmsFeedback } from '@/services/SOSAutomaticSmsFeedback';
 import { SOSLaunchRuntime } from '@/services/SOSLaunchRuntime';
 import { SafetyExpirationService } from '@/services/SafetyExpirationService';
@@ -95,7 +99,7 @@ const getSOSDeliveryNotice = (
     ? 'Composer SMS aperto: controlla il destinatario e premi Invia solo dopo aver verificato eventuali invii già effettuati.' : null].filter(Boolean).join(' ') : null;
   if (result.notificationsSent > 0) {
     return [
-      'SOS attivo. La notifica SafeMeLink è stata accettata per l’invio.',
+      'SOS attivo. Notifica accettata per l’invio; la ricezione sul telefono destinatario non è ancora confermata.',
       automaticSmsNotice,
     ].filter(Boolean).join(' ');
   }
@@ -2474,10 +2478,15 @@ export default function HomeScreen() {
   const toggleSOSNetwork = async () => {
     try {
       await sosNetwork.setEnabled(!sosNetwork.enabled);
-    } catch {
+    } catch (error: unknown) {
       Alert.alert(
-        'Rete SafeMeLink',
-        'Non è possibile aggiornare ora la partecipazione. Controlla connessione e permessi.',
+        error instanceof SOSNetworkLocationServicesDisabledError
+          ? 'Posizione GPS disattivata' : 'Rete SafeMeLink',
+        error instanceof SOSNetworkLocationServicesDisabledError
+          ? 'Attiva la posizione GPS del telefono e riprova.'
+          : error instanceof SOSNetworkPermissionError
+            ? error.message
+            : 'Non è possibile aggiornare ora la partecipazione. Verifica la connessione e riprova.',
       );
     }
   };

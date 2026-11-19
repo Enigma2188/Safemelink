@@ -42,8 +42,9 @@ const verify = (state: SOSLifecycleState, id: string) => {
   if (state.sos_id !== id || state.is_owner !== true ||
     !['closed', 'cancelled'].includes(state.sos_status)) throw new SOSLifecycleDiagnosticError('unexpected_status');
 };
-const apply = async (userId: string, intent: CloseIntent) => {
+const apply = async (userId: string, intent: CloseIntent, isCurrent: () => boolean = () => true) => {
   await requireOwner(userId);
+  if (!isCurrent()) throw new SOSLifecycleDiagnosticError('auth');
   if (!intent.remoteId) throw new SOSClosureUncertainError();
   const state = intent.terminalStatus === 'closed'
     ? await SOSLifecycleService.close(intent.remoteId) : await SOSLifecycleService.cancel(intent.remoteId);
@@ -54,10 +55,23 @@ const apply = async (userId: string, intent: CloseIntent) => {
 };
 
 export const SOSClosureRecovery = {
-  request(userId: string, event: SOSEvent, terminalStatus: SOSTerminalStatus) {
+  inspectState(userId: string) {
     return enqueue(async () => {
       await requireOwner(userId);
       const intents = await read(userId);
+      await requireOwner(userId);
+      const pending = intents.filter(item => item.phase !== 'settled');
+      return { pending: pending.length, unbound: pending.filter(item => !item.remoteId).length,
+        remoteIds: pending.map(item => item.remoteId).filter((id): id is string => Boolean(id)) };
+    });
+  },
+  async inspectPending(userId: string) { return (await SOSClosureRecovery.inspectState(userId)).pending; },
+  request(userId: string, event: SOSEvent, terminalStatus: SOSTerminalStatus, isCurrent: () => boolean = () => true) {
+    return enqueue(async () => {
+      await requireOwner(userId);
+      if (!isCurrent()) throw new SOSLifecycleDiagnosticError('auth');
+      const intents = await read(userId);
+      if (!isCurrent()) throw new SOSLifecycleDiagnosticError('auth');
       const existing = intents.find(item => item.eventId === event.id);
       if (existing?.remoteId && event.remoteSosId && existing.remoteId !== event.remoteSosId) {
         throw new SOSLifecycleDiagnosticError('unexpected_response');
@@ -67,36 +81,43 @@ export const SOSClosureRecovery = {
       const next = [...intents.filter(item => item.eventId !== event.id), intent];
       // Persist BEFORE the RPC: a timeout, crash or APK update cannot erase the user's request.
       await write(userId, next);
-      const state = await apply(userId, intent);
+      const state = await apply(userId, intent, isCurrent);
       intent.phase = 'confirmed';
       await write(userId, next);
       return state;
     });
   },
-  reconcile(userId: string) {
+  reconcile(userId: string, isCurrent: () => boolean = () => true) {
     return enqueue(async () => {
-      await requireOwner(userId);
+      const requireCurrent = async () => {
+        if (!isCurrent()) throw new SOSLifecycleDiagnosticError('auth');
+        await requireOwner(userId);
+        if (!isCurrent()) throw new SOSLifecycleDiagnosticError('auth');
+      };
+      await requireCurrent();
       const intents = await read(userId);
       const completed: { eventId: string; remoteId: string }[] = [];
       let unresolved = 0;
       for (const intent of intents.filter(item => item.phase !== 'settled')) {
         try {
-        await requireOwner(userId);
+        await requireCurrent();
         if (!intent.remoteId) {
           const sameEvent = (await SOSStorage.listEvents(userId)).find(event => event.id === intent.eventId);
+          await requireCurrent();
           intent.remoteId = sameEvent?.remoteSosId ?? null;
           await write(userId, intents);
         }
         if (!intent.remoteId) throw new SOSClosureUncertainError(); // Never infer rollback from an empty read.
-        await requireOwner(userId);
+        await requireCurrent();
         let state = await SOSLifecycleService.getStatus(intent.remoteId);
-        await requireOwner(userId);
+        await requireCurrent();
         if (state.sos_id !== intent.remoteId || state.is_owner !== true) throw new SOSLifecycleDiagnosticError('unexpected_response');
-        if (state.sos_status === 'open' || state.sos_status === 'accepted') state = await apply(userId, intent);
+        if (state.sos_status === 'open' || state.sos_status === 'accepted') state = await apply(userId, intent, isCurrent);
+        await requireCurrent();
         verify(state, intent.remoteId);
         intent.phase = 'confirmed';
         await write(userId, intents);
-        await requireOwner(userId);
+        await requireCurrent();
         await SOSStorage.finalizeEvent(userId, intent.eventId, state.sos_status as SOSTerminalStatus);
         intent.phase = 'settled';
         await write(userId, intents);
@@ -104,11 +125,11 @@ export const SOSClosureRecovery = {
         } catch {
           // One unresolved operation must not starve other explicit close requests.
           // Account changes still abort the entire reconciliation immediately.
-          await requireOwner(userId);
+          await requireCurrent();
           unresolved++;
         }
       }
-      await requireOwner(userId);
+      await requireCurrent();
       return { completed, unresolved };
     });
   },

@@ -53,6 +53,8 @@ function fixture(outcome, reason = 'send_failed') {
   const denied = fixture('sent'); denied.deny(); assert.equal((await denied.send()).status, 'permission_required'); assert.equal(denied.calls.length, 0);
   const other = fixture('sent'); other.switchAccount(); await other.send(); assert.equal(other.calls.length, 0);
   const kotlin = fs.readFileSync('modules/safemelink-sms/android/src/main/java/com/tiziano/safemelink/sms/SosSmsSender.kt', 'utf8');
+  assert.match(kotlin, /SENT_TIMEOUT_MS = 6_000L/);
+  assert.match(source, /await Promise.all\(pendingResults\)/);
   assert.match(kotlin, /RECEIVER_NOT_EXPORTED/); assert.match(kotlin, /UUID.randomUUID/);
   assert.match(kotlin, /settled.compareAndSet\(false, true\)/);
   assert.match(kotlin, /unregisterReceiver/); assert.match(kotlin, /intents.forEach/);

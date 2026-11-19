@@ -92,9 +92,25 @@ export function smsDeviceMessage(state: SmsAuthorizationState | null): string {
     telephony_unavailable: 'Il dispositivo non dichiara il supporto agli SMS telefonici.',
     unknown: 'Configurazione SIM non verificabile. Non è una prova di assenza della SIM.',
   }[device.readiness];
-  const restriction = !state?.permission && device.sdk >= 36
-    ? ' Su Android 16 o successivo, un’app installata da file può richiedere anche “Consenti impostazioni limitate” nella pagina informazioni dell’app, se la voce è presente. Questo non supera tutte le restrizioni dell’installatore.' : '';
+  const restriction = !state?.permission && device.sdk >= 35
+    ? ' Su Android 15 o successivo, un’app installata da file può richiedere anche “Consenti impostazioni limitate” nella pagina informazioni dell’app, se la voce è presente. Questo non supera tutte le restrizioni dell’installatore.' : '';
   return detail + restriction;
+}
+
+export function smsPermissionHelp(state: SmsAuthorizationState | null): string {
+  if (!state || state.permission || !state.supported || !state.permissionVerified) return '';
+  const modern = state.device?.sdk !== undefined && state.device.sdk >= 35;
+  return (modern
+    ? 'Android 15 o successivo: se il permesso SMS è bloccato, apri INFORMAZIONI APP SAFEMELINK → menu ⋮ → Consenti impostazioni limitate, se presente. Conferma sul telefono, poi Autorizzazioni → SMS → Consenti.'
+    : 'Apri INFORMAZIONI APP SAFEMELINK → Autorizzazioni → SMS → Consenti. Se il permesso è bloccato, verifica nel menu ⋮ se è disponibile Consenti impostazioni limitate.')
+    + ' Torna qui e premi VERIFICA STATO SMS. Se la voce manca o resta disabilitata, conserva il codice diagnostico: il blocco può dipendere dal sistema o dall’installazione. Non serve cambiare assistente digitale.';
+}
+
+export function smsDiagnosticSummary(state: SmsAuthorizationState | null): string {
+  if (!state) return 'SMS: verifica non completata';
+  const consent = !state.consentVerified ? 'sconosciuto' : state.consent ? 'sì' : 'no';
+  const permission = !state.permissionVerified ? 'sconosciuto' : state.permission ? 'sì' : 'no';
+  return `SMS · API ${state.device?.sdk ?? '?'} · modulo ${state.supported ? 'sì' : 'no'} · consenso ${consent} · permesso ${permission} · stato ${state.permissionState} · SIM ${state.device?.readiness ?? 'unknown'}${state.problem ? ` · errore ${state.problem}` : ''}`;
 }
 
 export function smsAuthorizationMessage(state: SmsAuthorizationState | null): string {

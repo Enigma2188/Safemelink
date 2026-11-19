@@ -71,12 +71,16 @@ export const VoiceProtectionRuntime = {
     VoiceProtectionRuntime.invalidateVoiceLab();
     if (!activeVoiceEmergencies.has(userId)) activeVoiceEmergencies.set(userId, {attemptId:`restored:${eventId}`,eventId,remoteId:null,phase:'active'});
   },
-  async clearVerifiedSuspension(userId: string, attemptId: string | null) {
+  async clearVerifiedSuspension(userId: string, attemptId: string | null, verifiedAttempt?: VoiceSOSAttempt) {
     const current = activeVoiceEmergencies.get(userId);
     if (current && current.attemptId !== attemptId) return false;
-    activeVoiceEmergencies.delete(userId);
+    if (current && verifiedAttempt && (current.eventId !== verifiedAttempt.eventId ||
+      current.remoteId !== verifiedAttempt.remoteId || current.phase !== verifiedAttempt.phase)) return false;
+    // Retain the guard until its durable release succeeds. A newer attempt wins.
     await VoiceSOSRecoveryStorage.save(userId, null);
-    return !activeVoiceEmergencies.has(userId);
+    if (activeVoiceEmergencies.get(userId) !== current) return false;
+    activeVoiceEmergencies.delete(userId);
+    return true;
   },
   persistSOSAttempt: persistAttempt,
   blockRecognition(userId: string) { recognitionBlockedAccounts.add(userId); },

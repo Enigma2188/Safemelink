@@ -196,12 +196,18 @@ jobs:
           node scripts/test-go-home-session-destination.cjs
           node scripts/test-sms-fallback-safety.cjs
           node scripts/test-sos-sms-confirmation.cjs
+          node scripts/test-sms-authorization.cjs
+          node scripts/test-android-recovery-paths.cjs
+          node scripts/test-recovery-concurrency.cjs
+          node scripts/test-sos-close-intent.cjs
+          node scripts/test-voice-recovery-panel.cjs
 
       - name: Prepare pinned offline Vosk model and validate lab
         run: |
           python3 scripts/prepare-vosk-lab-model.py modules/safemelink-vosk-lab/model-source/vosk-model-small-it-0.22.zip
           node scripts/test-vosk-lab.cjs
           node scripts/test-vosk-background.cjs
+          node scripts/test-vosk-screen-races.cjs
           node scripts/test-vosk-model-packaging.cjs
           mkdir -p "$RUNNER_TEMP/vosk-state"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/vosk-state" modules/safemelink-vosk-lab/android/src/main/java/com/tiziano/safemelink/vosklab/VoskLabState.java scripts/java/VoskLabStateTest.java

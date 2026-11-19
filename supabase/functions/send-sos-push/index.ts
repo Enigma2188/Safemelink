@@ -387,6 +387,15 @@ Deno.serve(async (request) => {
       failed: tickets.filter((ticket) => ticket.status === 'error').length,
       receiptCheckRecommendedAfterMinutes: 15,
     });
+    // Ticket IDs permit a later receipt lookup without logging recipient tokens.
+    const receiptIds = tickets
+      .filter((ticket) => ticket.status === 'ok' && typeof ticket.id === 'string')
+      .map((ticket) => ticket.id as string);
+    for (let start = 0; start < receiptIds.length; start += 100) {
+      console.info('[send-sos-push] EXPO_RECEIPT_LOOKUP_IDS', {
+        ids: receiptIds.slice(start, start + 100),
+      });
+    }
     const invalidTokens = ticketsWithTokens
       .filter(
         ({ ticket }) =>

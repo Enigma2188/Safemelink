@@ -930,7 +930,9 @@ check('Received SOS notifications use one global event-driven center', () => {
   assert.match(sosNotificationCenter, /responseSubscription\.remove\(\)/);
   assert.doesNotMatch(pushTokenRegistrar, /addNotificationReceivedListener/);
   assert.doesNotMatch(pushTokenRegistrar, /addNotificationResponseReceivedListener/);
-  assert.doesNotMatch(sosNotificationCenter, /setInterval\(/);
+  assert.match(sosNotificationCenter, /FOREGROUND_INBOX_REFRESH_MS = 30_000/);
+  assert.match(sosNotificationCenter, /setInterval\(\(\) => \{\s*if \(AppState\.currentState === 'active'\)/);
+  assert.match(sosNotificationCenter, /clearInterval\(refreshInterval\)/);
   assert.match(sosNotificationCenter, /ReceivedSOSRepository\.listActive\(\)/);
   assert.match(sosNotificationCenter, /AppState\.addEventListener\('change'/);
   assert.match(receivedSOSInboxMigration, /list_my_active_received_sos/);

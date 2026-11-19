@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { Link, useFocusEffect } from 'expo-router';
+import { VoiceSOSRecoveryPanel } from '@/components/VoiceSOSRecoveryPanel';
 import { voiceLabEnabled } from '@/services/VoiceLabCoordinator';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -857,7 +858,7 @@ export default function VoiceProtectionScreen() {
           </Text>
         </View>
 
-        {voiceLabEnabled() ? <Link href={'/voice-lab' as never} accessibilityLabel="Apri prova motore vocale senza allarmi" style={{ color: '#BDE9FF', padding: 16 }}>Prova motore vocale · nessun allarme</Link> : null}
+        {voiceLabEnabled() ? <Link href={'/voice-lab' as never} accessibilityLabel="Apri prova motore vocale senza allarmi" style={{ color: '#BDE9FF', padding: 16 }}>APRI LABORATORIO VOSK · nessun allarme</Link> : null}
         <View style={[styles.card, settings.enabled && styles.cardActive]}>
           <View style={styles.switchRow}>
             <View style={styles.switchCopy}>
@@ -903,12 +904,8 @@ export default function VoiceProtectionScreen() {
                   : activationFeedback)}
             </Text>
           ) : null}
-          {(recognitionState === 'sos_uncertain' || recognitionState === 'sos_active') && settings.enabled ? (
-            <Pressable accessibilityRole="button" style={styles.batteryButton}
-              onPress={() => { if (userId) VoiceProtectionRuntime.notifySettingsChanged(userId); }}>
-              <Text style={styles.batteryButtonText}>RIPROVA VERIFICA SOS</Text>
-            </Pressable>
-          ) : null}
+          <Text selectable style={styles.cardDescription}>Build: {process.env.EXPO_PUBLIC_BUILD_SHA || 'non disponibile'} · {Platform.OS} {Platform.Version}</Text>
+          <VoiceSOSRecoveryPanel key={userId ?? 'signed-out'} userId={userId} />
           {settings.enabled && recognitionState !== 'listening' ? (
             <Text accessibilityLiveRegion="polite" style={styles.cardDescription}>
               Modalità abilitata, ma microfono non in ascolto. Premi DISATTIVA PROTEZIONE per arrestarla e modificare la parola d’ordine. L’eventuale verifica SOS resterà conservata.
@@ -1062,14 +1059,13 @@ export default function VoiceProtectionScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Servizio vocale del telefono</Text>
             <Text style={styles.cardDescription}>
-              Se l’ascolto locale non è disponibile, controlla nelle impostazioni Android che il servizio vocale sia abilitato e aggiornato e che la lingua italiana offline sia installata. I nomi delle impostazioni dipendono dal telefono. Dopo le modifiche torna qui e riprova Attiva.
+              Questa protezione usa il riconoscitore del telefono. Il pulsante apre le autorizzazioni di SafeMeLink per controllare il microfono. La scelta dell’assistente digitale non configura il laboratorio Vosk, che include già il modello italiano.
             </Text>
             <Pressable accessibilityRole="button" style={styles.batteryButton} onPress={() => {
-              void Linking.sendIntent('android.settings.VOICE_INPUT_SETTINGS')
-                .catch(() => Linking.sendIntent('android.settings.SETTINGS'))
-                .catch(() => setMessage('Apri manualmente le impostazioni Android e cerca il servizio vocale.'));
+              void Linking.openSettings()
+                .catch(() => setMessage('Apri Impostazioni Android → App → SafeMeLink → Autorizzazioni → Microfono.'));
             }}>
-              <Text style={styles.batteryButtonText}>APRI IMPOSTAZIONI VOCALI</Text>
+              <Text style={styles.batteryButtonText}>AUTORIZZAZIONI DI SAFEMELINK</Text>
             </Pressable>
           </View>
         ) : null}

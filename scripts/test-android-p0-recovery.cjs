@@ -9,6 +9,7 @@ const baseline = process.argv.includes('--baseline');
 function recovery({ attempt, events = [], active = [], state = {}, owner = 'A' }) {
   let queries = 0;
   const dependencies = {
+    '@/services/SOSClosureRecovery': { SOSClosureRecovery: { inspectState: async () => ({ pending: 0, unbound: 0, remoteIds: [] }) } },
     '@/backend/auth/AuthService': { AuthService: { getSession: async () => ({ user: { id: owner } }) } },
     '@/backend/errors/BackendError': { BackendError: class extends Error {} },
     '@/backend/repositories/SOSRepository': { SOSRepository: { findOwnActiveForVoiceRecovery: async () => active } },

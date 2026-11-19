@@ -6,11 +6,11 @@ import { VoiceProtectionService } from '@/services/VoiceProtectionService';
 import { VoiceProtectionStorage } from '@/storage/VoiceProtectionStorage';
 import type { VoiceLabSnapshot } from '@/modules/safemelink-vosk-lab';
 import { SOSStorage } from '@/storage/SOSStorage';
-import { VoiceSOSRecoveryStorage } from '@/storage/VoiceSOSRecoveryStorage';
+import { VoiceSOSRecovery } from '@/services/VoiceSOSRecovery';
 
-async function bounded<T>(request: Promise<T>): Promise<T> {
+async function bounded<T>(request: Promise<T>, timeoutMs = 5_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  try { return await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Verifica laboratorio scaduta. Nessuna prova avviata.')), 5_000); })]); }
+  try { return await Promise.race([request, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Verifica laboratorio scaduta. Nessuna prova avviata.')), timeoutMs); })]); }
   finally { if (timer) clearTimeout(timer); }
 }
 
@@ -21,6 +21,8 @@ export const voiceLabEnabled = () => {
 type Lease = { owner: symbol; user: string; cancelled: boolean; poll?: ReturnType<typeof setInterval> };
 let lease: Lease | null = null;
 let lastOwner: string | null = null;
+let startGeneration = 0;
+let preparing: symbol | null = null;
 const off: VoiceLabSnapshot = { state: 'OFF', reason: '', detections: 0, busy: false };
 function release(value: Lease) {
   if (value.poll) clearInterval(value.poll);
@@ -34,6 +36,7 @@ function drain(value: Lease) {
   }, 500);
 }
 export function stopVoiceLab(forget = false) {
+  startGeneration++;
   if (lease) lease.cancelled = true;
   try { VoskLab?.stop(forget); } finally { if (lease) drain(lease); }
   if (forget) lastOwner = null;
@@ -56,32 +59,62 @@ export function readVoiceLab(user: string | null): VoiceLabSnapshot {
 }
 export function resetVoiceLabCounts() { VoskLab?.reset(); }
 
+export class VoiceLabStartError extends Error {
+  constructor(readonly code: 'unavailable' | 'protection_enabled' | 'sos_active' | 'sos_uncertain' | 'microphone_busy' | 'start_cancelled' | 'native_start_failed') {
+    const messages = {
+      unavailable: 'Laboratorio non disponibile. Apri questa schermata in primo piano.',
+      protection_enabled: 'Disattiva prima la Protezione Vocale usando il suo pulsante OFF.',
+      sos_active: 'Il server segnala un SOS aperto. Apri Protezione Vocale e usa VERIFICA SOS per visualizzarlo.',
+      sos_uncertain: 'Un precedente SOS non è verificato. Apri Protezione Vocale e usa VERIFICA SOS per conoscere il motivo.',
+      microphone_busy: 'Il microfono o il servizio di protezione è ancora occupato. Attendi l’arresto e riprova.',
+      start_cancelled: 'Avvio annullato: schermata, account o stato della protezione sono cambiati.',
+      native_start_failed: 'Il servizio Vosk non ha confermato l’avvio. Controlla lo stato nativo.',
+    };
+    super(messages[code]); this.name = 'VoiceLabStartError';
+  }
+}
+
 export async function startVoiceLab(userId: string, phrase: string, isCurrent: () => boolean): Promise<void> {
   if (!voiceLabEnabled() || !VoskLab || AppState.currentState !== 'active' || !isCurrent()) {
-    throw new Error('Laboratorio non disponibile.');
+    throw new VoiceLabStartError('unavailable');
   }
+  if (preparing || lease) throw new VoiceLabStartError('microphone_busy');
+  const token = Symbol('preflight'); preparing = token;
+  const revision = ++startGeneration;
   const native = VoskLab;
-  const owner = VoiceProtectionRuntime.reserveMicrophoneForLab();
-  if (!owner) throw new Error('Ferma la protezione e chiudi eventuali emergenze prima della prova.');
-  const value: Lease = { owner, user: userId, cancelled: false }; lease = value; lastOwner = userId;
-  const current = () => lease === value && !value.cancelled && isCurrent() && AppState.currentState === 'active';
+  let value: Lease | null = null;
+  const current = () => revision === startGeneration && isCurrent() && AppState.currentState === 'active';
+  const requireCurrent = () => { if (!current()) throw new VoiceLabStartError('start_cancelled'); };
   try {
-    // Reserve before awaits: queued production starts must observe the reservation.
     const settings = await bounded(VoiceProtectionStorage.get(userId));
-    if (settings.enabled || !current()) throw new Error('Disattiva prima la Protezione Vocale.');
-    const [events, journal] = await bounded(Promise.all([SOSStorage.listEvents(userId), VoiceSOSRecoveryStorage.get(userId)]));
-    if (!current() || journal || events.some(event => event.isActive || ['open', 'accepted'].includes(event.remoteStatus ?? ''))) {
-      throw new Error('Emergenza presente o non verificata. Laboratorio non avviato.');
-    }
+    requireCurrent();
+    if (settings.enabled) throw new VoiceLabStartError('protection_enabled');
+    // Reconcile a stale journal BEFORE reserving the mic. An active or uncertain
+    // SOS still blocks; only verified terminal references may release suspension.
+    const events = await bounded(SOSStorage.listEvents(userId));
+    requireCurrent();
+    const recovery = await bounded(VoiceSOSRecovery.inspect(userId, events), 12_000);
+    requireCurrent();
+    if (recovery.kind !== 'clear') throw new VoiceLabStartError(recovery.kind === 'active' ? 'sos_active' : 'sos_uncertain');
+    if (!await bounded(VoiceProtectionRuntime.clearVerifiedSuspension(userId, recovery.attemptId, recovery.attempt))) throw new VoiceLabStartError('sos_uncertain');
+    requireCurrent();
     const recognition = await bounded(Speech.getStateAsync());
-    if (recognition !== 'inactive' || !current() ||
-        !VoiceProtectionService.canOpenVoiceLab() || native.busy()) {
-      throw new Error('Microfono o servizio di sicurezza occupato. Attendi e riprova.');
+    const latestSettings = await bounded(VoiceProtectionStorage.get(userId));
+    requireCurrent();
+    if (latestSettings.enabled) throw new VoiceLabStartError('protection_enabled');
+    if (recognition !== 'inactive' || !VoiceProtectionService.canOpenVoiceLab() || native.busy()) {
+      throw new VoiceLabStartError('microphone_busy');
     }
-    native.start(phrase); // Only an explicit foreground user action reaches this call.
-    if (!native.busy()) throw new Error('Laboratorio non avviato.');
-    drain(value); // Lease maintenance only; recognition never relies on JS timers.
-  } finally {
+    // The final reservation and native start are synchronous. A production start
+    // or a new SOS during preflight is vetoed by the runtime at this boundary.
+    const owner = VoiceProtectionRuntime.reserveMicrophoneForLab();
+    if (!owner) throw new VoiceLabStartError('microphone_busy');
+    value = { owner, user: userId, cancelled: false }; lease = value; lastOwner = userId;
+    native.start(phrase);
+    if (!native.busy()) throw new VoiceLabStartError('native_start_failed');
     drain(value);
+  } finally {
+    if (preparing === token) preparing = null;
+    if (value) drain(value);
   }
 }

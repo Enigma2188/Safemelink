@@ -70,14 +70,14 @@ function uiFixture(service, wait = p => p) {
   persistedHint.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device });
   let hint = await persistedHint.api.getAuthorizationState('A');
   assert.equal(hint.permissionState, 'blocked_or_restricted', 'request history survives JS restart');
-  assert.match(persistedHint.smsDeviceMessage(hint), /Android 16/);
+  assert.match(persistedHint.smsDeviceMessage(hint), /Android 15/);
   assert.equal(persistedHint.state.requests, 0);
   persistedHint.data.permission = true;
   hint = await persistedHint.api.getAuthorizationState('A');
   assert.equal(hint.verified, false, 'conflicting native reads are unknown, never ready');
   persistedHint.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device, permissionGranted: true });
   hint = await persistedHint.api.getAuthorizationState('A');
-  assert.equal(hint.permissionState, 'granted'); assert.doesNotMatch(persistedHint.smsDeviceMessage(hint), /Android 16/);
+  assert.equal(hint.permissionState, 'granted'); assert.doesNotMatch(persistedHint.smsDeviceMessage(hint), /Android 15/);
   const noMessaging = serviceFixture();
   noMessaging.native.SafeMeLinkSms.getDeviceState = async () => ({ ...device, messagingSupported: false, readiness: 'telephony_unavailable' });
   assert.equal((await noMessaging.api.requestAuthorization('A')).supported, false);
@@ -96,7 +96,10 @@ function uiFixture(service, wait = p => p) {
     const snapshot = await oldAndroid.api.getAuthorizationState('A');
     assert.equal(snapshot.permissionState, 'not_granted', 'first request is never inferred blocked');
     assert.match(oldAndroid.smsDeviceMessage(snapshot), /SIM predefinita/);
-    assert.equal(oldAndroid.smsDeviceMessage(snapshot).includes('Android 16'), sdk >= 36);
+    assert.match(oldAndroid.smsPermissionHelp(snapshot), /Autorizzazioni → SMS → Consenti/);
+    assert.ok(oldAndroid.smsDiagnosticSummary(snapshot).includes(`API ${sdk}`));
+    assert.equal(oldAndroid.smsPermissionHelp(snapshot).includes('Android 15'), sdk >= 35);
+    assert.equal(oldAndroid.smsDeviceMessage(snapshot).includes('Android 15'), sdk >= 35);
   }
   const historyFail = serviceFixture(); let historyCalls = 0;
   historyFail.native.SafeMeLinkSms.notePermissionRequest = async () => { historyCalls++; throw Error('disk'); };

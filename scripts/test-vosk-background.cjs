@@ -25,7 +25,8 @@ function fixture() {
     '@/modules/safemelink-vosk-lab': { VoskLab: native }, '@/services/VoiceProtectionRuntime': { VoiceProtectionRuntime: runtime },
     '@/services/VoiceProtectionService': { VoiceProtectionService: { canOpenVoiceLab: () => true } },
     '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => checks ? checks.promise : settings } },
-    '@/storage/SOSStorage': { SOSStorage: { listEvents: async () => events } }, '@/storage/VoiceSOSRecoveryStorage': { VoiceSOSRecoveryStorage: { get: async () => journal } },
+    '@/storage/SOSStorage': { SOSStorage: { listEvents: async () => events } },
+    '@/services/VoiceSOSRecovery': { VoiceSOSRecovery: { inspect: async () => ({ kind: journal || events.some(e => e.isActive) ? 'uncertain' : 'clear', attemptId: null }) } },
   }, { setInterval: fn => { timers.set(++timer, fn); return timer; }, clearInterval: id => timers.delete(id) });
   return { api, runtime, app, native, start: (owner = 'A', current = () => true) => api.startVoiceLab(owner, 'frase solo test', current),
     setEnabled: x => { enabled = x; }, setSettings: x => { settings = x; }, setEvents: x => { events = x; }, setJournal: x => { journal = x; },

@@ -27,7 +27,7 @@ async function run() {
     '@/services/VoiceProtectionService': { VoiceProtectionService: { canOpenVoiceLab: () => coreFree } },
     '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => ({ enabled: settingsEnabled }) } },
     '@/storage/SOSStorage': { SOSStorage: { listEvents: async () => [] } },
-    '@/storage/VoiceSOSRecoveryStorage': { VoiceSOSRecoveryStorage: { get: async () => null } },
+    '@/services/VoiceSOSRecovery': { VoiceSOSRecovery: { inspect: async () => ({ kind: 'clear', attemptId: null }) } },
   }, { setInterval: cb => { poll = cb; return 1; }, clearInterval: () => {} });
   enabled = false; await assert.rejects(api.startVoiceLab('A', 'prova', () => true)); assert.equal(opened, 0);
   enabled = true; settingsEnabled = true; await assert.rejects(api.startVoiceLab('A', 'prova', () => true));

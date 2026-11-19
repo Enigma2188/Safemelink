@@ -31,6 +31,7 @@ const SOS_UNAVAILABLE_MESSAGE =
   'Questa emergenza non è più attiva o non è disponibile per il tuo account.';
 const SOS_OPEN_ERROR_MESSAGE =
   'Impossibile verificare ora questa emergenza. Controlla la connessione e riprova.';
+const FOREGROUND_INBOX_REFRESH_MS = 30_000;
 
 const isUnavailableSOS = (error: unknown) =>
   error instanceof SOSLifecycleDiagnosticError &&
@@ -274,8 +275,14 @@ export function SOSNotificationCenter() {
         void refreshActiveInbox();
       }
     });
+    const refreshInterval = setInterval(() => {
+      if (AppState.currentState === 'active') {
+        void refreshActiveInbox();
+      }
+    }, FOREGROUND_INBOX_REFRESH_MS);
     return () => {
       subscription.remove();
+      clearInterval(refreshInterval);
       inboxRequestGenerationRef.current += 1;
       inboxRequestInFlightRef.current = false;
     };

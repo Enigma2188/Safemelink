@@ -242,7 +242,7 @@ export function VoiceProtectionLifecycle() {
         VoiceProtectionRuntime.setRecognitionState(targetUserId, recovery.kind === 'active' ? 'sos_active' : 'sos_uncertain');
         return;
       }
-      const released = await VoiceProtectionRuntime.clearVerifiedSuspension(targetUserId, recovery.attemptId).catch(() => false);
+      const released = await VoiceProtectionRuntime.clearVerifiedSuspension(targetUserId, recovery.attemptId, 'attempt' in recovery ? recovery.attempt : undefined).catch(() => false);
       if (!current()) return;
       if (!released) { VoiceProtectionRuntime.setRecognitionState(targetUserId, 'sos_uncertain'); return; }
       sosSuspendedRef.current = false;

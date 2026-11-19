@@ -142,6 +142,7 @@ public final class VoskLabService extends Service {
     AudioRecord recorder = null; Model model = null; Recognizer recognizer = null;
     AudioManager.AudioRecordingCallback callback = null;
     String error = "";
+    String failure = "model_prepare_failed";
     try {
       String target = VoskLabState.normalize(phrase == null ? "" : phrase); phrase = null;
       if (target.isEmpty() || target.length() > 100) throw new IllegalArgumentException();
@@ -149,10 +150,14 @@ public final class VoskLabService extends Service {
       copyAssets("vosk-it", directory, token); // Fresh verified packaged assets; worker thread only.
       if (!VoskLabState.current(token)) return;
       LibVosk.vosk_set_log_level(-1);
+      failure = "model_load_failed";
       model = new Model(directory.getAbsolutePath());
+      failure = "vocabulary_check_failed";
       WordLookup lookup = Native.load("vosk", WordLookup.class);
       for (String word : target.split(" ")) if (lookup.vosk_model_find_word(model.getPointer(), word) < 0) { error = "word_not_in_model"; return; }
+      failure = "model_load_failed";
       recognizer = new Recognizer(model, 16000.0f); // Full vocabulary, no restricted grammar.
+      failure = "capture_start_failed";
       int minimum = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
       if (minimum <= 0) throw new IllegalStateException();
       recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000, AudioFormat.CHANNEL_IN_MONO,
@@ -171,6 +176,7 @@ public final class VoskLabService extends Service {
       recorder.startRecording();
       if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException();
       if (!VoskLabState.listening(token)) return;
+      failure = "capture_read_failed";
       byte[] buffer = new byte[3200];
       while (VoskLabState.current(token)) {
         int size = recorder.read(buffer, 0, buffer.length);
@@ -183,7 +189,7 @@ public final class VoskLabService extends Service {
         }
       }
     } catch (InterruptedException ignored) { /* Explicit stop while initializing. */ }
-      catch (Exception | LinkageError ignored) { error = "model_or_capture_failed"; }
+      catch (Exception | LinkageError ignored) { error = failure; }
     finally {
       closing = true; capture = null;
       if (recorder != null) {

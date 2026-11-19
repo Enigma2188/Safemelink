@@ -21,8 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** SOS only. No retry, delivery claim, recipient/content logging or persistent sensitive payload. */
 internal object SosSmsSender {
-  // Three sequential recipients remain bounded below the existing 8s local SOS timeout.
-  private const val SENT_TIMEOUT_MS = 2_000L
+  // JS observes at most three recipients concurrently, within its existing 8s window.
+  // A slow modem callback remains unknown after this deadline, never retried.
+  private const val SENT_TIMEOUT_MS = 6_000L
 
   fun send(context: Context, phone: String, message: String, promise: Promise) {
     val attempt = UUID.randomUUID().toString()

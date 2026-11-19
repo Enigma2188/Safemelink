@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { ExpoSpeechRecognitionModule as Speech } from 'expo-speech-recognition';
+import { Link } from 'expo-router';
 import { useAuth } from '@/backend/auth/AuthProvider';
-import { readVoiceLab, resetVoiceLabCounts, startVoiceLab, stopVoiceLab, voiceLabEnabled } from '@/services/VoiceLabCoordinator';
+import { readVoiceLab, resetVoiceLabCounts, startVoiceLab, stopVoiceLab, voiceLabEnabled, VoiceLabStartError } from '@/services/VoiceLabCoordinator';
 
 export default function VoiceLabScreen() {
   const { session } = useAuth();
@@ -12,13 +13,14 @@ export default function VoiceLabScreen() {
   const [phrase, setPhrase] = useState('');
   const [snapshot, setSnapshot] = useState(() => readVoiceLab(user?.id ?? null));
   const action = useRef(0);
+  const pendingAction = useRef<number | null>(null);
   const [pending, setPending] = useState(false);
   const owner = useRef(user?.id);
   owner.current = user?.id;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    setPhrase(''); setMessage(''); action.current++;
+    setPhrase(''); setMessage(''); action.current++; pendingAction.current = null; setPending(false);
     const refresh = () => { if (AppState.currentState === 'active') setSnapshot(readVoiceLab(owner.current ?? null)); };
     refresh(); const timer = setInterval(refresh, 500);
     const subscription = AppState.addEventListener('change', refresh);
@@ -28,8 +30,9 @@ export default function VoiceLabScreen() {
   if (!voiceLabEnabled()) return <View style={{ padding: 24 }}><Text>Laboratorio non disponibile in questa versione.</Text></View>;
   const launch = async () => {
     const id = user?.id;
-    if (!id || pending) return;
+    if (!id || pendingAction.current !== null) return;
     const revision = ++action.current;
+    pendingAction.current = revision;
     const current = () => mounted.current && owner.current === id && action.current === revision;
     setPending(true);
     try {
@@ -51,23 +54,27 @@ export default function VoiceLabScreen() {
       await startVoiceLab(id, phrase, current);
       if (current()) { setPhrase(''); setMessage('Avvio richiesto: attendi lo stato nativo. Non è una protezione.'); }
     }
-    catch { if (current()) setMessage('Avvio non confermato. Controlla permessi, protezione disattivata e assenza di emergenze.'); }
-    finally { if (mounted.current) setPending(false); }
+    catch (error) { if (current()) setMessage(error instanceof VoiceLabStartError ? `${error.message} (Codice: ${error.code})` : 'Verifica o avvio non completati. Nessun ascolto confermato; riprova e controlla lo stato SOS dalla Protezione Vocale.'); }
+    finally { if (mounted.current && pendingAction.current === revision) { pendingAction.current = null; setPending(false); } }
   };
   const stop = () => {
-    action.current++;
+    action.current++; pendingAction.current = null;
     try { stopVoiceLab(); } catch { setMessage('Arresto non confermato: verifica lo stato nativo o usa Ferma prova nella notifica.'); }
     setSnapshot(readVoiceLab(user?.id ?? null)); setPending(false);
   };
   const reasons: Record<string, string> = { word_not_in_model: 'Frase non supportata dal vocabolario: scegli altre parole.',
     model_or_capture_failed: 'Caricamento modello o acquisizione audio non riusciti.', service_start_failed: 'Avvio servizio rifiutato: verifica permessi e notifiche.',
+    model_prepare_failed: 'Preparazione dei file del modello non riuscita.', model_load_failed: 'Il motore non riesce a caricare il modello incluso.',
+    vocabulary_check_failed: 'Controllo del vocabolario nativo non riuscito.', capture_start_failed: 'Android non ha consentito di avviare la registrazione.', capture_read_failed: 'Acquisizione audio interrotta o non disponibile.',
     native_state_unknown: 'Stato nativo non verificabile: non dichiarato in ascolto.', session_limit: 'Limite di 30 minuti raggiunto.',
     audio_silenced: 'Acquisizione silenziata da Android.', audio_interrupted: 'Interruzione audio: prova fermata.',
     permission_or_privacy: 'Microfono non più disponibile.', notifications_blocked: 'Notifiche laboratorio bloccate: prova fermata.', core_service_started: 'Servizio di sicurezza avviato: prova fermata.' };
   return <ScrollView contentContainerStyle={{ padding: 24, gap: 20, backgroundColor: '#061B36', flexGrow: 1 }} keyboardShouldPersistTaps="handled">
-    <Text style={{ color: '#FFFFFF', fontSize: 24 }}>Prova motore vocale</Text>
+    <Text style={{ color: '#FFFFFF', fontSize: 24 }}>Prova motore vocale Vosk</Text>
+    <Text style={{ color: '#BDE9FF' }}>Questa è la prova del nuovo motore. La schermata Protezione Vocale usa ancora il motore precedente.</Text>
     <Text style={{ color: '#FFFFFF' }}>Laboratorio offline, nessun SOS o SMS. Può continuare con Home e schermo spento; stop da notifica o da qui. Limite 30 minuti. Nessun riavvio automatico.</Text>
     <Text style={{ color: '#FFFFFF' }}>Stato: {snapshot.state === 'LISTENING' ? 'PROVA IN ASCOLTO — nessuna protezione' : snapshot.state === 'PREPARING' ? 'PREPARAZIONE — non ancora in ascolto' : snapshot.state === 'STOPPING' ? 'ARRESTO IN CORSO' : 'NON IN ASCOLTO'}</Text>
+    <Text selectable style={{ color: '#FFFFFF' }}>Build: {process.env.EXPO_PUBLIC_BUILD_SHA || 'non disponibile'} · Stato nativo: {snapshot.state} · Codice: {snapshot.reason || 'nessuno'}</Text>
     <Text style={{ color: '#FFFFFF' }}>{reasons[snapshot.reason] ?? (snapshot.reason ? 'Prova interrotta o fermata.' : '')}</Text>
     <Text style={{ color: '#FFFFFF' }}>Rilevazioni finali: {snapshot.detections}. I risultati parziali non sono contati. Zero non prova l’assenza della frase.</Text>
     <TextInput accessibilityLabel="Frase solo di prova" value={phrase} onChangeText={setPhrase} maxLength={100} editable={!snapshot.busy && !pending}
@@ -79,5 +86,6 @@ export default function VoiceLabScreen() {
     </Pressable>
     <Pressable accessibilityRole="button" onPress={stop} style={{ padding: 16, backgroundColor: '#BDE9FF' }}><Text>Ferma prova</Text></Pressable>
     <Pressable accessibilityRole="button" onPress={() => { resetVoiceLabCounts(); setSnapshot(readVoiceLab(user?.id ?? null)); }} style={{ padding: 16, backgroundColor: '#BDE9FF' }}><Text>Azzera contatori</Text></Pressable>
+    <Link href={'/voice-protection' as never} style={{ color: '#BDE9FF', padding: 16 }}>Apri Protezione Vocale → VERIFICA SOS</Link>
   </ScrollView>;
 }

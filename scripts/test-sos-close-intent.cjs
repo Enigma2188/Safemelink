@@ -54,6 +54,19 @@ function fixture() {
 }
 const event = { id: 'local', remoteSosId: 'remote' };
 const cases = [
+  ['pending inspection is read-only; stale recovery action never writes remotely', async () => {
+    const f = fixture(); f.network(true);
+    await assert.rejects(f.load().request('A', event, 'closed'));
+    f.network(false); const calls = f.calls;
+    assert.equal(await f.load().inspectPending('A'), 1); assert.equal(f.calls, calls);
+    await assert.rejects(f.load().reconcile('A', () => false)); assert.equal(f.calls, calls);
+    assert.equal(f.pending('A')[0].phase, 'pending');
+    await f.load().reconcile('A'); assert.equal(await f.load().inspectPending('A'), 0);
+  }],
+  ['stale new confirmation cannot save or execute a close', async () => {
+    const f = fixture(); await assert.rejects(f.load().request('A', event, 'closed', () => false));
+    assert.equal(f.calls, 0); assert.equal(f.pending('A').length, 0);
+  }],
   ['network timeout preserves pending intent; fresh process retries only the same SOS', async () => {
     const f = fixture(); f.network(true);
     await assert.rejects(f.load().request('A', event, 'closed'));

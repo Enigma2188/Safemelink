@@ -31,7 +31,8 @@ function fixture({ confirmStart = true, hangStop = false, deferPermission = fals
   let settings = { enabled: false, passphrase: 'test phrase', expiresAt: null };
   const setTimer = (fn, ms) => { const id = ++timerId; timers.set(id, { fn, at: now + ms }); return id; };
   const clearTimer = (id) => timers.delete(id);
-  const flush = async () => { for (let i = 0; i < 60; i++) await Promise.resolve(); };
+  // Fully drain real microtasks before advancing the simulated Android clock.
+  const flush = () => new Promise(resolve => setImmediate(resolve));
   const advance = async (ms) => {
     await flush();
     const end = now + ms;
@@ -82,6 +83,7 @@ function fixture({ confirmStart = true, hangStop = false, deferPermission = fals
     '@/storage/VoiceProtectionStorage': { VoiceProtectionStorage: { get: async () => ({ ...settings }), save: async (_user, value) => { if(failSave)throw new Error('synthetic storage failure'); settings = value; } } },
     '@/storage/PassphraseStorage': { normalizePassphrase: (value) => value.trim().toLowerCase() },
     '@/storage/SOSStorage': { SOSStorage: { listEvents: () => deferSOSRead ? new Promise(resolve => { sosResolve = resolve; }) : Promise.resolve(sosEvents) } },
+    '@/services/SOSClosureRecovery': { SOSClosureRecovery: { inspectState: async () => ({ pending: 0, unbound: 0, remoteIds: [] }) } },
     '@/storage/VoiceSOSRecoveryStorage': { VoiceSOSRecoveryStorage: {get:async()=>journal,save:async(_user,value)=>{journal=value;}} },
     '@/backend/auth/AuthService': {AuthService:{getSession:async()=>({user:{id:refs[2]?.current ?? 'account-A'}})}},
     '@/backend/errors/BackendError': {BackendError:class extends Error {}},
