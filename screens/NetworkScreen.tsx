@@ -280,8 +280,8 @@ export function NetworkScreen() {
           <Ionicons color="#A9E4FF" name="arrow-back" size={24} />
         </Pressable>
         <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>SafeMeLink <Text style={{ color: '#FF7489' }}>NETWORK</Text></Text>
-          <Text style={styles.headerSubtitle}>Comunità e territorio · Pilota Cavriago</Text>
+          <Text style={styles.headerTitle}>SafeMeLink <Text style={{ color: '#79E4F5' }}>NETWORK</Text></Text>
+          <Text style={styles.headerSubtitle}>Segnalazioni della comunità</Text>
         </View>
         <Pressable accessibilityLabel="Aggiorna NETWORK" disabled={busy || loading} hitSlop={12} onPress={() => void load()} style={styles.iconButton}>
           <Ionicons color="#A9E4FF" name="refresh" size={22} />
@@ -296,10 +296,14 @@ export function NetworkScreen() {
           keyboardShouldPersistTaps="handled"
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void load()} tintColor="#45B7FF" />}>
           <View style={styles.hero}>
-            <Ionicons color="#45B7FF" name="shield-checkmark-outline" size={42} />
-            <Text style={styles.title}>Il territorio, raccontato da chi lo vive.</Text>
-            <Text style={styles.body}>Osserva. Condividi fatti utili. Segui gli aggiornamenti.</Text>
-            <Text style={styles.hint}>La posizione mostrata è sempre approssimativa. SafeMeLink è un prodotto indipendente, non l’app ufficiale del Comune. NETWORK e Rete di quartiere restano distinti.</Text>
+            <View style={styles.heroTop}>
+              <View style={styles.badge}><Ionicons color="#79E4F5" name="people-outline" size={16} /><Text style={styles.badgeText}>NETWORK</Text></View>
+              <View style={styles.heroIcon}><Ionicons color="#79E4F5" name="shield-checkmark-outline" size={28} /></View>
+            </View>
+            <Text style={styles.title}>Il tuo territorio.{'\n'}La tua comunità.</Text>
+            <Text style={styles.body}>Condividi fatti utili, scopri le segnalazioni vicine e segui gli aggiornamenti di chi vive il territorio.</Text>
+            <View style={styles.privacyNote}><Ionicons color="#79E4F5" name="lock-closed-outline" size={18} /><Text style={[styles.hint, styles.privacyCopy]}>L’autore compare con il nickname: nome e telefono non sono pubblici. La posizione mostrata è sempre approssimativa.</Text></View>
+            <Text style={styles.hint}>SafeMeLink è indipendente, non l’app ufficiale del Comune. NETWORK e Rete di quartiere restano distinti.</Text>
           </View>
 
           {message ? (
@@ -347,7 +351,7 @@ export function NetworkScreen() {
           {dataOwner === userId && onboarding?.eligible && onboarding.restrictionStatus !== 'FULL_NETWORK_BLOCKED' ? (
             <>
               <View style={styles.actionRow}>
-                <Text style={styles.sectionTitle}>Partecipa al NETWORK</Text>
+                <View style={styles.sectionCopy}><Text style={styles.sectionEyebrow}>LA COMUNITÀ INTORNO A TE</Text><Text style={styles.sectionTitle}>Vicino a te</Text></View>
                 <PrimaryButton
                   disabled={busy || onboarding.restrictionStatus === 'READ_ONLY' || onboarding.restrictionStatus === 'PUBLISH_BLOCKED'}
                   label={composerOpen ? 'CHIUDI' : 'NUOVA SEGNALAZIONE'}
@@ -360,7 +364,8 @@ export function NetworkScreen() {
               </View>
 
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>Segnalazioni entro</Text>
+                <View style={styles.radiusHeading}><Ionicons color="#79E4F5" name="locate-outline" size={20} /><Text style={styles.cardTitle}>Scegli il raggio</Text></View>
+                <Text style={styles.hint}>Distanza dalla tua posizione · {formatRadius(feedRadius)}</Text>
                 <View style={styles.chips}>{NETWORK_FEED_RADIUS_OPTIONS.map((radius) => (
                   <Pressable
                     accessibilityRole="button"
@@ -456,7 +461,7 @@ function Requirement({ ok, text }: { ok: boolean; text: string }) {
 }
 
 function PrimaryButton({ compact = false, disabled, label, onPress }: { compact?: boolean; disabled: boolean; label: string; onPress: () => void }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact && styles.compactButton, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact && styles.compactButton, disabled && styles.disabled]}>{label === 'NUOVA SEGNALAZIONE' ? <Ionicons accessible={false} color="#062337" name="add" size={22} /> : null}<Text style={styles.primaryText}>{label}</Text></Pressable>;
 }
 
 function SecondaryButton({ disabled, label, onPress, selected }: { disabled: boolean; label: string; onPress: () => void; selected: boolean }) {
@@ -464,15 +469,20 @@ function SecondaryButton({ disabled, label, onPress, selected }: { disabled: boo
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#06182F' }, flex: { flex: 1 },
+  screen: { flex: 1, backgroundColor: '#061629' }, flex: { flex: 1 },
   header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, backgroundColor: '#09264E', borderBottomWidth: 1, borderBottomColor: '#346A99' },
   iconButton: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' }, headerCopy: { flex: 1, paddingHorizontal: 8 }, headerTitle: { color: '#F5FAFF', fontSize: 19, fontWeight: '800', letterSpacing: 0.3 }, headerSubtitle: { color: '#BDD2EE', fontSize: 12, marginTop: 4 },
-  content: { padding: 16, paddingBottom: 96, gap: 16 }, hero: { gap: 12, padding: 20, backgroundColor: '#103563', borderRadius: 24, borderWidth: 1, borderColor: '#378BC4' }, title: { color: '#F5FAFF', fontSize: 27, lineHeight: 34, fontWeight: '800' },
-  body: { color: '#DBE9FA', fontSize: 15, lineHeight: 22 }, card: { backgroundColor: '#0C274A', borderWidth: 1, borderColor: '#346A99', borderRadius: 20, padding: 17, gap: 12 }, emptyCard: { padding: 18, gap: 9 },
+  content: { padding: 16, paddingBottom: 96, gap: 18 }, hero: { gap: 14, padding: 22, backgroundColor: '#0A2A45', borderRadius: 26, borderWidth: 1, borderColor: '#28748B' }, title: { color: '#F5FAFF', fontSize: 29, lineHeight: 36, fontWeight: '800', letterSpacing: -0.5 },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#123E53', borderWidth: 1, borderColor: '#28748B' },
+  badgeText: { color: '#9AEEFA', fontSize: 12, fontWeight: '800', letterSpacing: 1.4 }, heroIcon: { padding: 12, borderRadius: 18, backgroundColor: '#10394F' },
+  privacyNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#28516B' }, privacyCopy: { flex: 1 },
+  sectionCopy: { flexShrink: 1, gap: 5 }, sectionEyebrow: { color: '#79E4F5', fontSize: 10, fontWeight: '800', letterSpacing: 1.3 }, radiusHeading: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  body: { color: '#DBE9FA', fontSize: 15, lineHeight: 23 }, card: { backgroundColor: '#0B243D', borderWidth: 1, borderColor: '#28516B', borderRadius: 22, padding: 18, gap: 12 }, emptyCard: { padding: 18, gap: 9 },
   cardTitle: { color: '#F5FAFF', fontSize: 18, fontWeight: '700' }, message: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 14, backgroundColor: '#DDEFFF' }, messageText: { flex: 1, color: '#122E50', lineHeight: 21 },
   requirement: { flexDirection: 'row', alignItems: 'center', gap: 9 }, requirementText: { color: '#F5FAFF', fontSize: 15 }, hint: { color: '#BDD2EE', fontSize: 13, lineHeight: 19 },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, sectionTitle: { color: '#F5FAFF', fontSize: 20, fontWeight: '700', flexShrink: 1 },
-  primaryButton: { minHeight: 50, borderRadius: 15, backgroundColor: '#C82746', borderWidth: 1, borderColor: '#FF8CA0', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, paddingVertical: 12 }, compactButton: { minHeight: 46, flexShrink: 1 }, primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800', textAlign: 'center' }, disabled: { opacity: 0.45 },
+  primaryButton: { minHeight: 50, borderRadius: 16, backgroundColor: '#79E4F5', borderWidth: 1, borderColor: '#A7F2FC', flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, paddingVertical: 12 }, compactButton: { minHeight: 48, flexShrink: 1 }, primaryText: { color: '#062337', fontSize: 14, fontWeight: '800', textAlign: 'center', flexShrink: 1 }, disabled: { opacity: 0.45 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#5CABDB', borderRadius: 22, paddingHorizontal: 13, paddingVertical: 11 }, chipSelected: { backgroundColor: '#8ADFFF', borderColor: '#B7F0FF' }, chipText: { color: '#F5FAFF', fontSize: 13 }, chipTextSelected: { color: '#08213E', fontWeight: '700' },
   input: { minHeight: 112, borderWidth: 1, borderColor: '#69D5FF', borderRadius: 15, padding: 12, color: '#F5FAFF', backgroundColor: '#102E56', textAlignVertical: 'top', fontSize: 16 }, counter: { color: '#BDD2EE', textAlign: 'right', fontSize: 12 },
   shortInput: { minHeight: 50, borderWidth: 1, borderColor: '#69D5FF', borderRadius: 15, paddingHorizontal: 12, color: '#F5FAFF', backgroundColor: '#102E56', fontSize: 16 },

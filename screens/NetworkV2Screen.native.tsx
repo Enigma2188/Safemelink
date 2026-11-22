@@ -42,8 +42,8 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
         eventDraft={choosingPoint ? { point: draft?.point ?? null, onChoose: point => runtime.chooseEventPoint(point) } : undefined} />
       <View style={[s.header, wide && s.headerWide, { maxHeight: stageHeight * 0.45 }]} onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.headerContent}>
-          <View style={s.row}><View style={s.flex}><Text style={s.brand}>SafeMeLink <Text style={s.brandAccent}>NETWORK</Text></Text>
-            <Text style={s.muted}>{state.territory?.label ?? 'Esplora il territorio'}</Text></View>
+          <View style={s.row}><View style={s.flex}><Text style={s.eyebrow}>COMUNITÀ · TERRITORIO</Text><Text style={s.brand}>SafeMeLink <Text style={s.brandAccent}>NETWORK</Text></Text>
+            <Text style={s.territory}>{state.territory?.label ?? 'Esplora il territorio'}</Text></View>
             {onClose ? button('Chiudi', onClose) : null}</View>
           <View style={s.row}>
             {button('Esplora qui', () => { void runtime.discover(); }, !state.authenticated || state.territoryStatus === 'LOADING' || locked)}
@@ -52,7 +52,7 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
             <Pressable accessibilityRole="button" accessibilityLabel="Nuova segnalazione" accessibilityState={{ disabled: !state.territory || !state.authenticated || locked }}
               disabled={!state.territory || !state.authenticated || locked} onPress={() => runtime.beginDraft()}
               style={[s.reportButton, (!state.territory || !state.authenticated || locked) && s.disabled]}>
-              <Ionicons name="add" size={22} color="#FFFFFF" /><Text style={s.reportText}>Segnala</Text></Pressable>
+              <Ionicons name="add" size={22} color="#062337" /><Text style={s.reportText}>Segnala</Text></Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
             <Pressable accessibilityRole="button" accessibilityState={{ selected: state.categoryId === null }} onPress={() => { void runtime.setFilters({ categoryId: null }); }}
@@ -169,19 +169,20 @@ export function NetworkV2Screen({ runtime, configuration, onClose, socialSlots, 
   </KeyboardAvoidingView></SafeAreaView>;
 }
 const categoryIcons = { shield: 'shield-checkmark-outline', road: 'car-outline', lightbulb: 'bulb-outline', leaf: 'leaf-outline', information: 'information-circle-outline' } as const;
-const s = StyleSheet.create({ root: { flex: 1, backgroundColor: '#061B36' }, stage: { flex: 1, overflow: 'hidden' }, flex: { flex: 1, minWidth: 0 },
-  header: { position: 'absolute', top: 8, left: 12, right: 12, padding: 10, borderRadius: 20, backgroundColor: '#08233FF2', borderWidth: 1, borderColor: '#315C80' }, headerWide: { right: 440 },
-  headerContent: { gap: 8 }, brand: { color: '#F4F8FD', fontSize: 19, fontWeight: '800' }, brandAccent: { color: '#FF6474' },
-  secondaryButton: { minHeight: 44, flexDirection: 'row', gap: 6, alignItems: 'center', paddingHorizontal: 12, borderRadius: 14, borderWidth: 1, borderColor: '#527B9D' },
-  reportButton: { minHeight: 44, flexDirection: 'row', gap: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, borderRadius: 14, backgroundColor: '#BC2548' }, reportText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#79B8FF', alignSelf: 'center', marginBottom: 8 },
+const s = StyleSheet.create({ root: { flex: 1, backgroundColor: '#061629' }, stage: { flex: 1, overflow: 'hidden' }, flex: { flex: 1, minWidth: 0 },
+  header: { position: 'absolute', top: 8, left: 12, right: 12, padding: 12, borderRadius: 24, backgroundColor: '#09243DF5', borderWidth: 1, borderColor: '#397F94' }, headerWide: { right: 440 },
+  headerContent: { gap: 10 }, eyebrow: { color: '#A9DCEB', fontSize: 9, fontWeight: '700', letterSpacing: 1.4, marginBottom: 4 },
+  brand: { color: '#F4FAFF', fontSize: 20, fontWeight: '800' }, brandAccent: { color: '#79E4F5' }, territory: { color: '#BBD4E5', fontSize: 13, lineHeight: 20, marginTop: 3 },
+  secondaryButton: { minHeight: 46, flexDirection: 'row', gap: 6, alignItems: 'center', paddingHorizontal: 12, borderRadius: 14, borderWidth: 1, borderColor: '#46748C', backgroundColor: '#0B2D44' },
+  reportButton: { minHeight: 46, flexDirection: 'row', gap: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, borderRadius: 14, backgroundColor: '#79E4F5' }, reportText: { color: '#062337', fontSize: 14, fontWeight: '800' },
+  handle: { width: 42, height: 4, borderRadius: 2, backgroundColor: '#79E4F5', alignSelf: 'center', marginBottom: 12 },
   row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }, wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  title: { color: '#F4F8FD', fontSize: 18, fontWeight: '800', lineHeight: 25 }, body: { color: '#E2ECF6', fontSize: 15, lineHeight: 23 }, muted: { color: '#B8CBE0', fontSize: 12, lineHeight: 18 },
-  button: { minHeight: 44, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#BDE9FF' },
+  title: { color: '#F4FAFF', fontSize: 20, fontWeight: '800', lineHeight: 27 }, body: { color: '#E2ECF6', fontSize: 15, lineHeight: 23 }, muted: { color: '#BBD4E5', fontSize: 12, lineHeight: 19 },
+  button: { minHeight: 44, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, backgroundColor: '#BDE9FF' },
   buttonText: { color: '#061B36', fontSize: 13, fontWeight: '700' }, disabled: { opacity: 0.5 }, chips: { gap: 7 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, padding: 10, borderWidth: 1, borderColor: '#527B9D', borderRadius: 16, justifyContent: 'center', backgroundColor: '#123957' }, selected: { borderColor: '#FFFFFF', borderWidth: 2 },
-  panel: { position: 'absolute', padding: 12, borderRadius: 18, backgroundColor: '#08233FF5', borderWidth: 1, borderColor: '#527B9D' }, panelMobile: { left: 10, right: 10, bottom: 8 }, panelWide: { right: 20, bottom: 20, width: 400 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, padding: 10, borderWidth: 1, borderColor: '#46748C', borderRadius: 16, justifyContent: 'center', backgroundColor: '#0C2D44' }, selected: { borderColor: '#A7F2FC', borderWidth: 2, backgroundColor: '#17435B' },
+  panel: { position: 'absolute', padding: 16, borderRadius: 24, backgroundColor: '#09243DF7', borderWidth: 1, borderColor: '#397F94' }, panelMobile: { left: 10, right: 10, bottom: 8 }, panelWide: { right: 20, bottom: 20, width: 400 },
   content: { gap: 12, paddingTop: 10, paddingBottom: 20 }, warning: { color: '#FFE2A3', fontSize: 14, lineHeight: 21 },
-  card: { padding: 12, gap: 6, borderRadius: 12, backgroundColor: '#123957', minHeight: 64 },
+  card: { padding: 16, gap: 8, borderRadius: 18, borderWidth: 1, borderColor: '#28516B', backgroundColor: '#0D2D45', minHeight: 64 },
   input: { minHeight: 90, maxHeight: 180, textAlignVertical: 'top', padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#638AAA', color: '#F4F8FD', fontSize: 16 },
-  avatar: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', backgroundColor: '#234C69' } });
+  avatar: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: '#4C9CB0', justifyContent: 'center', alignItems: 'center', backgroundColor: '#16475A' } });
