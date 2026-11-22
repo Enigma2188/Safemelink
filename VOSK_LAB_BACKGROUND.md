@@ -38,3 +38,17 @@ Checklist fisica: frase ripetuta e conversazioni senza frase; silenzio/TV/rumore
 Servono piu dispositivi/OEM/versioni Android, microfoni diversi e dispositivi 16 KB se previsti: un telefono non certifica compatibilita generale. Prove di emergenza reale richiedono autorizzazione separata.
 
 Fonti: https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start ; https://developer.android.com/about/versions/14/changes/fgs-types-required ; https://alphacephei.com/vosk/models .
+
+## Confronto sensibilità — 22 novembre 2026
+
+Nel solo laboratorio è disponibile “Prova guadagno automatico del microfono”, inizialmente OFF, non persistita. La scelta attraversa coordinatore, bridge Kotlin e Intent della singola sessione; non può cambiare durante preparazione/ascolto. ON crea AutomaticGainControl sulla sessione AudioRecord, verifica disponibilità, controllo, risultato di setEnabled e stato effettivo. Impossibilità o perdita di controllo interrompono la prova con gain_unavailable / gain_control_unavailable / gain_enable_failed / gain_control_lost. Effetto e recorder sono rilasciati nel finally prima di liberare la sessione.
+
+OFF non aggiunge un effetto AGC. Non certifica l'assenza di processing OEM: Android documenta che alcuni dispositivi possono inserire AGC in base alla sorgente audio. Nessuna impostazione globale, nuova autorizzazione o modifica alla sorgente VOICE_RECOGNITION. Il confronto è della richiesta applicativa OFF/ON, non una misura universale hardware grezza/elaborata.
+
+Lo snapshot espone gainRequested, gainActive, audioLevel e audioPeak. I livelli sono indici interi 0–100 del medesimo PCM16 mono inviato a Vosk: RMS del blocco, 20 log10(RMS/32768), da −60 dBFS (o meno) a 0 dBFS, limitato e arrotondato. Il picco è il massimo dell'indice RMS nella sessione, non un picco fisico calibrato. Non rappresentano probabilità di riconoscimento o dB SPL. Stato e livelli rimangono solo in memoria; nessun audio aggiuntivo conservato, esportato o trasmesso.
+
+Stop/errore azzerano corrente e gainActive; reset e nuova sessione azzerano corrente/picco/contatori; callback obsolete non aggiornano la generazione corrente. Una nuova sessione riparte dalla scelta esplicita dell'utente, non da una preferenza persistita. Il conteggio resta esclusivamente sui risultati finali, senza fuzzy matching o invii SOS.
+
+Prova fisica da effettuare dopo build manuale: stessa frase e condizioni, OFF libero / OFF tasca / ON libero / ON tasca, fermando e azzerando tra prove, annotando livelli, picco e rilevazioni finali. La frase rimane soltanto nello stato volatile della schermata per facilitare il confronto ed è cancellata al cambio account/smontaggio; non usare la parola operativa. AGC può non essere disponibile o peggiorare i risultati. Nessuna sensibilità in tasca dimostrata dai test automatici.
+
+Riferimento API: https://developer.android.com/reference/android/media/audiofx/AutomaticGainControl .

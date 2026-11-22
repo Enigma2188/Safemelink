@@ -28,7 +28,7 @@ class VoskLabModule : Module() {
       Handler(Looper.getMainLooper()).postDelayed({ VoskLabState.expireCancelledStart(token) }, 5_000)
       Unit
     }
-    Function("start") { phrase: String ->
+    Function("start") { phrase: String, automaticGain: Boolean ->
       check(BuildConfig.VOSK_LAB) { "lab_disabled" }
       val activity = appContext.currentActivity ?: error("activity_unavailable")
       check(!activity.isFinishing && !activity.isDestroyed && activity.hasWindowFocus()) { "visible_activity_required" }
@@ -41,10 +41,11 @@ class VoskLabModule : Module() {
       }) { "stop_core_service_first" }
       val normalized = VoskLabState.normalize(phrase)
       check(normalized.isNotEmpty() && normalized.length <= 100) { "invalid_test_phrase" }
-      val token = VoskLabState.reserve()
+      val token = VoskLabState.reserve(automaticGain)
       try {
         val target = Class.forName("com.tiziano.safemelink.vosklab.VoskLabService")
         val intent = Intent(activity, target).putExtra("token", token).putExtra("phrase", normalized)
+          .putExtra("automaticGain", automaticGain)
         if (Build.VERSION.SDK_INT >= 26) activity.startForegroundService(intent) else activity.startService(intent)
       } catch (_: Throwable) {
         VoskLabState.finish(token, "start_rejected")

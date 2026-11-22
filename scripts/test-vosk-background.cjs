@@ -14,12 +14,15 @@ function load(file, deps, extra = {}) {
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function fixture() {
   const timers = new Map(); let timer = 0, checks = null, enabled = true, busy = false, opened = 0, stops = 0, events = [], journal = null;
-  let settings = { enabled: false }, snapshot = { state: 'OFF', busy: false, reason: '', detections: 0 };
+  let settings = { enabled: false }, snapshot = { state: 'OFF', busy: false, reason: '', detections: 0,
+    audioLevel: 0, audioPeak: 0, gainRequested: false, gainActive: false };
+  const starts = [];
   const runtime = load('services/VoiceProtectionRuntime.ts', { '@/storage/VoiceSOSRecoveryStorage': { VoiceSOSRecoveryStorage: { save: async () => {} } } }).VoiceProtectionRuntime;
   const platform = { OS: 'android' }, app = { currentState: 'active' };
   const native = { enabled: () => enabled, busy: () => busy, snapshot: () => snapshot,
-    start: () => { opened++; busy = true; snapshot = { ...snapshot, busy: true, state: 'PREPARING' }; },
-    stop: forget => { stops++; if (forget) snapshot.detections = 0; }, reset: () => { snapshot.detections = 0; } };
+    start: (phrase, gain) => { starts.push({ phrase, gain }); opened++; busy = true; snapshot = { ...snapshot, busy: true, state: 'PREPARING', gainRequested: gain, gainActive: false, audioLevel: 0, audioPeak: 0 }; },
+    stop: forget => { stops++; snapshot.audioLevel = 0; snapshot.gainActive = false; if (busy) snapshot.state = 'STOPPING'; if (forget) { snapshot.detections = 0; snapshot.audioPeak = 0; } },
+    reset: () => { snapshot.detections = 0; snapshot.audioLevel = 0; snapshot.audioPeak = 0; } };
   const api = load('services/VoiceLabCoordinator.ts', {
     'react-native': { Platform: platform, AppState: app }, 'expo-speech-recognition': { ExpoSpeechRecognitionModule: { getStateAsync: async () => 'inactive' } },
     '@/modules/safemelink-vosk-lab': { VoskLab: native }, '@/services/VoiceProtectionRuntime': { VoiceProtectionRuntime: runtime },
@@ -28,11 +31,12 @@ function fixture() {
     '@/storage/SOSStorage': { SOSStorage: { listEvents: async () => events } },
     '@/services/VoiceSOSRecovery': { VoiceSOSRecovery: { inspect: async () => ({ kind: journal || events.some(e => e.isActive) ? 'uncertain' : 'clear', attemptId: null }) } },
   }, { setInterval: fn => { timers.set(++timer, fn); return timer; }, clearInterval: id => timers.delete(id) });
-  return { api, runtime, app, native, start: (owner = 'A', current = () => true) => api.startVoiceLab(owner, 'frase solo test', current),
+  return { api, runtime, app, native, starts, start: (owner = 'A', current = () => true, gain = false) => api.startVoiceLab(owner, 'frase solo test', current, gain),
     setEnabled: x => { enabled = x; }, setSettings: x => { settings = x; }, setEvents: x => { events = x; }, setJournal: x => { journal = x; },
     defer: () => { checks = deferred(); return checks; }, get opened() { return opened; }, get stops() { return stops; },
-    finish: () => { busy = false; snapshot = { ...snapshot, busy: false, state: 'OFF' }; for (const fn of [...timers.values()]) fn(); },
-    listening: () => { snapshot = { ...snapshot, busy: true, state: 'LISTENING' }; }, get timers() { return timers.size; } };
+    finish: () => { busy = false; snapshot = { ...snapshot, busy: false, state: 'OFF', audioLevel: 0, gainActive: false }; for (const fn of [...timers.values()]) fn(); },
+    setSnapshot: value => { snapshot = { ...snapshot, ...value }; },
+    listening: () => { snapshot = { ...snapshot, busy: true, state: 'LISTENING', gainActive: snapshot.gainRequested }; }, get timers() { return timers.size; } };
 }
 const test = async (name, fn) => { await fn(); console.log('PASS '+name); passed++; };
 (async () => {
@@ -68,6 +72,27 @@ const test = async (name, fn) => { await fn(); console.log('PASS '+name); passed
     const f = fixture(); f.native.start = () => { throw Error('controlled-start-error'); }; await assert.rejects(f.start());
     assert.equal(f.runtime.isMicrophoneReservedForLab(), false); assert.notEqual(f.api.readVoiceLab('A').state, 'LISTENING');
   });
+  await test('automatic gain defaults OFF and opt-in is passed for only the requested session', async () => {
+    const f = fixture(); await f.start(); assert.equal(f.starts[0].gain, false); f.finish();
+    await f.start('A', () => true, true); assert.equal(f.starts[1].gain, true);
+    assert.equal(f.api.readVoiceLab('A').gainRequested, true); assert.equal(f.api.readVoiceLab('A').gainActive, false);
+    f.listening(); assert.equal(f.api.readVoiceLab('A').gainActive, true); f.finish();
+    await f.start(); assert.equal(f.starts[2].gain, false); f.finish();
+  });
+  await test('snapshot bounds, no false gain/listening, whitelist, reset and account isolation', async () => {
+    const f = fixture(); await f.start('A', () => true, true); f.listening();
+    f.setSnapshot({ audioLevel: 40, audioPeak: 70, privateAudio: 'must-not-export' });
+    assert.equal(f.api.readVoiceLab('A').audioLevel, 40); assert.equal(f.api.readVoiceLab('A').audioPeak, 70);
+    assert.equal(Object.keys(f.api.readVoiceLab('A')).length, 8); assert.equal(f.api.readVoiceLab('A').privateAudio, undefined);
+    f.api.resetVoiceLabCounts(); assert.equal(f.api.readVoiceLab('A').audioPeak, 0);
+    for (const value of [{audioLevel:-1}, {audioLevel:101}, {audioLevel:NaN}, {audioLevel:0.5}, {audioPeak:101},
+      {audioLevel:10,audioPeak:2}, {gainActive:false}, {gainRequested:'true'}, {state:'OFF',busy:false,gainActive:true}]) {
+      f.setSnapshot({state:'LISTENING',busy:true,audioLevel:0,audioPeak:0,gainRequested:true,gainActive:true,...value});
+      assert.equal(f.api.readVoiceLab('A').state,'ERROR',JSON.stringify(value));
+    }
+    f.setSnapshot({state:'LISTENING',busy:true,audioLevel:12,audioPeak:60,gainRequested:true,gainActive:true});
+    const other = f.api.readVoiceLab('B'); assert.equal(other.audioPeak,0); assert.equal(other.gainRequested,false); f.finish();
+  });
   await test('native service/manifest isolate capture, bounded wake lock, permissions and final-only counts', async () => {
     const unknown = fixture(); await unknown.start(); const busy = unknown.native.busy;
     unknown.native.busy = () => { throw Error('controlled-state-error'); };
@@ -79,6 +104,13 @@ const test = async (name, fn) => { await fn(); console.log('PASS '+name); passed
     assert.doesNotMatch(source, /getPartialResult|SmsManager|SOSService|https?:\/\/|Log\./);
     for (const value of ['START_NOT_STICKY','FOREGROUND_SERVICE_TYPE_MICROPHONE','FLAG_IMMUTABLE','session_limit','audio_silenced','capture = null','recorder.release()','recognizer.close()','model.close()','wakeLock.release()']) assert.ok(source.includes(value), value);
     assert.match(source, /LIMIT_MS = 30 \* 60 \* 1000L/); assert.match(source, /wakeLock.acquire\(LIMIT_MS \+ 60_000\)/);
+    assert.match(source, /if \(automaticGain\) \{[\s\S]*AutomaticGainControl.isAvailable\(\)[\s\S]*AutomaticGainControl.create\(recorder.getAudioSessionId\(\)\)/);
+    for (const value of ['gain.hasControl()', 'gain.setEnabled(true) != AudioEffect.SUCCESS', 'gain.getEnabled()', 'gain_control_lost', 'gain.release()', 'VoskLabState.audio(token, buffer, size)']) assert.ok(source.includes(value), value);
+    assert.ok(source.indexOf('VoskLabState.captureEnded(token)') < source.indexOf('gain.release()'));
+    assert.match(source, /onRecordingConfigChanged[\s\S]*?if \(!VoskLabState.current\(token\)\) return;/);
+    assert.ok(source.indexOf('gain.release()') > source.indexOf('closing = true; capture = null;'));
+    assert.ok(source.indexOf('gain.release()') < source.indexOf('recorder.release()'));
+    assert.ok(source.indexOf('VoskLabState.audio(token, buffer, size)') < source.indexOf('recognizer.acceptWaveForm(buffer, size)'));
     const screen = read('app/voice-lab.tsx'); assert.doesNotMatch(screen, /openVoiceLab|SOSService|sendSms/);
     assert.match(screen, /never the native recognition service/);
     const manifest = read('modules/safemelink-vosk-lab/android/src/enabled/AndroidManifest.xml');

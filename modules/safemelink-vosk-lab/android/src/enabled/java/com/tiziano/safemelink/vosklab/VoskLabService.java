@@ -6,6 +6,8 @@ import android.content.*;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.media.*;
+import android.media.audiofx.AutomaticGainControl;
+import android.media.audiofx.AudioEffect;
 import android.net.Uri;
 import android.os.*;
 import org.json.JSONObject;
@@ -64,6 +66,7 @@ public final class VoskLabService extends Service {
     session = token;
     closing = false;
     String phrase = intent.getStringExtra("phrase"); intent.removeExtra("phrase");
+    boolean automaticGain = intent.getBooleanExtra("automaticGain", false);
     try {
       audio = (AudioManager)getSystemService(AUDIO_SERVICE);
       if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || coreRunning()) throw new IllegalStateException("start_conditions");
@@ -88,7 +91,7 @@ public final class VoskLabService extends Service {
       wakeLock = ((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SafeMeLink:VoskLab");
       wakeLock.setReferenceCounted(false); wakeLock.acquire(LIMIT_MS + 60_000);
       main.postDelayed(limit, LIMIT_MS); main.post(watchdog);
-      executor.execute(() -> recognize(token, phrase));
+      executor.execute(() -> recognize(token, phrase, automaticGain));
     } catch (Exception error) {
       releaseSystemResources(); VoskLabState.finish(token, "service_start_failed");
       finishing = true; stopForeground(true); stopSelf();
@@ -138,8 +141,9 @@ public final class VoskLabService extends Service {
       }
     }
   }
-  private void recognize(long token, String phrase) {
+  private void recognize(long token, String phrase, boolean automaticGain) {
     AudioRecord recorder = null; Model model = null; Recognizer recognizer = null;
+    AutomaticGainControl gain = null;
     AudioManager.AudioRecordingCallback callback = null;
     String error = "";
     String failure = "model_prepare_failed";
@@ -167,12 +171,25 @@ public final class VoskLabService extends Service {
       if (Build.VERSION.SDK_INT >= 29) {
         callback = new AudioManager.AudioRecordingCallback() {
           @Override public void onRecordingConfigChanged(List<AudioRecordingConfiguration> configurations) {
+            if (!VoskLabState.current(token)) return;
             for (AudioRecordingConfiguration configuration : configurations) if (configuration.isClientSilenced()) { halt("audio_silenced"); break; }
           }
         };
         recorder.registerAudioRecordingCallback(getMainExecutor(), callback);
       }
       if (recorder.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException();
+      if (automaticGain) {
+        failure = "gain_unavailable";
+        if (!AutomaticGainControl.isAvailable()) throw new IllegalStateException();
+        gain = AutomaticGainControl.create(recorder.getAudioSessionId());
+        if (gain == null) throw new IllegalStateException();
+        failure = "gain_control_unavailable";
+        if (!gain.hasControl()) throw new IllegalStateException();
+        failure = "gain_enable_failed";
+        if (gain.setEnabled(true) != AudioEffect.SUCCESS || !gain.getEnabled() || !gain.hasControl()) throw new IllegalStateException();
+        if (!VoskLabState.gainEnabled(token)) return;
+      }
+      failure = "capture_start_failed";
       recorder.startRecording();
       if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException();
       if (!VoskLabState.listening(token)) return;
@@ -182,6 +199,13 @@ public final class VoskLabService extends Service {
         int size = recorder.read(buffer, 0, buffer.length);
         if (!VoskLabState.current(token)) break;
         if (size <= 0) throw new IOException();
+        if (automaticGain) {
+          failure = "gain_control_lost";
+          if (gain == null || !gain.hasControl() || !gain.getEnabled()) throw new IllegalStateException();
+        }
+        failure = "capture_read_failed";
+        // Measure the same PCM block passed to Vosk; never persist audio or transcripts.
+        VoskLabState.audio(token, buffer, size);
         // One decision per completed utterance; partial hypotheses never increment counts.
         if (recognizer.acceptWaveForm(buffer, size)) {
           String finalText = new JSONObject(recognizer.getResult()).optString("text", "");
@@ -191,7 +215,9 @@ public final class VoskLabService extends Service {
     } catch (InterruptedException ignored) { /* Explicit stop while initializing. */ }
       catch (Exception | LinkageError ignored) { error = failure; }
     finally {
+      VoskLabState.captureEnded(token);
       closing = true; capture = null;
+      if (gain != null) try { gain.release(); } catch (RuntimeException ignored) {}
       if (recorder != null) {
         if (Build.VERSION.SDK_INT >= 29 && callback != null) try { recorder.unregisterAudioRecordingCallback(callback); } catch (RuntimeException ignored) {}
         try { recorder.stop(); } catch (RuntimeException ignored) {}

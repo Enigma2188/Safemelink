@@ -23,7 +23,8 @@ let lease: Lease | null = null;
 let lastOwner: string | null = null;
 let startGeneration = 0;
 let preparing: symbol | null = null;
-const off: VoiceLabSnapshot = { state: 'OFF', reason: '', detections: 0, busy: false };
+const off: VoiceLabSnapshot = { state: 'OFF', reason: '', detections: 0, busy: false,
+  audioLevel: 0, audioPeak: 0, gainRequested: false, gainActive: false };
 function release(value: Lease) {
   if (value.poll) clearInterval(value.poll);
   VoiceProtectionRuntime.releaseMicrophoneForLab(value.owner);
@@ -53,7 +54,16 @@ export function readVoiceLab(user: string | null): VoiceLabSnapshot {
     if (value && ['OFF','PREPARING','LISTENING','STOPPING','ERROR'].includes(value.state) &&
         Number.isSafeInteger(value.detections) && value.detections >= 0 && typeof value.busy === 'boolean' &&
         typeof value.reason === 'string' && /^[a-z_]*$/.test(value.reason) &&
-        (value.state !== 'LISTENING' || value.busy)) return { state: value.state, reason: value.reason, detections: value.detections, busy: value.busy };
+        Number.isInteger(value.audioLevel) && value.audioLevel >= 0 && value.audioLevel <= 100 &&
+        Number.isInteger(value.audioPeak) && value.audioPeak >= value.audioLevel && value.audioPeak <= 100 &&
+        typeof value.gainRequested === 'boolean' && typeof value.gainActive === 'boolean' &&
+        (!value.gainActive || (value.gainRequested && value.busy && ['PREPARING','LISTENING'].includes(value.state))) &&
+        (value.state !== 'LISTENING' || (value.busy && (!value.gainRequested || value.gainActive))) &&
+        (value.state === 'LISTENING' || value.audioLevel === 0)) return {
+          state: value.state, reason: value.reason, detections: value.detections, busy: value.busy,
+          audioLevel: value.audioLevel, audioPeak: value.audioPeak,
+          gainRequested: value.gainRequested, gainActive: value.gainActive,
+        };
   } catch { /* No false listening confirmation. */ }
   return { ...off, state: 'ERROR', reason: 'native_state_unknown' };
 }
@@ -74,7 +84,7 @@ export class VoiceLabStartError extends Error {
   }
 }
 
-export async function startVoiceLab(userId: string, phrase: string, isCurrent: () => boolean): Promise<void> {
+export async function startVoiceLab(userId: string, phrase: string, isCurrent: () => boolean, automaticGain = false): Promise<void> {
   if (!voiceLabEnabled() || !VoskLab || AppState.currentState !== 'active' || !isCurrent()) {
     throw new VoiceLabStartError('unavailable');
   }
@@ -110,7 +120,7 @@ export async function startVoiceLab(userId: string, phrase: string, isCurrent: (
     const owner = VoiceProtectionRuntime.reserveMicrophoneForLab();
     if (!owner) throw new VoiceLabStartError('microphone_busy');
     value = { owner, user: userId, cancelled: false }; lease = value; lastOwner = userId;
-    native.start(phrase);
+    native.start(phrase, automaticGain === true);
     if (!native.busy()) throw new VoiceLabStartError('native_start_failed');
     drain(value);
   } finally {

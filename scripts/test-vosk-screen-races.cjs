@@ -6,7 +6,7 @@ const flush = async () => { for (let i=0; i<30; i++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function fixture() {
   let index = 0, tree, user = 'A';
-  const slots = [], effects = [], permissionRequests = [], calls = { starts: 0, stops: 0 };
+  const slots = [], effects = [], permissionRequests = [], calls = { starts: 0, stops: 0, gains: [] };
   const hooks = {
     useState: initial => { const i=index++; if (!(i in slots)) slots[i]=typeof initial==='function'?initial():initial; return [slots[i], v=>{ slots[i]=v; }]; },
     useRef: initial => { const i=index++; if (!(i in slots)) slots[i]={ current:initial }; return slots[i]; },
@@ -14,13 +14,13 @@ function fixture() {
   };
   const jsx = (type,props)=>({type,props});
   const deps = { react:hooks, 'react/jsx-runtime':{jsx,jsxs:jsx},
-    'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},Platform:{OS:'android',Version:35},Pressable:'button',ScrollView:'scroll',Text:'text',TextInput:'input',View:'view'},
+    'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},Platform:{OS:'android',Version:35},Pressable:'button',ScrollView:'scroll',Switch:'switch',Text:'text',TextInput:'input',View:'view'},
     'expo-notifications':{getPermissionsAsync:async()=>({granted:true})},
     'expo-speech-recognition':{ExpoSpeechRecognitionModule:{getMicrophonePermissionsAsync:()=>{ const wait=deferred(); permissionRequests.push(wait); return wait.promise; }}},
     'expo-router':{Link:'link'}, '@/backend/auth/AuthProvider':{useAuth:()=>({session:{user:{id:user}}})},
-    '@/services/VoiceLabCoordinator':{readVoiceLab:()=>({state:'OFF',busy:false,reason:'',detections:0}),voiceLabEnabled:()=>true,
+    '@/services/VoiceLabCoordinator':{readVoiceLab:()=>({state:'OFF',busy:false,reason:'',detections:0,audioLevel:0,audioPeak:0,gainRequested:false,gainActive:false}),voiceLabEnabled:()=>true,
       resetVoiceLabCounts(){},stopVoiceLab:()=>{calls.stops++;},VoiceLabStartError:class extends Error {},
-      startVoiceLab:async(_id,_phrase,current)=>{assert.ok(current()); calls.starts++;}},
+      startVoiceLab:async(_id,_phrase,current,gain)=>{assert.ok(current()); calls.starts++; calls.gains.push(gain);}},
   };
   const exports={};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(`${process.env.SML_REVIEW_BASE || '.'}/app/voice-lab.tsx`,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText,
@@ -30,17 +30,23 @@ function fixture() {
   const text=n=>typeof n==='string'?n:Array.isArray(n)?n.map(text).join(''):n?.props?text(n.props.children):'';
   const button=label=>find(tree,n=>n.type==='button'&&text(n).includes(label));
   render();render();find(tree,n=>n.type==='input').props.onChangeText('frase test');render();
-  return {calls,permissionRequests,render,button,setUser:v=>{user=v;render();render();}};
+  return {calls,permissionRequests,render,button,gainSwitch:()=>find(tree,n=>n.type==='switch'),
+    phrase:()=>find(tree,n=>n.type==='input').props.value,setUser:v=>{user=v;render();render();}};
 }
 (async()=>{
   const double=fixture(), press=double.button('Avvia').props.onPress; press();press();
   assert.equal(double.permissionRequests.length,1,'same-frame double tap must create one permission sequence');
   double.permissionRequests[0].resolve({granted:true});await flush();assert.equal(double.calls.starts,1);
+  assert.deepEqual(double.calls.gains,[false]); double.render(); assert.equal(double.phrase(),'frase test','same phrase remains volatile for comparison');
   const f=fixture();f.button('Avvia').props.onPress();f.render();f.button('Ferma').props.onPress();f.render();
   f.button('Avvia').props.onPress();f.render();assert.equal(f.permissionRequests.length,2);
   f.permissionRequests[0].resolve({granted:true});await flush();f.render();
   assert.equal(f.button('Verifica').props.disabled,true,'old finally must not unlock the newer request');
   assert.equal(f.calls.starts,0);f.permissionRequests[1].resolve({granted:true});await flush();assert.equal(f.calls.starts,1);
   const account=fixture();account.button('Avvia').props.onPress();account.setUser('B');account.permissionRequests[0].resolve({granted:true});await flush();assert.equal(account.calls.starts,0);
-  console.log('PASS Vosk actual screen handlers: same-frame taps, Stop/start with late permission, account change');
+  const gain=fixture(); assert.equal(gain.gainSwitch().props.value,false); gain.gainSwitch().props.onValueChange(true);gain.render();
+  gain.button('Avvia').props.onPress();gain.render();assert.equal(gain.gainSwitch().props.disabled,true);
+  gain.permissionRequests[0].resolve({granted:true});await flush();assert.deepEqual(gain.calls.gains,[true]);
+  gain.setUser('B');assert.equal(gain.gainSwitch().props.value,false);assert.equal(gain.phrase(),'');
+  console.log('PASS Vosk actual screen handlers: same-frame taps, late permission, account change, gain default/forwarding/lock and volatile comparison phrase');
 })().catch(e=>{console.error(e);process.exitCode=1;});
