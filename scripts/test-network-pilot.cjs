@@ -50,10 +50,8 @@ nodes(tree).find(n => n.type === 'Input').props.onChangeText('inesistente'); tre
 nodes(tree).find(n => n.props?.label === 'AZZERA FILTRI').props.onPress(); tree = explorer.render(); assert.equal(nodes(tree).filter(n => n.type === 'Report').length, 4);
 explorer.cleanup();
 console.log('PASS actual explorer component: status/search/reset controls filter real loaded records');
-assert.equal(config.isPilotProtectionCategoryEnabled('CYBERBULLYING'), false);
-assert.equal(config.isPilotProtectionCategoryEnabled('CYBERBULLYING', true), true);
-assert.equal(config.isPilotProtectionCategoryEnabled('THREATS'), true);
-console.log('PASS explicit bullying category is reversibly excluded; generic support categories remain available');
+assert.equal(Object.hasOwn(config.NETWORK_PILOT, 'bullyingEnabled'), false);
+console.log('PASS retired protection signal gate is absent from the pilot config');
 
 const drain = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 let actor = 'A', resolveRead, writes = 0, closed = 0;
@@ -76,16 +74,12 @@ const dependencies = { 'react-native': native, '@/backend/auth/AuthProvider': { 
   nodes(tree).find(n => n.type === 'Input').props.onChangeText('Aggiornamento sintetico'); tree = writer.render();
   nodes(tree).find(n => n.type === 'Button' && n.props.children?.props.children === 'PUBBLICA AGGIORNAMENTO').props.onPress(); await drain();
   assert.equal(writes, 1); writer.cleanup();
-  assert.equal(config.NETWORK_PILOT.bullyingEnabled, false);
-  assert.match(source('app/protection-signal.tsx'), /values.filter\(\(\[value\]\) => isPilotProtectionCategoryEnabled\(value\)\)/);
-  assert.match(source('app/protection-signal.tsx'), /draft.category && isPilotProtectionCategoryEnabled\(draft.category\)/);
-  assert.match(source('app/protection-signal.tsx'), /key === 'category' && !isPilotProtectionCategoryEnabled\(value\)/);
   assert.doesNotMatch(source('services/NetworkTerritory.ts'), /latitude|longitude|sos|fetch\(/i);
   assert.doesNotMatch(source('components/NetworkExplorer.tsx'), /expo-location|fetch\(|AsyncStorage|react-native-maps|console\./);
   assert.match(source('screens/NetworkScreen.tsx'), /dataOwner === userId/);
   assert.match(source('screens/NetworkScreen.tsx'), /NETWORK_PILOT.maxLoadedReports/);
   const color = hex => hex.slice(1).match(/../g).map(v => parseInt(v, 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126,.7152,.0722][i], 0);
   for (const [fg,bg] of [['#BDD2EE','#0C274A'],['#F5FAFF','#102E56'],['#08213E','#8ADFFF'],['#FFFFFF','#C82746']]) assert.ok((Math.max(color(fg), color(bg)) + .05) / (Math.min(color(fg), color(bg)) + .05) >= 4.5);
-  console.log('PASS detail stale-account response, restriction guards, background close, reversible category gate, no GPS/cache, bounded loading and text contrast');
+  console.log('PASS detail stale-account response, restriction guards, background close, no GPS/cache, bounded loading and text contrast');
   console.log('Mocked/local only: no RPC, publication, GPS, map tile, SMS, SOS or remote operation executed. Android rendering/performance NOT verified.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

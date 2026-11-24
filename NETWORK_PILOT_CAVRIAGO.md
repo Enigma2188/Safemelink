@@ -69,14 +69,15 @@ I commenti pubblici e il canale feedback non sono abilitati: servono moderazione
 anti-spam, revoca/cancellazione, ruoli operativi e un canale concordato col pilot.
 Nessun dato di esempio è esposto nella UI. I 150 tester non sono utenti contati.
 
-## Esclusione reversibile della categoria bullismo
+## Ritiro di Segnale Tutela
 
-Gate bullyingEnabled=false: nasconde la categoria esplicita CYBERBULLYING e
-impedisce selezione/invio di una bozza di quella categoria anche tramite stato
-obsoleto. Non vengono rimossi i percorsi generici Segnale Tutela o gli accessi
-Home: non sono etichettati come bullismo e contengono anche altre richieste di
-aiuto. Tipi, testo storico e dati backend restano intatti. Nessun flusso SOS
-alterato. Il gate può essere riabilitato con una decisione successiva.
+La funzione e i relativi accessi Home sono ritirati dall'app. Non viene più
+presentato il flusso di segnalazione, incluso quello relativo ai minori.
+La migrazione SQL già applicata e i dati storici rimangono intatti: la loro
+gestione richiede una decisione separata sulla conservazione. La migrazione
+`20261123120000_retire_protection_signals.sql` revoca l'accesso alle RPC per
+bloccare anche le vecchie versioni dell'app, quando sarà applicata sul server.
+Il normale SOS non è alterato.
 
 ## Prima dei 150 tester
 

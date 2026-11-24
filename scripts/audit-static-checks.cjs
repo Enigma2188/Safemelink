@@ -58,7 +58,6 @@ const lifecycleMigration = read(
 const accountStorage = read('storage/AccountScopedStorage.ts');
 const homeScreen = read('app/(tabs)/index.tsx');
 const homeQuickActions = read('components/HomeQuickActions.tsx');
-const protectionSignalScreen = read('app/protection-signal.tsx');
 const sosLaunchRuntime = read('services/SOSLaunchRuntime.ts');
 const checkpointStorage = read('storage/CheckpointStorage.ts');
 const contactsScreen = read('screens/TrustedContactsScreen.tsx');
@@ -184,7 +183,7 @@ check('Essential Home keeps secondary actions separate from primary actions', ()
   assert.match(homeQuickActions, /const visibleActions = mode === 'essential'/);
   assert.match(homeQuickActions, /visibleActions\.map/);
   assert.match(homeQuickActions, /label: 'Proteggimi'/);
-  assert.match(homeQuickActions, /label: 'Qualcosa non va'/);
+  assert.doesNotMatch(homeQuickActions, /Segnale Tutela|Qualcosa non va|\/protection-signal/);
 });
 
 check('SafeMeLink network UI uses persistent SOS-network consent without visual Radar', () => {
@@ -1157,8 +1156,6 @@ check('Voice keyword reaches the existing SOS countdown exactly once per session
   assert.match(homeScreen, /VoiceProtectionRuntime\.onSOSRequested/);
   assert.match(homeScreen, /SOSLaunchRuntime\.subscribe/);
   assert.match(homeScreen, /if \(statusRef\.current === 'idle'\) startSOSCountdown\('manual'\)/);
-  assert.match(protectionSignalScreen, /SOSLaunchRuntime\.request\(session\.user\.id\)/);
-  assert.doesNotMatch(protectionSignalScreen, /startSOSCountdown|SOSService\./);
   assert.match(sosLaunchRuntime, /pendingUserId/);
   assert.match(homeScreen, /router\.dismissTo\('\/\(tabs\)'\)/);
   assert.match(homeScreen, /VOICE_LISTENER_RECEIVED/);

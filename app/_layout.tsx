@@ -101,7 +101,6 @@ function RootNavigator() {
                 options={{ headerShown: false }}
               />
               <Stack.Screen name="network" options={{ headerShown: false }} />
-              <Stack.Screen name="protection-signal" options={{ headerShown: false }} />
               <Stack.Screen name="settings" options={{ headerShown: false }} />
               <Stack.Screen name="security-setup" options={{ headerShown: false }} />
               <Stack.Screen

@@ -6,7 +6,7 @@ import type { InterfaceMode } from '@/storage/InterfaceModeStorage';
 type Props = {
   mode?: InterfaceMode;
   onPanel: (panel: 'checkpoint' | 'goHome') => void;
-  onNavigate: (route: '/voice-protection' | '/radar' | '/network' | '/neighborhood-network' | '/how-safemelink-works' | '/protection-signal') => void;
+  onNavigate: (route: '/voice-protection' | '/radar' | '/network' | '/neighborhood-network' | '/how-safemelink-works') => void;
 };
 
 export function HomeQuickActions({ mode = 'complete', onPanel, onNavigate }: Props) {
@@ -18,12 +18,10 @@ export function HomeQuickActions({ mode = 'complete', onPanel, onNavigate }: Pro
     { label: 'Rete SafeMeLink', hint: 'Disponibilità ad aiutare negli SOS', icon: 'people-circle-outline', open: () => onNavigate('/radar') },
     { label: 'NETWORK', hint: 'Segnalazioni nella tua zona', icon: 'shield-checkmark-outline', open: () => onNavigate('/network') },
     { label: 'Rete di quartiere', hint: 'Il gruppo privato di persone invitate', icon: 'people-outline', open: () => onNavigate('/neighborhood-network') },
-    { label: 'Segnale Tutela', hint: 'Segnala una situazione che ti preoccupa', icon: 'shield-outline', open: () => onNavigate('/protection-signal') },
   ];
   const essentialActions = [
     { ...actions[2], label: 'Proteggimi', hint: 'Apri la Protezione Vocale' },
     { ...actions[1] },
-    { ...actions[6], label: 'Qualcosa non va', hint: 'Segnala una situazione che ti preoccupa' },
   ];
   const secondaryActions = [actions[0], actions[3], actions[4], actions[5]];
   const visibleActions = mode === 'essential'

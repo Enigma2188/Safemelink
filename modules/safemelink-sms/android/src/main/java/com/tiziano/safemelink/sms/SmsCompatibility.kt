@@ -12,9 +12,21 @@ import androidx.core.content.ContextCompat
 
 /** Read-only device checks. No SIM enumeration, phone identifiers, privileged APIs or SMS. */
 internal object SmsCompatibility {
-  fun hasMessaging(context: Context): Boolean = context.packageManager.hasSystemFeature(
-    if (Build.VERSION.SDK_INT >= 33) "android.hardware.telephony.messaging" else PackageManager.FEATURE_TELEPHONY
-  )
+  fun hasMessaging(context: Context): Boolean {
+    val features = context.packageManager
+    // Android 13 split FEATURE_TELEPHONY into finer capabilities. Some phones
+    // still expose only the older telephony feature even though their active
+    // subscription can send SMS. The SIM and sent-result checks below remain
+    // authoritative; neither feature flag is proof that an SMS was sent.
+    if ((Build.VERSION.SDK_INT >= 33 &&
+        features.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING)) ||
+        features.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) return true
+    // A valid SMS subscription is stronger evidence than a missing OEM feature
+    // declaration. The actual send still requires permission, a usable SIM and
+    // an Android sent callback; this fallback never claims delivery.
+    return try { SubscriptionManager.isValidSubscriptionId(subscriptionId()) }
+    catch (_: Exception) { false }
+  }
 
   @Suppress("DEPRECATION")
   fun subscriptionId(): Int {

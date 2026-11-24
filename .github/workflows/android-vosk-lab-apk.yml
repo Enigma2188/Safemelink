@@ -157,6 +157,7 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
         run: |
           if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ]; then
             echo "::error::Required secret EXPO_PUBLIC_SUPABASE_URL is not configured."
@@ -169,6 +170,9 @@ jobs:
           if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
             echo "::error::Required secret ANDROID_GOOGLE_SERVICES_JSON_BASE64 is not configured."
             exit 1
+          fi
+          if [ -z "$SAFEMELINK_ANDROID_MAPS_API_KEY" ]; then
+            echo "::notice::Internal SOS map is disabled until SAFEMELINK_ANDROID_MAPS_API_KEY is configured."
           fi
 
       - name: Reconstruct google-services.json
@@ -230,6 +234,7 @@ jobs:
 
       - name: Generate the ephemeral Android project
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
@@ -258,6 +263,7 @@ jobs:
       - name: Build standalone test APK
         working-directory: android
         env:
+          SAFEMELINK_ANDROID_MAPS_API_KEY: ${{ secrets.SAFEMELINK_ANDROID_MAPS_API_KEY }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
