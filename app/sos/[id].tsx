@@ -55,8 +55,7 @@ function LegacyReceivedSOSScreen() {
   const backNavigationInFlightRef = useRef(false);
   const backNavigationCompletedRef = useRef(false);
   activeUserIdRef.current = userId;
-  const visibleSOS = Platform.OS === 'android' &&
-    (loadedUserId !== userId || sos?.sos_id !== sosId || isInitializing) ? null : sos;
+  const visibleSOS = loadedUserId !== userId || sos?.sos_id !== sosId || isInitializing ? null : sos;
 
   useEffect(
     () => () => {
@@ -101,13 +100,12 @@ function LegacyReceivedSOSScreen() {
       }
 
       requestInFlight = true;
-      if (Platform.OS === 'android') setIsRefreshingEmergency(true);
+      setIsRefreshingEmergency(true);
 
       try {
         const nextRemoteState = await SOSLifecycleService.getStatus(sosId);
 
-        if (!isCurrent || activeUserIdRef.current !== userId ||
-          (Platform.OS === 'android' && activeSOSIdRef.current !== sosId)) {
+        if (!isCurrent || activeUserIdRef.current !== userId || activeSOSIdRef.current !== sosId) {
           return;
         }
 
@@ -125,9 +123,8 @@ function LegacyReceivedSOSScreen() {
 
         const result = await ReceivedSOSRepository.getById(sosId);
 
-        if (isCurrent && activeUserIdRef.current === userId &&
-          (Platform.OS !== 'android' || activeSOSIdRef.current === sosId)) {
-          if (Platform.OS === 'android' && (result.sos_id !== sosId || !isActiveSOSStatus(result.sos_status))) {
+        if (isCurrent && activeUserIdRef.current === userId && activeSOSIdRef.current === sosId) {
+          if (result.sos_id !== sosId || !isActiveSOSStatus(result.sos_status)) {
             setSOS(null);
             return;
           }
@@ -136,7 +133,7 @@ function LegacyReceivedSOSScreen() {
           setError(null);
         }
       } catch (loadError: unknown) {
-        if (isCurrent && activeUserIdRef.current === userId) {
+        if (isCurrent && activeUserIdRef.current === userId && activeSOSIdRef.current === sosId) {
           setSOS(null);
           setError(
             loadError instanceof Error
@@ -146,7 +143,7 @@ function LegacyReceivedSOSScreen() {
         }
       } finally {
         requestInFlight = false;
-        if (Platform.OS === 'android' && isCurrent && activeUserIdRef.current === userId &&
+        if (isCurrent && activeUserIdRef.current === userId &&
           activeSOSIdRef.current === sosId) setIsRefreshingEmergency(false);
       }
     };
@@ -309,7 +306,7 @@ function LegacyReceivedSOSScreen() {
           {remoteState?.accepted_by_me ? (
             <Text style={styles.acceptedText}>Hai preso in carico questo SOS.</Text>
           ) : null}
-          {Platform.OS === 'android' && userId && visibleSOS.sos_id === sosId &&
+          {userId && visibleSOS.sos_id === sosId &&
             remoteState?.sos_id === sosId && isActiveSOSStatus(remoteState.sos_status) && !error && !isRefreshingEmergency ? (
               <ReceivedEmergencyInformation key={`${userId}:${sosId}`} sosId={visibleSOS.sos_id} snapshot={visibleSOS} />
             ) : null}

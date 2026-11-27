@@ -16,7 +16,7 @@ function load(file, modules) {
   return exports;
 }
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-function harness() {
+function harness(platform = 'android') {
   const pending = [], states = [], refs = [], effects = [];
   let cursor = 0, refCursor = 0, effectCursor = 0, user = 'A', focused = true;
   let props = { sosId: ID, snapshot: {} }, appState;
@@ -25,7 +25,7 @@ function harness() {
     '@/backend/auth/AuthProvider': { useAuth: () => ({ session: user ? { user: { id: user } } : null, isInitializing: false }) },
     '@react-navigation/native': { useIsFocused: () => focused },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-    'react-native': { Platform: { OS: 'android' }, View: 'View', Text: 'Text', StyleSheet: { create: x => x },
+    'react-native': { Platform: { OS: platform }, View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: x => x },
       AppState: { currentState: 'active', addEventListener: (_event, cb) => { appState = cb; return { remove() {} }; } } },
     react: {
       useState: initial => { const i = cursor++; if (!(i in states)) states[i] = initial;
@@ -63,7 +63,8 @@ const cases = [
   ['new request hides old contents before effects and rejects stale response', async () => {
     const h = harness(); h.render(); h.pending[0].resolve(row); await flush(); assert.ok(h.render());
     h.refresh(); assert.equal(h.render(false), null); h.render();
-    h.refresh(); h.render(); h.pending[1].resolve(row); await flush(); assert.equal(h.render(), null);
+    h.refresh(); h.render(); h.pending[1].resolve(row); await flush();
+    assert.doesNotMatch(JSON.stringify(h.render()), /synthetic allergy|synthetic note/);
     h.pending[2].resolve(row); await flush(); assert.ok(h.render()); h.unmount();
   }],
   ['account, SOS, logout and authorization loss remove sensitive state', async () => {
@@ -75,7 +76,7 @@ const cases = [
       if (change === 'consent') h.refresh();
       assert.equal(h.render(false), null); h.render();
       const last = h.pending.at(-1); if (last !== h.pending[0]) last.resolve(null);
-      await flush(); assert.equal(h.render(), null); h.unmount();
+      await flush(); assert.doesNotMatch(JSON.stringify(h.render()), /synthetic allergy|synthetic note/); h.unmount();
     }
   }],
   ['account and SOS changes during fetch reject response before passive cleanup', async () => {
@@ -88,7 +89,7 @@ const cases = [
   }],
   ['terminal SOS unmount discards an in-flight profile response', async () => {
     const h = harness(); h.render(); h.unmount(); h.pending[0].resolve(row); await flush();
-    assert.equal(h.render(false), null);
+    assert.doesNotMatch(JSON.stringify(h.render(false)), /synthetic allergy|synthetic note/);
   }],
   ['background and screen blur hide data and resume performs a fresh RPC', async () => {
     const h = harness(); h.render(); h.pending[0].resolve(row); await flush(); assert.ok(h.render());
@@ -100,8 +101,45 @@ const cases = [
   ['unauthorized and network errors never reuse contents or crash', async () => {
     for (const message of ['42501', 'offline']) {
       const h = harness(); h.render(); h.pending[0].reject(new Error(message)); await flush();
-      assert.equal(h.render(), null); h.unmount();
+      const tree = h.render();
+      assert.match(JSON.stringify(tree), /Non è stato possibile verificare/);
+      assert.doesNotMatch(JSON.stringify(tree), /synthetic allergy|synthetic note/);
+      h.unmount();
     }
+  }],
+  ['empty sharing and fetch failure are distinct; retry can recover', async () => {
+    const h = harness(); h.render();
+    h.pending[0].resolve(null); await flush();
+    assert.match(JSON.stringify(h.render()), /Nessuna informazione sanitaria disponibile/);
+    h.refresh(); h.render(); h.pending[1].reject(new Error('offline')); await flush();
+    const tree = h.render();
+    assert.match(JSON.stringify(tree), /Non è stato possibile verificare/);
+    assert.doesNotMatch(JSON.stringify(tree), /synthetic allergy/);
+    tree.props.children[4].props.children[1].props.onPress();
+    h.render(); assert.equal(h.pending.length, 3);
+    h.pending[2].resolve(row); await flush();
+    assert.match(JSON.stringify(h.render()), /synthetic allergy/);
+    h.unmount();
+  }],
+  ['iOS receives only consented data and hides them when focus is lost', async () => {
+    const screen = fs.readFileSync('app/sos/[id].tsx', 'utf8');
+    assert.match(screen, /\{userId && visibleSOS\.sos_id === sosId/);
+    const h = harness('ios'); h.render();
+    h.pending[0].resolve({ ...row, medical_data_shared: false }); await flush();
+    assert.match(JSON.stringify(h.render()), /synthetic ICE/);
+    assert.doesNotMatch(JSON.stringify(h.render()), /synthetic allergy/);
+    h.setFocused(false); assert.equal(h.render(false), null); h.unmount();
+  }],
+  ['owner must save explicit consent and only linked trusted accounts are described', async () => {
+    const form = fs.readFileSync('screens/EmergencyProfileScreen.tsx', 'utf8');
+    assert.match(form, /Compilare il profilo non basta per condividerlo/);
+    assert.match(form, /contatti fidati collegati a un account SafeMeLink/);
+    assert.match(form, /Impostazione salvata sul server: condivisione medica/);
+    const hook = fs.readFileSync('hooks/useEmergencyProfile.ts', 'utf8');
+    assert.match(hook, /setSavedSharing\(\{ medical: savedProfile\.shareMedicalDataDuringSOS/);
+    assert.match(hook, /loadedOwnerId === session\.user\.id && hasLoadedProfile/);
+    assert.match(hook, /draft: ownerVisible \? draft : EMPTY_EMERGENCY_PROFILE/);
+    assert.match(hook, /loadedOwnerId !== session\.user\.id/);
   }],
   ['Home route, unchanged SOS one-tap, active-only section and RPC boundary', async () => {
     const home = fs.readFileSync('app/(tabs)/index.tsx', 'utf8');
@@ -113,7 +151,7 @@ const cases = [
     const screen = fs.readFileSync('app/sos/[id].tsx', 'utf8');
     assert.match(screen, /isActiveSOSStatus\(remoteState\.sos_status\) && !error/);
     assert.match(screen, /!isRefreshingEmergency/);
-    assert.match(screen, /requestInFlight = true;\s+if \(Platform\.OS === 'android'\) setIsRefreshingEmergency\(true\)/);
+    assert.match(screen, /requestInFlight = true;\s+setIsRefreshingEmergency\(true\)/);
     assert.match(screen, /key=\{`\$\{userId\}:\$\{sosId\}`\}/);
     const repository = fs.readFileSync('backend/repositories/EmergencyProfileRepository.ts', 'utf8');
     assert.match(repository, /rpc\('get_received_sos_emergency_profile', \{ target_sos_id: sosId \}\)/);

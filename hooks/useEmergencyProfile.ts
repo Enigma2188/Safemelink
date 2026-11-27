@@ -22,7 +22,9 @@ export function useEmergencyProfile() {
   const [status, setStatus] = useState<EmergencyProfileStatus>('loading');
   const [error, setError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [savedSharing, setSavedSharing] = useState<{ medical: boolean; ice: boolean } | null>(null);
   const [hasLoadedProfile, setHasLoadedProfile] = useState(false);
+  const [loadedOwnerId, setLoadedOwnerId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const isFocusedRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(session?.user.id ?? null);
@@ -44,6 +46,8 @@ export function useEmergencyProfile() {
 
       if (isInitializing) {
         setHasLoadedProfile(false);
+        setLoadedOwnerId(null);
+        setSavedSharing(null);
         setStatus('loading');
         return () => {
           isFocusedRef.current = false;
@@ -52,6 +56,8 @@ export function useEmergencyProfile() {
 
       if (!session) {
         setDraft(EMPTY_EMERGENCY_PROFILE);
+        setSavedSharing(null);
+        setLoadedOwnerId(null);
         setHasLoadedProfile(false);
         setStatus('unauthenticated');
         setError(null);
@@ -61,6 +67,8 @@ export function useEmergencyProfile() {
       }
 
       setHasLoadedProfile(false);
+      setLoadedOwnerId(null);
+      setSavedSharing(null);
       setStatus('loading');
       setError(null);
 
@@ -73,6 +81,8 @@ export function useEmergencyProfile() {
             loadRequestKeyRef.current === loadRequestKey
           ) {
             setDraft(profile);
+            setLoadedOwnerId(session.user.id);
+            setSavedSharing({ medical: profile.shareMedicalDataDuringSOS, ice: profile.shareICEContactDuringSOS });
             setHasLoadedProfile(true);
             setLastSavedAt(profile.updatedAt);
             setStatus('ready');
@@ -86,6 +96,8 @@ export function useEmergencyProfile() {
             loadRequestKeyRef.current === loadRequestKey
           ) {
             setStatus('error');
+            setLoadedOwnerId(null);
+            setSavedSharing(null);
             setError(
               loadError instanceof Error
                 ? loadError.message
@@ -101,8 +113,8 @@ export function useEmergencyProfile() {
   );
 
   const save = useCallback(async () => {
-    if (!session) {
-      throw new Error('Accedi per salvare il Profilo di Emergenza.');
+    if (!session || !hasLoadedProfile || loadedOwnerId !== session.user.id || isInitializing) {
+      throw new Error('Verifica il Profilo di Emergenza con il tuo account prima di salvarlo.');
     }
 
     if (saveInFlightRef.current?.userId === session.user.id) {
@@ -125,6 +137,7 @@ export function useEmergencyProfile() {
         loadGenerationRef.current === saveGeneration
       ) {
         setDraft(savedProfile);
+        setSavedSharing({ medical: savedProfile.shareMedicalDataDuringSOS, ice: savedProfile.shareICEContactDuringSOS });
         setLastSavedAt(savedProfile.updatedAt);
         setStatus('ready');
       }
@@ -150,15 +163,20 @@ export function useEmergencyProfile() {
         saveInFlightRef.current = null;
       }
     }
-  }, [draft, session]);
+  }, [draft, hasLoadedProfile, isInitializing, loadedOwnerId, session]);
+
+  // A new account must never see or save the previous account's draft, even
+  // during the render before focus-effect cleanup and a fresh server response.
+  const ownerVisible = !isInitializing && !!session && loadedOwnerId === session.user.id && hasLoadedProfile;
 
   return {
-    draft,
+    draft: ownerVisible ? draft : EMPTY_EMERGENCY_PROFILE,
     setDraft,
-    status,
-    error,
-    lastSavedAt,
-    hasLoadedProfile,
+    status: !isInitializing && !session ? 'unauthenticated' : !ownerVisible && status === 'ready' ? 'loading' : status,
+    error: ownerVisible ? error : null,
+    lastSavedAt: ownerVisible ? lastSavedAt : null,
+    savedSharing: ownerVisible ? savedSharing : null,
+    hasLoadedProfile: ownerVisible,
     reload: () => setReloadToken((current) => current + 1),
     save,
   };

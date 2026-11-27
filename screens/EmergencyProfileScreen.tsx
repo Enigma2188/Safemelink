@@ -107,6 +107,7 @@ export function EmergencyProfileScreen() {
     status,
     error,
     lastSavedAt,
+    savedSharing,
     hasLoadedProfile,
     reload,
     save,
@@ -191,8 +192,13 @@ export function EmergencyProfileScreen() {
       <View style={styles.sharingCard}>
         <Text style={styles.sectionTitle}>Condivisione durante SOS</Text>
         <Text style={styles.sharingExplanation}>
-          I dati restano privati finché non abiliti una delle opzioni seguenti. Non saranno mostrati nella Rete SafeMeLink o nei profili pubblici.
+          Compilare il profilo non basta per condividerlo: attiva le opzioni e premi Salva. Durante un SOS attivo i campi autorizzati sono visibili solo ai tuoi contatti fidati collegati a un account SafeMeLink. Non compaiono nella Rete SafeMeLink, a chi si trova nelle vicinanze o nei profili pubblici.
         </Text>
+        {hasLoadedProfile && savedSharing ? <Text accessibilityLiveRegion="polite" style={styles.sharingExplanation}>
+          Impostazione salvata sul server: condivisione medica {savedSharing.medical ? 'ATTIVA' : 'DISATTIVA'}; condivisione ICE {savedSharing.ice ? 'ATTIVA' : 'DISATTIVA'}. La visibilità effettiva è verificata nel dettaglio SOS.
+          {draft.shareMedicalDataDuringSOS !== savedSharing.medical || draft.shareICEContactDuringSOS !== savedSharing.ice
+            ? ' Modifiche non ancora salvate.' : ''}
+        </Text> : null}
 
         <View style={styles.switchRow}>
           <View style={styles.switchCopy}>
